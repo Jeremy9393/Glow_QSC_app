@@ -1,6 +1,6 @@
 {
- "version": "2026-08-10",
- "source": "QSC 평가 체계 개편_v1.xlsx",
+ "version": "2026-08-13 (v3.8)",
+ "source": "QSC 평가 체계 개편_v3.xlsx",
  "stores": [
   "금종제과",
   "도넛정수",
@@ -29,6 +29,25 @@
   "호우주의보 이태원",
   "호우주의보 익선"
  ],
+ "scoring": {
+  "general_per_case": 1,
+  "S2": {
+   "label": "★",
+   "name": "중대운영",
+   "first": 8,
+   "more": 2,
+   "cap": 45
+  },
+  "S1": {
+   "label": "★★",
+   "name": "즉시위해",
+   "first": 12,
+   "more": 4,
+   "cap": 48
+  },
+  "qsc_floor": 0,
+  "final_floor": 0
+ },
  "final_weights": {
   "qsc_inspector": 0.6,
   "mystery_shopper": 0.3,
@@ -37,7 +56,7 @@
  "grades": [
   {
    "name": "우수",
-   "rule": "> 93"
+   "rule": ">= 93"
   },
   {
    "name": "양호",

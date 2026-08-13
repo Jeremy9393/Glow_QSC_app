@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=16">
+<link rel="stylesheet" href="css/app.css?v=23">
 </head>
 <body>
 <header class="topbar">
@@ -30,12 +30,17 @@
   <section class="card" id="summary">
     <h2>항목별 집계</h2>
     <table class="sumTable">
-      <thead><tr><th>항목</th><th class="r">점수</th><th class="r">가중치</th><th class="r">가중반영</th></tr></thead>
+      <thead><tr><th>구분</th><th class="r">내역</th><th class="r">감점</th></tr></thead>
       <tbody id="sumBody"></tbody>
     </table>
     <div class="sumFinal" id="sumFinal">—</div>
-    <p class="note">등급 기준: 우수 93점 초과 · 양호 85 이상 · 보통 76 이상 · 미흡 66 이상 · 주의 55 이상 · 부적합 55 미만 / NA 문항은 채점 제외, 그룹 전체 NA면 가중치가 다른 그룹으로 재분배</p>
-    <h2>적발 문항</h2>
+    <p class="note"><span id="wLine"></span>QSC 점수 = 100 − 일반 문항 감점 (하한 0) · ★/★★는 최종점수에서 직접 차감 / 등급 기준: 우수 93점 이상 · 양호 85 이상 · 보통 76 이상 · 미흡 66 이상 · 주의 55 이상 · 부적합 55 미만 / NA 문항은 채점 제외 / 최종점수 = QSC×60% + 쇼퍼×30% + 개선현황×10% − 중대 차감 (통합시트에서 산출)</p>
+    <h2>세부 영역 (참고)</h2>
+    <table class="sumTable">
+      <thead><tr><th>영역</th><th class="r">감점</th><th class="r">문항</th><th class="r">개선 필요</th></tr></thead>
+      <tbody id="refBody"></tbody>
+    </table>
+    <h2>개선 필요 문항</h2>
     <div id="offList" class="offList"></div>
   </section>
   <p class="note" id="saveNote"></p>
@@ -43,14 +48,14 @@
 <footer class="bottombar"><div class="in">
   <div class="bb-score">
     <span class="big" id="bbScore">—</span><span class="grade" id="bbGrade"></span>
-    <span class="prog" id="bbProg">적발 0건 · NA 0</span>
+    <span class="prog" id="bbProg">개선 필요 0건 · NA 0</span>
   </div>
   <button class="submit" id="submitBtn">제출</button>
 </div></footer>
 <input type="file" id="photoInput" accept="image/*" multiple hidden>
-<script src="js/scoring.js?v=16"></script>
-<script src="js/api.js?v=16"></script>
-<script src="js/qsc-app.js?v=16"></script>
+<script src="js/scoring.js?v=23"></script>
+<script src="js/api.js?v=23"></script>
+<script src="js/qsc-app.js?v=23"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

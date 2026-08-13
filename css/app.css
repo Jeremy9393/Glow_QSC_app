@@ -199,3 +199,24 @@ input::placeholder, textarea::placeholder { color: #656565; font-weight: 400; }
 .thanks .b { font-size: 14px; font-weight: 400; letter-spacing: .28em; color: #fff; text-indent: .28em; }
 .thanks h1 { font-size: 20px; font-weight: 700; margin-top: 22px; }
 .thanks p { font-size: 13.5px; font-weight: 400; color: var(--sub); margin-top: 12px; line-height: 1.7; }
+
+/* ---------- v19: 절대 감점제 · 5점 척도 ---------- */
+.qcard .opts.likert { gap: 5px; }
+.qcard .opts.likert button { flex: 1; min-width: 0; font-size: 15px; }
+.likert-cap { font-size: 11px; color: var(--sub); margin-top: 5px; text-align: center; }
+.counter .cnt.hot { color: var(--red); }
+.sumTable tr.sum-crit td { font-weight: 700; border-top: 2px solid #3a3a3a; }
+
+/* ---------- v20: 심각도 시각 구분 (엑셀 E열 빨강/주황과 동일 체계) ---------- */
+.badge-crit.s1 { background: #b33a3a; }                 /* ★★ 즉시위해 — 빨강 */
+.badge-crit.s2 { background: #9a6a14; }                 /* ★ 중대운영 — 주황 */
+.item.crit.s1 { border-left: 3px solid #c04848; }
+.item.crit.s2 { border-left: 3px solid #c07a1e; }
+.offRow.crit .no { color: var(--red); }
+.bb-crit { color: var(--red); font-weight: 700; }
+
+/* ---------- v22: 설문지 진입 링크 · 시트 원칙 표시 ---------- */
+.surveyLink { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; padding: 14px 16px; background: var(--card); border: 1px solid #333; border-radius: 12px; color: var(--ink); font-weight: 700; font-size: 14px; text-decoration: none; }
+.surveyLink .arrow { color: var(--sub); font-size: 18px; }
+.surveyLink:active { background: #222; }
+.note.pre { white-space: pre-line; }

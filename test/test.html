@@ -1,0 +1,156 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>채점 엔진 검증 (v3.7 절대 감점제)</title></head>
+<body style="font-family:Consolas,monospace;padding:16px;background:#111;color:#eee">
+<h1 style="font-size:18px">채점 엔진 검증 — v3.7 74문항 · 절대 감점제 (★★4 · ★12 · 일반58)</h1>
+<p style="font-size:12px;color:#999">기대값은 엑셀 'QSC 평가 체계 개편_v3.xlsx' 실계산(2026-08-13 전수검사)과 동일해야 한다.</p>
+<pre id="out"></pre>
+<script src="../js/scoring.js?v=23"></script>
+<script>
+const out = [];
+let pass = 0, fail = 0;
+function ok(name, cond, detail) {
+  if (cond) { pass++; out.push('PASS  ' + name); }
+  else { fail++; out.push('FAIL  ' + name + (detail !== undefined ? '  → ' + JSON.stringify(detail) : '')); }
+}
+function near(a, b) { return a != null && Math.abs(a - b) < 1e-9; }
+
+// v3.7 구조: 일반 58 · ★(S2) 12 · ★★(S1) 4 — 순서는 채점에 무관
+function build(gen, s2, s1) {
+  const items = [];
+  for (let i = 0; i < 58; i++) items.push({ severity: '', value: gen[i] !== undefined ? gen[i] : 0 });
+  for (let i = 0; i < 12; i++) items.push({ severity: 'S2', value: s2 && s2[i] !== undefined ? s2[i] : 0 });
+  for (let i = 0; i < 4; i++) items.push({ severity: 'S1', value: s1 && s1[i] !== undefined ? s1[i] : 0 });
+  return items;
+}
+function genN(n, per) { const a = []; for (let i = 0; i < n; i++) a[i] = per || 1; return a; }
+
+// ---------- 단위: itemDeduct ----------
+ok('일반 0건 = 감점 0', Scoring.itemDeduct(0, '') === 0);
+ok('일반 1건 = 감점 1', Scoring.itemDeduct(1, '') === 1);
+ok('일반 5건 = 감점 5 (상한 없음)', Scoring.itemDeduct(5, '') === 5);
+ok('★ 1건 = 감점 8', Scoring.itemDeduct(1, 'S2') === 8);
+ok('★ 2건 = 감점 10 (8+2)', Scoring.itemDeduct(2, 'S2') === 10);
+ok('★ 5건 = 감점 16 (8+2×4)', Scoring.itemDeduct(5, 'S2') === 16);
+ok('★★ 1건 = 감점 12', Scoring.itemDeduct(1, 'S1') === 12);
+ok('★★ 3건 = 감점 20 (12+4×2)', Scoring.itemDeduct(3, 'S1') === 20);
+ok('NA = 채점 제외', Scoring.itemDeduct('NA', 'S1') === 'NA');
+ok('미확인 = null', Scoring.itemDeduct(null, '') === null);
+ok('소수 입력은 내림 정수 처리', Scoring.itemDeduct(2.7, '') === 2);
+
+// ---------- 단위: 등급 (v3.4 — 우수 93점 이상) ----------
+ok('등급: 93 = 우수 (이상 기준)', Scoring.grade(93) === '우수');
+ok('등급: 92.99 = 양호', Scoring.grade(92.99) === '양호');
+ok('등급: 85 = 양호 / 76 = 보통 / 66 = 미흡', Scoring.grade(85) === '양호' && Scoring.grade(76) === '보통' && Scoring.grade(66) === '미흡');
+ok('등급: 55 = 주의 / 54.99 = 부적합', Scoring.grade(55) === '주의' && Scoring.grade(54.99) === '부적합');
+
+// ---------- 시나리오 (엑셀 전수검사와 동일 기대값) ----------
+(function () {
+  const r = Scoring.evaluate(build([]));
+  ok('무결점 → QSC 100 우수 · 차감 0', near(r.qsc, 100) && r.grade === '우수' && r.criticalDeduct === 0, r);
+})();
+(function () {
+  const r = Scoring.evaluate(build(genN(7)));
+  ok('일반 7건 → QSC 93 우수 (이상 경계)', near(r.qsc, 93) && r.grade === '우수', r.qsc);
+})();
+(function () {
+  const r = Scoring.evaluate(build(genN(8)));
+  ok('일반 8건 → QSC 92 양호', near(r.qsc, 92) && r.grade === '양호', r.qsc);
+})();
+(function () {
+  const r = Scoring.evaluate(build(genN(20)));
+  ok('일반 20건 → QSC 80', near(r.qsc, 80), r.qsc);
+})();
+(function () {
+  const r = Scoring.evaluate(build(genN(58, 2)));
+  ok('일반 116건 → QSC 0 (하한)', near(r.qsc, 0) && r.genDeduct === 116, r);
+})();
+(function () {
+  const r = Scoring.evaluate(build([], [1]));
+  ok('★ 1문항 1건 → 차감 8 · QSC 100', r.criticalDeduct === 8 && near(r.qsc, 100), r);
+})();
+(function () {
+  const r = Scoring.evaluate(build([], [1, 1, 1, 1, 1, 1]));
+  ok('★ 6문항 → 상한 45 (원값 48)', r.s2.capped === 45 && r.s2.raw === 48 && r.s2.capHit, r.s2);
+})();
+(function () {
+  const r = Scoring.evaluate(build([], genN(12)));
+  ok('★ 12문항 전부 → 상한 45 (원값 96)', r.s2.capped === 45 && r.s2.raw === 96, r.s2);
+})();
+(function () {
+  const r = Scoring.evaluate(build([], [], [1]));
+  ok('★★ 1문항 1건 → 차감 12', r.criticalDeduct === 12, r.s1);
+})();
+(function () {
+  const r = Scoring.evaluate(build([], [], [3]));
+  ok('★★ 1문항 3건 → 차감 20', r.criticalDeduct === 20, r.s1);
+})();
+(function () {
+  const r = Scoring.evaluate(build([], [], [1, 1, 1, 1]));
+  ok('★★ 4문항 전부 → 상한 48', r.s1.capped === 48 && r.s1.capHit, r.s1);
+})();
+(function () {
+  const r = Scoring.evaluate(build(genN(10), [1], [1]));
+  ok('일반10 + ★★1 + ★1 → QSC 90 · 차감 20', near(r.qsc, 90) && r.criticalDeduct === 20, r);
+})();
+(function () {
+  const gen = genN(10); gen[57] = null;                 // 1문항 미확인
+  const r = Scoring.evaluate(build(gen));
+  ok('미확인 1건 → QSC 산출 차단 (null)', r.qsc === null && r.blank === 1 && !r.complete, r);
+})();
+(function () {
+  const r = Scoring.evaluate(build([], ['NA'], ['NA']));
+  ok('중대 NA → 경고 카운트 2 · 차감 0', r.naCritical === 2 && r.criticalDeduct === 0, r);
+})();
+(function () {
+  ok('최종 미리보기: QSC 100 · 차감 12 · 쇼퍼/개선 100 → 88',
+    near(Scoring.finalPreview(100, 12, 100, 100), 88));
+  ok('최종 미리보기 하한 0: QSC 0 · 차감 93 → 0',
+    near(Scoring.finalPreview(0, 93, 0, 0), 0));
+})();
+
+// ---------- 쇼퍼 (관찰 30 예/아니오 + 만족도 10 5점 척도) ----------
+function shopAns(obs, lik) {
+  const a = [];
+  for (let i = 0; i < 30; i++) a.push(obs[i] !== undefined ? obs[i] : '예');
+  for (let i = 0; i < 10; i++) a.push(lik && lik[i] !== undefined ? lik[i] : 5);
+  return a;
+}
+ok('환산: 예=1 · 아니오=0', Scoring.shopperConvert('예') === 1 && Scoring.shopperConvert('아니오') === 0);
+ok('환산: 1점=0 · 2점=0.25 · 3점=0.5 · 4점=0.75 · 5점=1',
+  Scoring.shopperConvert(1) === 0 && Scoring.shopperConvert(2) === 0.25 &&
+  Scoring.shopperConvert(3) === 0.5 && Scoring.shopperConvert(4) === 0.75 && Scoring.shopperConvert(5) === 1);
+ok('환산: NA·null·범위 밖 = 제외', Scoring.shopperConvert('NA') === null && Scoring.shopperConvert(null) === null && Scoring.shopperConvert(6) === null);
+(function () {
+  const r = Scoring.shopperScore(shopAns([], []));
+  ok('쇼퍼: 전부 긍정 → 100 우수', near(r.score, 100) && r.grade === '우수', r);
+})();
+(function () {
+  const r = Scoring.shopperScore(shopAns([], genN(10, 4)));
+  ok('쇼퍼: 예 30 + 4점 10 → 93.75 우수 (이상 경계)', near(r.score, 93.75) && r.grade === '우수', r.score);
+})();
+(function () {
+  const r = Scoring.shopperScore(shopAns([], genN(10, 3)));
+  ok('쇼퍼: 예 30 + 3점 10 → 87.5 양호', near(r.score, 87.5) && r.grade === '양호', r.score);
+})();
+(function () {
+  const obs = []; obs[0] = '아니오'; obs[1] = '아니오';
+  const r = Scoring.shopperScore(shopAns(obs, genN(10, 4)));
+  ok('쇼퍼: 아니오 2 + 4점 10 → 88.75', near(r.score, 88.75), r.score);
+})();
+(function () {
+  const lik = genN(10, 4); lik[8] = null; lik[9] = null;
+  const r = Scoring.shopperScore(shopAns([], lik));
+  ok('쇼퍼: 만족도 2문항 미응답 → 분모 38 · 94.7…', r.answered === 38 && Math.abs(r.score - (30 + 8 * 0.75) / 38 * 100) < 1e-9, r);
+})();
+(function () {
+  const r = Scoring.shopperScore(shopAns(genN(30, null).map(function(){return null;}), genN(10, null).map(function(){return null;})));
+  ok('쇼퍼: 전부 미응답 → 점수 null', r.score === null && r.answered === 0, r);
+})();
+
+out.unshift('결과: ' + pass + ' PASS / ' + fail + ' FAIL' + (fail ? '  ◀◀◀ 실패 있음' : '  — 전부 통과 ✅'), '');
+document.getElementById('out').textContent = out.join('\n');
+document.title = (fail ? 'FAIL ' + fail : 'PASS ' + pass) + ' — 채점 엔진 검증';
+</script>
+</body>
+</html>

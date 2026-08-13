@@ -1,18 +1,49 @@
 /* 미스터리쇼퍼 공통 폼 — 평가표(관리자)와 설문지(고객)가 이 파일 하나를 공유한다.
-   구조·문항·비고칸·안내문이 항상 동일하게 유지되고, 점수·집계·초기화만 관리자 전용으로 켜진다.
+   안내문·방문 정보·문항·비고칸 전부 이 파일이 그린다(단일 소스) — 두 화면이 어긋날 수 없음.
+   관리자/고객 차이는 ADMIN 플래그의 '보이냐 안 보이냐'뿐: 점수·집계·평가기준·NA 버튼·초기화만 관리자 전용.
    호출: initShopperForm({ admin: true|false })
-   응답: 예 / 아니오 (NA 없음 — 미응답은 빈칸으로 두면 채점에서 자동 제외) */
+   응답: 관찰 문항(1~10 카테고리) 예/아니오(+관리자 NA) · 만족도 문항(11·12·13) 1~5 (5점 척도, NA 없음)
+   미응답은 빈칸으로 두면 채점에서 자동 제외 — 비고만 적어도 응답으로 인정 */
 async function initShopperForm(opts) {
   const ADMIN = !!opts.admin;
-  const master = await (await fetch('data/master.json')).json();
+  const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
   const $ = function (s, el) { return (el || document).querySelector(s); };
-  const DRAFT_KEY = ADMIN ? 'shopper-admin-v3' : 'shopper-guest-v3';
+
+  // ---------- 공통 블록 렌더 (안내문·방문 정보) — 엑셀 쇼퍼 시트 안내 블록과 짝 (수정 시 함께!) ----------
+  const GUIDE = [
+    { tip: '필수 요청사항', html: '직원에게 간단한 질문이나 요청을 <b>1회 이상</b> 부탁드립니다. (화장실 위치, 메뉴 추천, 물티슈 요청 등)' },
+    { html: '본 평가는 <b>철저하게 익명이 보장</b>됩니다. 냉정하고 정확한 평가 부탁드립니다.' },
+    { html: '1~10번 카테고리는 <b>예 / 아니오</b> 중 하나를, 11~13번 카테고리(맛·양·만족도)는 <b>1~5점</b> 중 하나를 선택해 주세요.' },
+    { html: '답변에 대한 특이사항은 <b>비고</b>에 자유롭게 적어주세요.' },
+    { html: '기억이 안 나거나 판단이 어려운 문항은, <b>비고에 상황만 적어주셔도</b> 괜찮습니다.' },
+  ];
+  const META_FIELDS = [
+    { id: 'store', label: '매장명 *', full: true, control: '<select id="store"><option value="">방문한 매장 선택</option></select>' },
+    { id: 'date', label: '방문날짜 *', control: '<input type="date" id="date">' },
+    { id: 'staff', label: '응대직원 설명 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 카운터 결제 응대 · 검은 뿔테 안경 직원">' },
+    { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
+    { id: 'demo', label: '연령대·성별 *', full: true, control: '<input type="text" id="demo" placeholder="예: 30대 여성">' },
+  ];
+  if ($('#guideBox')) {
+    $('#guideBox').innerHTML = '<h2>평가 전 안내</h2><ul class="guideList">' +
+      GUIDE.map(function (g) {
+        return '<li>' + (g.tip ? '<span class="tip">' + g.tip + '</span> ' : '') + g.html + '</li>';
+      }).join('') + '</ul>';
+  }
+  if ($('#metaBox')) {
+    $('#metaBox').innerHTML = '<h2>방문 정보</h2><div class="meta-grid">' +
+      META_FIELDS.map(function (f) {
+        return '<div' + (f.full ? ' class="full"' : '') + '><label class="f">' + f.label + '</label>' + f.control + '</div>';
+      }).join('') + '</div>';
+  }
+  const DRAFT_KEY = ADMIN ? 'shopper-admin-v4' : 'shopper-guest-v4';
   const state = { answers: {}, memos: {} };
   const allQs = [];
   master.shopper_categories.forEach(function (c) { c.questions.forEach(function (q) { allQs.push(q); }); });
   const updaters = {};
+  const LIKERT_LABEL = { 1: '매우 아니다', 2: '아니다', 3: '보통', 4: '그렇다', 5: '매우 그렇다' };
 
-  // 문항별 예시 [아니오 예시, 예 예시] — 문항(master.json) 변경 시 함께 점검할 것
+  // 문항별 예시 [아쉬움 예시, 좋음 예시] — 문항(master.json) 변경 시 함께 점검할 것
   const EX = {
     1: ['들어갔는데 인사가 없었어요', '문 열자마자 반갑게 인사해 주셨어요'],
     2: ['다른 곳을 보면서 응대했어요', '눈을 맞추며 응대해 주셨어요'],
@@ -55,24 +86,29 @@ async function initShopperForm(opts) {
     39: ['추천하긴 어려울 것 같아요', '지인에게 추천하고 싶어요'],
     40: ['전반적으로 아쉬운 방문이었어요', '전반적으로 만족스러웠어요'],
   };
-  function placeholder(no, answer) {
-    const e = EX[no];
+  function placeholder(q, answer) {
+    const e = EX[q.no];
+    if (q.scale === 'likert') {
+      if (typeof answer === 'number' && answer <= 2) return '어떤 점이 아쉬웠는지 알려주세요' + (e ? ' (예: ' + e[0] + ')' : '');
+      if (typeof answer === 'number' && answer >= 4) return '좋았던 점이 있다면 적어 주세요' + (e ? ' (예: ' + e[1] + ')' : ' (선택)');
+      return '점수를 고르기 어려우면 여기에 상황을 적어주세요';
+    }
     if (answer === '아니오') return '어떤 상황이었는지 알려주세요' + (e ? ' (예: ' + e[0] + ')' : '');
     if (answer === '예') return '좋았던 점이 있다면 적어 주세요' + (e ? ' (예: ' + e[1] + ')' : ' (선택)');
     return '예/아니오를 고르기 어려우면 여기에 상황을 적어주세요';
   }
 
-  // 문항 하나가 '완료'로 인정되는 기준: 예/아니오 답변 또는 비고 중 하나라도 있으면 됨
+  // 문항 하나가 '완료'로 인정되는 기준: 답변 또는 비고 중 하나라도 있으면 됨
   // (기억이 안 나거나 판단이 어려운 경우, 비고에 상황만 적어도 응답으로 인정)
   function isFilled(no) {
     return state.answers[no] != null || !!(state.memos[no] || '').trim();
   }
 
-  // 방문 정보 필수 입력 항목
+  // 방문 정보 필수 입력 항목 — 응대직원은 시간대·상황 설명까지 필수
   const REQUIRED_META = [
     { id: 'store', label: '매장명' },
     { id: 'date', label: '방문날짜' },
-    { id: 'staff', label: '응대직원' },
+    { id: 'staff', label: '응대직원 설명' },
     { id: 'order', label: '주문내역' },
     { id: 'demo', label: '연령대·성별' },
   ];
@@ -99,6 +135,12 @@ async function initShopperForm(opts) {
 
   if (ADMIN) {
     if ($('#verInfo')) $('#verInfo').textContent = '평가표 ' + master.version + ' 기준';
+    // 엑셀 쇼퍼 시트의 평가기준·안내·채점원칙을 그대로 표시 (완전 동기화)
+    if ($('#rulesNote') && master.texts) {
+      $('#rulesNote').textContent =
+        '[평가기준]\n' + (master.texts.shopper_criteria || '') +
+        '\n\n' + (master.texts.shopper_principles || '');
+    }
     if ($('#resetBtn')) $('#resetBtn').onclick = function () {
       if (!confirm('모든 응답을 지우고 새로 입력할까요?')) return;
       localStorage.removeItem(DRAFT_KEY);
@@ -127,16 +169,26 @@ async function initShopperForm(opts) {
   function buildQ(q) {
     const card = document.createElement('div');
     card.className = 'item qcard';
+    const likert = q.scale === 'likert';
+    // 관찰 문항 NA는 관리자 전용 (엑셀 D11:D40 유효성과 동일) — 고객 화면에는 없음
+    const optsHtml = likert
+      ? '<div class="opts likert">' + [1, 2, 3, 4, 5].map(function (n) {
+          return '<button data-v="' + n + '">' + n + '</button>';
+        }).join('') + '</div>' +
+        '<div class="likert-cap">1 매우 아니다 · 3 보통 · 5 매우 그렇다</div>'
+      : '<div class="opts"><button data-v="예">예</button><button data-v="아니오">아니오</button>' +
+        (ADMIN ? '<button data-v="NA">NA</button>' : '') + '</div>';
     card.innerHTML =
       '<div class="q"><span class="no">' + q.no + '</span><span class="txt"></span></div>' +
-      '<div class="opts"><button data-v="예">예</button><button data-v="아니오">아니오</button></div>' +
+      optsHtml +
       '<input type="text" class="why" maxlength="200">';
     $('.q .txt', card).textContent = q.text;
     const why = $('.why', card);
 
     card.querySelectorAll('.opts button').forEach(function (b) {
       b.onclick = function () {
-        state.answers[q.no] = state.answers[q.no] === b.dataset.v ? null : b.dataset.v;
+        const v = likert ? parseInt(b.dataset.v, 10) : b.dataset.v;
+        state.answers[q.no] = state.answers[q.no] === v ? null : v;
         update();
         recompute();
         saveDraft();
@@ -147,15 +199,23 @@ async function initShopperForm(opts) {
       markWhy();
       saveDraft();
     });
+    function needsWhy() {
+      const v = state.answers[q.no];
+      return (likert ? (typeof v === 'number' && v <= 2) : v === '아니오') && !why.value.trim();
+    }
     function markWhy() {
-      why.className = 'why' + (state.answers[q.no] === '아니오' && !why.value.trim() ? ' need' : '');
+      why.className = 'why' + (needsWhy() ? ' need' : '');
     }
     function update() {
       const v = state.answers[q.no];
       card.querySelectorAll('.opts button').forEach(function (b) {
-        b.className = v === b.dataset.v ? (b.dataset.v === '예' ? 'on-yes' : 'on-no') : '';
+        const bv = likert ? parseInt(b.dataset.v, 10) : b.dataset.v;
+        b.className = v === bv
+          ? (likert ? (bv <= 2 ? 'on-no' : 'on-yes')
+             : (bv === '예' ? 'on-yes' : bv === 'NA' ? 'on-na' : 'on-no'))
+          : '';
       });
-      why.placeholder = placeholder(q.no, v);
+      why.placeholder = placeholder(q, v);
       if (why.value !== (state.memos[q.no] || '')) why.value = state.memos[q.no] || '';
       markWhy();
     }
@@ -168,7 +228,9 @@ async function initShopperForm(opts) {
   master.shopper_categories.forEach(function (c) {
     const sec = document.createElement('section');
     sec.className = 'group';
-    sec.innerHTML = '<div class="ghead"><h2></h2></div>';
+    const likertCat = c.questions.length && c.questions[0].scale === 'likert';
+    sec.innerHTML = '<div class="ghead"><h2></h2>' +
+      (likertCat ? '<span class="gstat">5점 척도</span>' : '') + '</div>';
     $('.ghead h2', sec).textContent = c.name;
     c.questions.forEach(function (q) { sec.appendChild(buildQ(q)); });
     catsEl.appendChild(sec);
@@ -190,22 +252,26 @@ async function initShopperForm(opts) {
     $('#bbGrade').textContent = res.grade || '';
     const body = $('#sumBody');
     body.innerHTML = '';
+    // 엑셀 집계표(52~64행)와 동일 구성: 환산 점수 · 응답 문항 수(NA 포함) · NA 건 · 달성률(NA 제외)
     master.shopper_categories.forEach(function (c) {
-      let yes = 0, ans = 0;
+      let conv = 0, ans = 0, na = 0;
       c.questions.forEach(function (q) {
         const a = state.answers[q.no];
-        if (a === '예') { yes++; ans++; }
-        else if (a === '아니오') { ans++; }
+        if (a === 'NA') { na++; return; }
+        const v = Scoring.shopperConvert(a);
+        if (v != null) { conv += v; ans++; }
       });
       const tr = document.createElement('tr');
-      tr.innerHTML = '<td></td><td class="r">' + yes + '</td><td class="r">' + ans + '/' + c.questions.length + '</td>' +
-        '<td class="r">' + (ans ? Math.round(yes / ans * 100) + '%' : '—') + '</td>';
+      tr.innerHTML = '<td></td><td class="r">' + (ans ? (Math.round(conv * 100) / 100) : '—') + '</td>' +
+        '<td class="r">' + (ans + na) + '/' + c.questions.length + '</td>' +
+        '<td class="r">' + na + '</td>' +
+        '<td class="r">' + (ans ? Math.round(conv / ans * 100) + '%' : '—') + '</td>';
       tr.cells[0].textContent = c.name;
       body.appendChild(tr);
     });
     $('#sumFinal').innerHTML = res.score == null ? '점수 —' :
       '점수 <b>' + res.score.toFixed(1) + '점</b> · <b>' + (res.grade || '') + '</b>' +
-      ' <span style="font-size:12px;color:var(--sub)">(예 ' + res.yes + ' / 응답 ' + res.answered + ')</span>';
+      ' <span style="font-size:12px;color:var(--sub)">(환산 ' + (Math.round(res.converted * 100) / 100) + ' / 응답 ' + res.answered + ')</span>';
   }
 
   // ---------- 제출 ----------
@@ -213,7 +279,8 @@ async function initShopperForm(opts) {
     for (const f of REQUIRED_META) {
       const el = $('#' + f.id);
       if (!el.value.trim()) {
-        alert(withEulReul(f.label) + ' 입력해 주세요.');
+        alert(withEulReul(f.label) + ' 입력해 주세요.' +
+          (f.id === 'staff' ? '\n이름 또는 특징과 함께 응대 시간대·응대 상황을 적어 주세요.\n예) 14시경 카운터 결제 응대 · 검은 뿔테 안경 직원' : ''));
         el.focus();
         return;
       }
@@ -221,17 +288,19 @@ async function initShopperForm(opts) {
     const answered = allQs.filter(function (q) { return isFilled(q.no); }).length;
     const missing = allQs.length - answered;
     if (missing > 0) {
-      if (!ADMIN) {
-        alert('아직 답변하지 않은 문항이 ' + missing + '개 있습니다.\n예 / 아니오를 선택하거나, 판단이 어려우면 비고에 상황을 적어 주세요.');
-        return;
-      }
-      if (!confirm('미응답(예/아니오·비고 모두 없음) ' + missing + '개 문항이 있습니다 (채점에서 제외됨).\n그대로 제출할까요?')) return;
+      // 완료 게이트: 답변 또는 비고 중 하나는 반드시 — 미완료 상태로는 제출 불가
+      alert(ADMIN
+        ? '입력하지 않은 문항이 ' + missing + '개 있습니다.\n종이에 미기재된 관찰 문항은 NA로 처리해 주세요. (만족도 문항은 1~5 필수)'
+        : '아직 답변하지 않은 문항이 ' + missing + '개 있습니다.\n답을 선택하거나, 판단이 어려우면 비고에 상황을 적어 주세요.');
+      return;
     }
     const noReason = allQs.filter(function (q) {
-      return state.answers[q.no] === '아니오' && !(state.memos[q.no] || '').trim();
+      const v = state.answers[q.no];
+      const low = q.scale === 'likert' ? (typeof v === 'number' && v <= 2) : v === '아니오';
+      return low && !(state.memos[q.no] || '').trim();
     }).length;
     if (noReason > 0 &&
-        !confirm("'아니오'로 답한 문항 중 " + noReason + "개에 비고가 비어 있어요.\n어떤 상황이었는지 한 줄만 적어 주시면 개선에 큰 도움이 됩니다.\n이대로 제출할까요?")) return;
+        !confirm('아쉬웠다고 답한 문항 중 ' + noReason + '개에 비고가 비어 있어요.\n어떤 상황이었는지 한 줄만 적어 주시면 개선에 큰 도움이 됩니다.\n이대로 제출할까요?')) return;
 
     const res = Scoring.shopperScore(answersInOrder());
     if (ADMIN && res.score != null &&
@@ -245,7 +314,7 @@ async function initShopperForm(opts) {
       result: res,
       answers: allQs.map(function (q) {
         return {
-          no: q.no, row: q.row, text: q.text,
+          no: q.no, row: q.row, text: q.text, scale: q.scale,
           answer: state.answers[q.no] == null ? null : state.answers[q.no],
           memo: (state.memos[q.no] || '').trim(),
         };

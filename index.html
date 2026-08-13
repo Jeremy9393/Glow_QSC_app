@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=16">
+<link rel="stylesheet" href="css/app.css?v=23">
 </head>
 <body>
 <div class="home">
@@ -16,7 +16,7 @@
   <div class="homeSub">QSC 평가 시스템</div>
   <nav class="menu">
     <a class="menuCard" href="qsc.html">
-      <span class="mi"><span class="mt">QSC 점검</span><span class="md">다문항 위생·관리 점검 · 자동 채점</span></span>
+      <span class="mi"><span class="mt">QSC 점검</span><span class="md">다문항 위생, 매장관리 점검표</span></span>
       <span class="tag">관리자</span>
       <span class="arrow">›</span>
     </a>
@@ -25,18 +25,13 @@
       <span class="tag">관리자</span>
       <span class="arrow">›</span>
     </a>
-    <a class="menuCard" href="survey.html">
-      <span class="mi"><span class="mt">미스터리쇼퍼 설문지</span><span class="md">고객용 방문·경험 응답 · 익명 · 약 3분</span></span>
-      <span class="tag guest">고객용</span>
-      <span class="arrow">›</span>
-    </a>
   </nav>
   <div class="homeFoot" id="foot">GLOW SEOUL · QSC</div>
 </div>
 <script>
 (async function () {
   try {
-    const m = await (await fetch('data/master.json')).json();
+    const m = await (await fetch('data/master.json', { cache: 'no-store' })).json();
     document.getElementById('foot').textContent = 'GLOW SEOUL · 평가표 ' + m.version + ' 기준';
   } catch (e) { /* 오프라인 등 — 기본 문구 유지 */ }
 })();
