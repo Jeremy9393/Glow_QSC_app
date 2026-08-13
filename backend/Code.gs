@@ -1,0 +1,312 @@
+/* QSC 앱 백엔드 (Google Apps Script)
+   제출 1번에 3곳 기록:
+   ① 응답 원본 시트 (QSC_회차·QSC_상세·쇼퍼_응답) — 추적용 원장
+   ② 통합시트 [데이터] — 해당 매장 행 x 해당 월 블록에 점수 기입 (QSC=위생 칸, 쇼퍼=CS 칸)
+   ③ 매장별 QSC현황 파일 — 월 탭(YYMM)에 방문일·점수 + 적발 문항을 개선요청 표에 자동 행 추가
+
+   배포 절차: script.google.com 새 프로젝트 → 이 코드 붙여넣기 → 아래 ID들 입력
+   → 배포 > 새 배포 > 웹 앱 (실행: 나, 액세스: 모든 사용자) → URL을 js/api.js의 APPS_SCRIPT_URL에 입력
+   준비물: 통합시트 안에 '매장파일맵' 탭 (A열=매장명, B열=해당 매장 QSC현황 파일 ID) */
+
+const SPREADSHEET_ID = '';   // 응답 원본 저장용 스프레드시트 ID (새로 생성)
+const PHOTO_FOLDER_ID = '';  // 사진 보관용 드라이브 폴더 ID
+const DASHBOARD_ID = '';     // '[감사총무팀_QSC] 통합시트' 스프레드시트 ID
+const DASHBOARD_SHEET = '데이터';
+const STORE_MAP_SHEET = '매장파일맵'; // 통합시트 안에 만들 탭: A=매장명, B=매장 파일 ID
+const PHOTO_EMBED = true;    // true면 개선요청 표에 사진을 =IMAGE()로 삽입 (사진 파일이 '링크 있는 사용자 보기'로 공유됨) / false면 링크만
+
+// 통합시트 월 블록의 위생(QSC) 점수 열 번호. CS(쇼퍼)는 +2. 분기 열이 끼어 있어 간격이 불규칙.
+const MONTH_COL = { 1: 6, 2: 13, 3: 20, 4: 29, 5: 36, 6: 43, 7: 52, 8: 59, 9: 66, 10: 75, 11: 82, 12: 89 };
+
+function doGet(e) {
+  const action = e && e.parameter ? e.parameter.action : '';
+  if (action === 'config') return json(getConfig());
+  return json({ ok: true, service: 'qsc-app', time: new Date().toISOString() });
+}
+
+// 앱이 열릴 때마다 호출 — 통합시트의 "지금" 상태(표시 매장만)를 실시간으로 내려줌.
+// 시트에서 매장을 추가·숨김·이름변경하면 앱은 다음 실행 때 자동 반영된다.
+function getConfig() {
+  try {
+    const sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET);
+    const last = sh.getLastRow();
+    const names = sh.getRange(6, 5, last - 5, 1).getValues();
+    const stores = [];
+    for (let i = 0; i < names.length; i++) {
+      const name = String(names[i][0]).trim();
+      if (!name) continue;
+      if (sh.isRowHiddenByUser(6 + i)) continue; // 숨김 행 = 관리 제외 매장
+      stores.push(name);
+    }
+    // 매장별 NA 프리셋 (지난 회차 NA 문항 번호)
+    const naPresets = {};
+    try {
+      const ns = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName('NA프리셋');
+      if (ns) {
+        const nv = ns.getDataRange().getValues();
+        for (let i = 1; i < nv.length; i++) {
+          if (!nv[i][0]) continue;
+          naPresets[String(nv[i][0]).trim()] = String(nv[i][1] || '')
+            .split(',').filter(String).map(Number);
+        }
+      }
+    } catch (err) { /* 프리셋 없어도 config는 정상 반환 */ }
+    return { ok: true, stores: stores, naPresets: naPresets, fetchedAt: new Date().toISOString() };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+function doPost(e) {
+  try {
+    const body = JSON.parse(e.postData.contents);
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    if (body.type === 'qsc') return saveQsc(ss, body.payload);
+    if (body.type === 'shopper') return saveShopper(ss, body.payload);
+    return json({ ok: false, error: 'unknown type: ' + body.type });
+  } catch (err) {
+    return json({ ok: false, error: String(err) });
+  }
+}
+
+/* ---------- ① 응답 원본 ---------- */
+
+function saveQsc(ss, p) {
+  const photoMap = savePhotos(p); // {문항no: [{url, id}]}
+  // v3.7 절대 감점제 스키마: 대분류 점수 대신 감점 3층 + 중대 차감 기록
+  const sum = sheet(ss, 'QSC_회차', ['제출시각', '점검일자', '매장명', '점검자', 'QSC점수', '등급',
+    '일반감점', '★차감', '★★차감', '중대차감합계', '응답수', '사진수']);
+  const r = p.result || {};
+  let photoN = 0;
+  p.items.forEach(function (it) { photoN += (photoMap[it.no] || []).length; });
+  sum.appendRow([p.submittedAt, p.date, p.store, p.inspector,
+    r.qsc == null ? '' : round1(r.qsc), r.grade || '',
+    r.genDeduct || 0, (r.s2 && r.s2.deduct) || 0, (r.s1 && r.s1.deduct) || 0, r.criticalDeduct || 0,
+    p.items.filter(function (it) { return it.value !== null; }).length, photoN]);
+
+  const det = sheet(ss, 'QSC_상세', ['점검일자', '매장명', '코드', '문항번호', '구분', '문항', '등급구분', '개선필요건수', '상태', '감점', '비고', '사진']);
+  const rows = p.items
+    .filter(function (it) { return it.value !== null; })
+    .map(function (it) {
+      const sev = it.severity === 'S1' ? '★★' : it.severity === 'S2' ? '★' : '';
+      return [p.date, p.store, it.code || '', it.no, it.group || '', it.text, sev,
+        String(it.value), it.rating || '', it.deduct == null ? '' : -it.deduct,
+        it.memo || '', (photoMap[it.no] || []).map(function (x) { return x.url; }).join('\n')];
+    });
+  if (rows.length) det.getRange(det.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+
+  // 매장별 NA 프리셋 갱신 — 다음 회차에 앱이 자동 제안 (?action=config로 내려감)
+  try {
+    const naSheet = sheet(ss, 'NA프리셋', ['매장명', 'NA문항', '갱신일']);
+    const naNos = p.items.filter(function (it) { return it.value === 'NA'; })
+      .map(function (it) { return it.no; }).join(',');
+    const vals = naSheet.getDataRange().getValues();
+    let found = -1;
+    for (let i = 1; i < vals.length; i++) {
+      if (String(vals[i][0]).trim() === p.store.trim()) { found = i + 1; break; }
+    }
+    if (found > 0) naSheet.getRange(found, 2, 1, 2).setValues([[naNos, p.date]]);
+    else naSheet.appendRow([p.store, naNos, p.date]);
+  } catch (err) { /* 프리셋 실패는 저장에 영향 없음 */ }
+
+  // ②③ 연동 기록 — 실패해도 원본 저장은 유지하고 결과만 알림
+  const extra = { dashboard: null, storeFile: null };
+  if (DASHBOARD_ID) {
+    try {
+      extra.dashboard = p.result.final == null ? { ok: false, error: '점수 없음' }
+        : writeDashboard(p.store, p.date, p.result.final / 100, 0);
+    } catch (err) { extra.dashboard = { ok: false, error: String(err) }; }
+    try { extra.storeFile = writeStoreQsc(p, photoMap); }
+    catch (err) { extra.storeFile = { ok: false, error: String(err) }; }
+  }
+  return json({ ok: true, saved: rows.length, photos: photoN, dashboard: extra.dashboard, storeFile: extra.storeFile });
+}
+
+function saveShopper(ss, p) {
+  const sh = sheet(ss, '쇼퍼_응답', ['제출시각', '방문날짜', '매장명', '응대직원설명', '주문내역', '연령대성별', '입력경로', '점수', '응답수']
+    .concat(p.answers.map(function (a) { return 'Q' + a.no; })));
+  sh.appendRow([p.submittedAt, p.date, p.store, p.staff, p.order, p.demographic,
+    p.source === 'customer' ? '고객 직접' : '관리자 입력',
+    p.result.score == null ? '' : round1(p.result.score), p.result.answered]
+    .concat(p.answers.map(function (a) { return a.answer || ''; })));
+
+  // 문항별 이유·비고 — 작성된 것만 1행씩 (추적용, 특히 '아니오'의 근거)
+  const memoRows = p.answers.filter(function (a) { return a.memo; }).map(function (a) {
+    return [p.submittedAt, p.date, p.store, p.source === 'customer' ? '고객 직접' : '관리자 입력',
+      a.no, a.text, a.answer || '', a.memo];
+  });
+  if (memoRows.length) {
+    const ms = sheet(ss, '쇼퍼_비고', ['제출시각', '방문날짜', '매장명', '입력경로', '문항번호', '문항', '응답', '비고']);
+    ms.getRange(ms.getLastRow() + 1, 1, memoRows.length, memoRows[0].length).setValues(memoRows);
+  }
+
+  // 통합시트 CS 칸 + 매장 파일 CS점수: 같은 달 쇼퍼가 여러 명이면 "해당 월 평균"으로 기록
+  const extra = { dashboard: null, storeFile: null };
+  if (DASHBOARD_ID && p.result.score != null) {
+    try {
+      const avg = shopperMonthAvg(sh, p.store, p.date);
+      extra.dashboard = writeDashboard(p.store, p.date, avg / 100, 2);
+      extra.storeFile = writeStoreShopper(p.store, p.date, avg / 100);
+    } catch (err) { extra.dashboard = { ok: false, error: String(err) }; }
+  }
+  return json({ ok: true, dashboard: extra.dashboard, storeFile: extra.storeFile });
+}
+
+function shopperMonthAvg(sh, store, dateStr) {
+  const ym = dateStr.slice(0, 7); // 'YYYY-MM'
+  const vals = sh.getDataRange().getValues();
+  const scores = [];
+  for (let i = 1; i < vals.length; i++) {
+    const d = vals[i][1];
+    const dYm = (d instanceof Date)
+      ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+      : String(d).slice(0, 7);
+    if (String(vals[i][2]).trim() === store.trim() && dYm === ym && typeof vals[i][7] === 'number') {
+      scores.push(vals[i][7]); // 7 = 점수 열 (입력경로 열 추가로 한 칸 밀림)
+    }
+  }
+  if (!scores.length) return 0;
+  return scores.reduce(function (a, b) { return a + b; }, 0) / scores.length;
+}
+
+/* ---------- ② 통합시트 [데이터] ---------- */
+
+// offset: 0 = 위생(QSC) 점수 열, 2 = CS(쇼퍼) 점수 열. 등급·종합 열은 시트 수식이라 건드리지 않는다.
+function writeDashboard(store, dateStr, frac, offset) {
+  const sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET);
+  const month = parseInt(dateStr.slice(5, 7), 10);
+  const col = MONTH_COL[month] + offset;
+  const last = sh.getLastRow();
+  const names = sh.getRange(6, 5, last - 5, 1).getValues(); // E6부터 매장명
+  for (let i = 0; i < names.length; i++) {
+    if (String(names[i][0]).trim() === store.trim()) {
+      const row = 6 + i;
+      sh.getRange(row, col).setValue(frac);
+      return { ok: true, cell: sh.getRange(row, col).getA1Notation() };
+    }
+  }
+  return { ok: false, error: '통합시트에 매장 행 없음: ' + store };
+}
+
+/* ---------- ③ 매장별 QSC현황 파일 ---------- */
+
+function storeFileId(store) {
+  const sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(STORE_MAP_SHEET);
+  if (!sh) return null;
+  const vals = sh.getDataRange().getValues();
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]).trim() === store.trim() && vals[i][1]) return String(vals[i][1]).trim();
+  }
+  return null;
+}
+
+function yymm(dateStr) { return dateStr.slice(2, 4) + dateStr.slice(5, 7); } // '2026-08-10' → '2608'
+
+// 라벨 셀을 찾아 그 오른쪽 칸에 기록 (월 탭 레이아웃이 조금 달라도 동작)
+function setByLabel(sh, label, value) {
+  const vals = sh.getRange(1, 1, 15, 12).getValues();
+  for (let r = 0; r < vals.length; r++) {
+    for (let c = 0; c < vals[r].length; c++) {
+      if (String(vals[r][c]).trim() === label) {
+        sh.getRange(r + 1, c + 2).setValue(value);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function writeStoreQsc(p, photoMap) {
+  const id = storeFileId(p.store);
+  if (!id) return { ok: false, error: STORE_MAP_SHEET + '에 매장 없음: ' + p.store };
+  const ss = SpreadsheetApp.openById(id);
+  const tab = yymm(p.date);
+  const sh = ss.getSheetByName(tab);
+  if (!sh) return { ok: false, error: '월 탭 없음: ' + tab };
+
+  setByLabel(sh, '방문일', p.date);
+  if (p.result.final != null) setByLabel(sh, '위생점수', p.result.final / 100);
+
+  // 개선요청 표: B열에서 'NO.' 헤더 행을 찾고, J열 첫 빈 행부터 개선 필요 문항(1건 이상)을 추가
+  const found = p.items.filter(function (it) { return typeof it.value === 'number' && it.value >= 1; });
+  if (!found.length) return { ok: true, tickets: 0 };
+
+  const colB = sh.getRange(1, 2, 60, 1).getValues();
+  let headRow = -1;
+  for (let i = 0; i < colB.length; i++) {
+    if (String(colB[i][0]).trim().toUpperCase().indexOf('NO') === 0) { headRow = i + 1; break; }
+  }
+  if (headRow < 0) return { ok: false, error: "개선요청 표 헤더(B열 'NO.')를 못 찾음: " + tab };
+
+  const colJ = sh.getRange(headRow + 1, 10, 200, 1).getValues();
+  let used = 0;
+  for (let i = 0; i < colJ.length; i++) { if (String(colJ[i][0]).trim() !== '') used = i + 1; }
+  let row = headRow + 1 + used;
+  let no = used;
+
+  const rows = found.map(function (it) {
+    no += 1;
+    const photos = photoMap[it.no] || [];
+    let photoCell = '';
+    if (photos.length) {
+      photoCell = PHOTO_EMBED
+        ? '=IMAGE("https://drive.google.com/uc?export=view&id=' + photos[0].id + '")'
+        : photos[0].url;
+    }
+    const cnt = (typeof it.value === 'number' && it.value > 0) ? ' (' + it.value + '건)' : '';
+    const extraPhotos = photos.length > 1
+      ? ' / 사진 ' + photos.length + '장: ' + photos.map(function (x) { return x.url; }).join(' ') : '';
+    // B=NO, C=구분, D=개선 전 사진, J=개선요청사항, P=비고 (담당부서·담당자·일정 칸은 비워둠)
+    return [no, it.group || '', photoCell, '', '', '', '', '',
+      (it.severity === 'S1' ? '[★★ 중대] ' : it.severity === 'S2' ? '[★ 중대] ' : '') + (it.code ? it.code + ' ' : '') + it.text + cnt, '', '', '', '', '', (it.memo || '') + extraPhotos];
+  });
+  sh.getRange(row, 2, rows.length, 15).setValues(rows);
+  return { ok: true, tickets: rows.length, tab: tab };
+}
+
+function writeStoreShopper(store, dateStr, frac) {
+  const id = storeFileId(store);
+  if (!id) return { ok: false, error: STORE_MAP_SHEET + '에 매장 없음: ' + store };
+  const sh = SpreadsheetApp.openById(id).getSheetByName(yymm(dateStr));
+  if (!sh) return { ok: false, error: '월 탭 없음: ' + yymm(dateStr) };
+  return { ok: setByLabel(sh, 'CS점수', frac) };
+}
+
+/* ---------- 사진 ---------- */
+
+function savePhotos(p) {
+  const out = {};
+  if (!PHOTO_FOLDER_ID) return out;
+  let dayFolder = null;
+  p.items.forEach(function (it) {
+    (it.photos || []).forEach(function (dataUrl, i) {
+      if (!dayFolder) dayFolder = subFolder(subFolder(DriveApp.getFolderById(PHOTO_FOLDER_ID), p.store), p.date);
+      const base64 = dataUrl.split(',')[1];
+      const blob = Utilities.newBlob(Utilities.base64Decode(base64), 'image/jpeg',
+        p.date + '_' + p.store + '_문항' + it.no + '_' + (i + 1) + '.jpg');
+      const f = dayFolder.createFile(blob);
+      if (PHOTO_EMBED) f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      (out[it.no] = out[it.no] || []).push({ url: f.getUrl(), id: f.getId() });
+    });
+  });
+  return out;
+}
+
+function subFolder(parent, name) {
+  const it = parent.getFoldersByName(name);
+  return it.hasNext() ? it.next() : parent.createFolder(name);
+}
+
+/* ---------- 공용 ---------- */
+
+function sheet(ss, name, headers) {
+  let sh = ss.getSheetByName(name);
+  if (!sh) { sh = ss.insertSheet(name); sh.appendRow(headers); sh.setFrozenRows(1); }
+  return sh;
+}
+
+function round1(n) { return Math.round(n * 10) / 10; }
+
+function json(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}

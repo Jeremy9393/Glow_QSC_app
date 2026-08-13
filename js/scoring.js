@@ -1,14 +1,23 @@
-/* QSC 채점 엔진 — 엑셀 'QSC 평가표' 수식을 그대로 이식.
-   일반 문항: 점수 = 2 - 건수 (하한 없음) / 중대 문항: 2 - 2x건수 (하한 없음)
-   문자 입력: ○=2, △=1, X=0 (중대는 ○/X만) / NA·미입력: 채점 제외
-   그룹 점수 = MAX(0, 합계/(응답수*2)*100), 가중치 = 그룹 문항수/전체 문항수
-   최종 = 가중 합산(무응답 그룹 가중치 재분배), 하한 0 */
+/* QSC 채점 엔진 — 엑셀 v3.7 '절대 감점제'를 그대로 이식.
+   일반 문항: 1건 = −1점 (영역 구분 없음, 하한 없이 누적)
+   ★  중대운영(S2): 문항당 −8, 같은 문항 추가 건당 −2, 합계 상한 −45
+   ★★ 즉시위해(S1): 문항당 −12, 같은 문항 추가 건당 −4, 합계 상한 −48
+   QSC 점수 = MAX(0, 100 − 일반 감점) — 중대는 평균에 넣지 않고 최종점수에서 직접 차감
+   최종(대시보드) = QSC×60% + 쇼퍼×30% + 개선현황×10% − 중대 차감 (하한 0)
+   등급: 우수 93점 이상 / 양호 85 / 보통 76 / 미흡 66 / 주의 55 / 부적합 55 미만
+   입력: null(미확인) | 'NA'(해당 없음) | 0 이상 정수(개선 필요 건수) */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
   else root.Scoring = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function () {
-  const GRADES = [
-    { name: '우수', test: function (s) { return s > 93; } },
+  var RULES = {
+    general: { per: 1 },
+    S2: { label: '★', first: 8, more: 2, cap: 45 },
+    S1: { label: '★★', first: 12, more: 4, cap: 48 },
+  };
+
+  var GRADES = [
+    { name: '우수', test: function (s) { return s >= 93; } },
     { name: '양호', test: function (s) { return s >= 85; } },
     { name: '보통', test: function (s) { return s >= 76; } },
     { name: '미흡', test: function (s) { return s >= 66; } },
@@ -21,74 +30,89 @@
     return GRADES.find(function (g) { return g.test(score); }).name;
   }
 
-  // value: null(미입력) | 'NA' | '○'|'△'|'X' | 숫자(적발 건수)
-  function itemScore(value, critical) {
+  function normValue(value) {
     if (value == null || value === '') return null;
     if (value === 'NA') return 'NA';
-    if (typeof value === 'string') {
-      const map = critical ? { '○': 2, 'X': 0 } : { '○': 2, '△': 1, 'X': 0 };
-      return value in map ? map[value] : null;
-    }
-    if (typeof value === 'number' && isFinite(value) && value >= 0) {
-      return critical ? 2 - 2 * value : 2 - value;
-    }
+    if (typeof value === 'number' && isFinite(value) && value >= 0) return Math.floor(value);
     return null;
   }
 
-  function itemRating(value, critical) {
-    if (value == null || value === '') return null;
-    if (value === 'NA') return 'NA';
-    if (typeof value === 'string') return itemScore(value, critical) === null ? null : value;
-    if (typeof value === 'number' && isFinite(value) && value >= 0) {
-      if (critical) return value === 0 ? '○' : 'X';
-      return value === 0 ? '○' : value === 1 ? '△' : 'X';
-    }
-    return null;
+  // 문항 하나의 감점(양수). 일반 = 건수×1, ★/★★ = first + more×(건수−1). NA·미확인은 그대로 반환.
+  function itemDeduct(value, severity) {
+    var v = normValue(value);
+    if (v === null || v === 'NA') return v;
+    if (v === 0) return 0;
+    var r = RULES[severity];
+    if (r && r.first != null) return r.first + r.more * (v - 1);
+    return v * RULES.general.per;
   }
 
-  // items: [{ critical: bool, value }]
-  function groupScore(items) {
-    const nums = [];
-    for (const it of items) {
-      const s = itemScore(it.value, it.critical);
-      if (typeof s === 'number') nums.push(s);
-    }
-    if (!nums.length) return null;
-    const sum = nums.reduce(function (a, b) { return a + b; }, 0);
-    return Math.max(0, (sum / (nums.length * 2)) * 100);
-  }
-
-  // groups: [{ items: [{critical, value}] }]
-  function evaluate(groups) {
-    const totalItems = groups.reduce(function (a, g) { return a + g.items.length; }, 0);
-    let numer = 0, denom = 0;
-    const out = groups.map(function (g) {
-      const score = groupScore(g.items);
-      const weight = g.items.length / totalItems;
-      let answered = 0, na = 0;
-      for (const it of g.items) {
-        const s = itemScore(it.value, it.critical);
-        if (typeof s === 'number') answered++;
-        else if (s === 'NA') na++;
-      }
-      if (score != null) { numer += score * weight; denom += weight; }
-      return { score: score, weight: weight, answered: answered, na: na, total: g.items.length };
+  // 심각도별 합산: 상한 적용 전/후를 함께 반환
+  function tierTotal(items, severity) {
+    var raw = 0, cases = 0, hit = 0;
+    items.forEach(function (it) {
+      if (it.severity !== severity) return;
+      var d = itemDeduct(it.value, it.severity);
+      if (typeof d === 'number' && d > 0) { raw += d; hit++; cases += normValue(it.value); }
     });
-    const final = denom === 0 ? null : Math.max(0, numer / denom);
-    return { groups: out, final: final, grade: grade(final) };
+    var cap = RULES[severity].cap;
+    return { raw: raw, capped: Math.min(cap, raw), cap: cap, capHit: raw >= cap, items: hit, cases: cases };
   }
 
-  // answers: ['예'|'아니오'|'NA'|null, ...]
+  /* items: [{ severity: ''|'S1'|'S2', value }] (그룹 구분 불필요 — 절대 감점제)
+     반환: { qsc, grade, genDeduct, genCases, genItems, s1, s2, criticalDeduct,
+             blank, na, naCritical, complete } */
+  function evaluate(items) {
+    var genDeduct = 0, genCases = 0, genItems = 0, blank = 0, na = 0, naCritical = 0;
+    items.forEach(function (it) {
+      var v = normValue(it.value);
+      if (v === null) { blank++; return; }
+      if (v === 'NA') { na++; if (it.severity) naCritical++; return; }
+      if (!it.severity && v > 0) { genDeduct += v * RULES.general.per; genCases += v; genItems++; }
+    });
+    var s1 = tierTotal(items, 'S1');
+    var s2 = tierTotal(items, 'S2');
+    var complete = blank === 0;
+    var qsc = complete ? Math.max(0, 100 - genDeduct) : null;
+    return {
+      qsc: qsc, grade: grade(qsc),
+      genDeduct: genDeduct, genCases: genCases, genItems: genItems,
+      s1: s1, s2: s2, criticalDeduct: s1.capped + s2.capped,
+      blank: blank, na: na, naCritical: naCritical, complete: complete,
+      // 구버전 호환: final = QSC 점수 (중대 차감은 대시보드에서 적용)
+      final: qsc,
+    };
+  }
+
+  // 참고: 최종점수 미리보기 (쇼퍼·개선현황을 알 때만 사용 — 정본은 통합시트)
+  function finalPreview(qsc, criticalDeduct, shopper, improvement) {
+    if (qsc == null) return null;
+    var s = qsc * 0.6 + (shopper == null ? 0 : shopper * 0.3) + (improvement == null ? 0 : improvement * 0.1) - criticalDeduct;
+    return Math.max(0, s);
+  }
+
+  /* 쇼퍼 응답: '예'(1) | '아니오'(0) | 1~5(5점 척도 → (n−1)/4 환산) | 'NA' | null
+     점수 = 환산 합계 ÷ 응답 수 × 100 (NA·미응답 제외) */
+  function shopperConvert(a) {
+    if (a === '예') return 1;
+    if (a === '아니오') return 0;
+    if (typeof a === 'number' && a >= 1 && a <= 5) return (a - 1) / 4;
+    return null;
+  }
   function shopperScore(answers) {
-    let sum = 0, n = 0;
-    for (const a of answers) {
-      if (a === '예') { sum += 1; n++; }
-      else if (a === '아니오') { n++; }
-    }
-    if (!n) return { score: null, grade: null, answered: 0 };
-    const score = (sum / n) * 100;
-    return { score: score, grade: grade(score), answered: n, yes: sum };
+    var sum = 0, n = 0;
+    answers.forEach(function (a) {
+      var v = shopperConvert(a);
+      if (v != null) { sum += v; n++; }
+    });
+    if (!n) return { score: null, grade: null, answered: 0, converted: 0 };
+    var score = (sum / n) * 100;
+    return { score: score, grade: grade(score), answered: n, converted: sum, yes: sum };
   }
 
-  return { grade: grade, itemScore: itemScore, itemRating: itemRating, groupScore: groupScore, evaluate: evaluate, shopperScore: shopperScore };
+  return {
+    RULES: RULES, grade: grade,
+    itemDeduct: itemDeduct, evaluate: evaluate, finalPreview: finalPreview,
+    shopperConvert: shopperConvert, shopperScore: shopperScore,
+  };
 });

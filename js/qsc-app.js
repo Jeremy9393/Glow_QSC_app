@@ -1,24 +1,39 @@
-/* QSC 점검 앱 화면 로직 (담당자용) */
+/* QSC 점검 앱 화면 로직 (담당자용) — v3.7 절대 감점제
+   입력: 이상 없음 0 / 개선 필요 건수 / 해당 없음 NA
+   ★(S2)·★★(S1)는 QSC 평균에 넣지 않고 차감액만 집계 → 대시보드 최종점수에서 차감 */
 (async function () {
-  const master = await (await fetch('data/master.json')).json();
+  // cache:'no-store' — 데이터 파일은 항상 서버 최신본 (오프라인이면 SW 캐시 폴백)
+  const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
   const $ = function (s, el) { return (el || document).querySelector(s); };
-  const DRAFT_KEY = 'qsc-draft-v1';
+  const DRAFT_KEY = 'qsc-draft-v2';
   const state = { values: {}, memos: {}, photos: {} };
   const allItems = [];
   master.qsc_groups.forEach(function (g) { g.items.forEach(function (it) { it.group = shortName(g.name); allItems.push(it); }); });
-  // 감점식: 전 문항 0건(○)에서 시작 — 적발된 것만 입력하면 됨
+  // 안전장치: 심각도 정보가 없으면 구버전 데이터가 캐시된 것 — 잘못된 감점(중대 −1점)을 막는다
+  if (!allItems.some(function (it) { return it.severity; })) {
+    alert('평가표 데이터가 구버전입니다.\n인터넷이 연결된 상태에서 앱을 완전히 닫았다가 다시 열어 주세요.');
+  }
+  // 감점식: 전 문항 0건(이상 없음)에서 시작 — 개선 필요한 것만 입력하면 됨
   allItems.forEach(function (it) { state.values[it.no] = 0; });
   const updaters = {};
   const cardEls = {};
   let photoTarget = null;
 
+  function sevLabel(sev) { return sev === 'S1' ? '★★' : sev === 'S2' ? '★' : ''; }
+
   $('#resetBtn').onclick = function () {
-    if (!confirm('모든 입력(점수·사진·비고)을 지우고 새 점검을 시작할까요?')) return;
+    if (!confirm('모든 입력(건수·사진·비고)을 지우고 새 점검을 시작할까요?')) return;
     localStorage.removeItem(DRAFT_KEY);
     location.reload();
   };
 
   $('#verInfo').textContent = '평가표 ' + master.version + ' 기준';
+  if ($('#wLine')) {
+    const R = Scoring.RULES;
+    $('#wLine').textContent = '감점: 일반 1건 −' + R.general.per +
+      ' · ★ 문항당 −' + R.S2.first + '(추가 −' + R.S2.more + ', 상한 ' + R.S2.cap + ')' +
+      ' · ★★ 문항당 −' + R.S1.first + '(추가 −' + R.S1.more + ', 상한 ' + R.S1.cap + ') / ';
+  }
   // 매장 목록: 연동 후엔 통합시트 실시간(숨김 제외) > 오프라인 캐시 > master.json 저장본 순
   const live = await Api.getConfig();
   const stores = (live && live.stores && live.stores.length) ? live.stores : (master.stores || []);
@@ -43,7 +58,7 @@
     if (!store) return;
     const preset = naPresetFor(store).filter(function (no) { return updaters[no] && state.values[no] !== 'NA'; });
     if (!preset.length) return;
-    if (confirm(store + '\n지난 회차에 NA(평가 제외)였던 ' + preset.length + '개 문항을 이번에도 NA로 적용할까요?\n문항 번호: ' + preset.join(', '))) {
+    if (confirm(store + '\n지난 회차에 NA(해당 없음)였던 ' + preset.length + '개 문항을 이번에도 NA로 적용할까요?\n문항 번호: ' + preset.join(', '))) {
       preset.forEach(function (no) { state.values[no] = 'NA'; updaters[no](); });
       recompute();
       saveDraft();
@@ -104,17 +119,17 @@
   // ---------- 문항 카드 ----------
   function buildItem(it) {
     const card = document.createElement('div');
-    card.className = 'item' + (it.critical ? ' crit' : '');
-    const opts = it.critical ? ['○', 'X', 'NA'] : ['○', '△', 'X', 'NA'];
-    const onCls = { '○': 'on-o', '△': 'on-d', 'X': 'on-x', 'NA': 'on-na' };
+    const sevCls = it.severity ? ' crit ' + it.severity.toLowerCase() : '';
+    card.className = 'item' + sevCls;
     card.innerHTML =
-      '<div class="q"><span class="no">' + it.no + '</span><span class="txt"></span>' +
-      (it.critical ? '<span class="badge-crit">중대</span>' : '') + '</div>' +
+      '<div class="q"><span class="no">' + (it.code || it.no) + '</span><span class="txt"></span>' +
+      (it.severity ? '<span class="badge-crit ' + it.severity.toLowerCase() + '">' + sevLabel(it.severity) +
+        (it.severity === 'S1' ? ' 즉시위해' : ' 중대운영') + '</span>' : '') + '</div>' +
       '<div class="controls">' +
-      '<div class="seg">' + opts.map(function (o) { return '<button data-v="' + o + '">' + o + '</button>'; }).join('') + '</div>' +
+      '<div class="seg"><button data-v="0">이상 없음</button><button data-v="NA">NA</button></div>' +
       '<div class="counter"><button class="minus">−</button><span class="cnt empty">–</span><button class="plus">＋</button><span class="cl">건</span></div>' +
       '</div>' +
-      '<div class="meta-row"><span class="score-chip">미입력</span><input type="text" class="memo" placeholder="비고"><button class="photoBtn">사진</button></div>' +
+      '<div class="meta-row"><span class="score-chip">미확인</span><input type="text" class="memo" placeholder="비고"><button class="photoBtn">사진</button></div>' +
       '<div class="thumbs"></div>';
     $('.q .txt', card).textContent = it.text;
 
@@ -126,11 +141,10 @@
     }
     card.querySelectorAll('.seg button').forEach(function (b) {
       b.onclick = function () {
-        const cur = state.values[it.no] == null ? null : state.values[it.no];
-        const v = b.dataset.v;
-        // 켜져 있는 판정(건수로 켜진 것 포함)을 다시 누르면 입력 해제, 아니면 해당 판정으로 입력
-        if (cur === v || Scoring.itemRating(cur, it.critical) === v) setValue(null);
-        else setValue(v);
+        const cur = state.values[it.no];
+        const v = b.dataset.v === 'NA' ? 'NA' : 0;
+        // 켜져 있는 버튼을 다시 누르면 입력 해제(미확인), 아니면 해당 상태로 입력
+        setValue(cur === v ? null : v);
       };
     });
     $('.plus', card).onclick = function () {
@@ -140,11 +154,11 @@
     $('.minus', card).onclick = function () {
       const v = state.values[it.no];
       if (typeof v === 'number') { if (v > 0) setValue(v - 1); }
-      else setValue(0); // 문자·NA에서 −를 누르면 기본 상태(0건)로 복귀
+      else setValue(0); // NA·미확인에서 −를 누르면 기본 상태(0건)로 복귀
     };
     $('.cnt', card).onclick = function () {
       const cur = state.values[it.no];
-      const inp = prompt('적발 건수를 입력하세요', typeof cur === 'number' ? String(cur) : '0');
+      const inp = prompt('개선 필요 건수를 입력하세요', typeof cur === 'number' ? String(cur) : '0');
       if (inp == null) return;
       const n = parseInt(inp, 10);
       if (!isNaN(n) && n >= 0) setValue(n);
@@ -160,31 +174,30 @@
 
     function update() {
       const v = state.values[it.no] == null ? null : state.values[it.no];
-      const rate = Scoring.itemRating(v, it.critical);
       card.querySelectorAll('.seg button').forEach(function (b) {
-        const on = v === b.dataset.v || rate === b.dataset.v;
-        b.className = on ? onCls[b.dataset.v] : '';
+        const on = (b.dataset.v === 'NA' && v === 'NA') || (b.dataset.v === '0' && v === 0);
+        b.className = on ? (b.dataset.v === 'NA' ? 'on-na' : 'on-o') : '';
       });
       const cnt = $('.cnt', card);
-      if (typeof v === 'number') { cnt.textContent = v; cnt.className = 'cnt'; }
+      if (typeof v === 'number') { cnt.textContent = v; cnt.className = v > 0 ? 'cnt hot' : 'cnt'; }
       else { cnt.textContent = '–'; cnt.className = 'cnt empty'; }
       const chip = $('.score-chip', card);
-      const rating = Scoring.itemRating(v, it.critical);
-      const score = Scoring.itemScore(v, it.critical);
-      if (rating == null) { chip.textContent = '미입력'; chip.className = 'score-chip'; }
-      else if (rating === 'NA') { chip.textContent = 'NA 제외'; chip.className = 'score-chip s-na'; }
+      const d = Scoring.itemDeduct(v, it.severity);
+      if (d === null) { chip.textContent = '미확인'; chip.className = 'score-chip'; }
+      else if (d === 'NA') { chip.textContent = 'NA 제외'; chip.className = 'score-chip s-na'; }
+      else if (d === 0) { chip.textContent = '이상 없음'; chip.className = 'score-chip s-o'; }
       else {
-        chip.textContent = rating + ' ' + (score >= 0 ? score : '−' + Math.abs(score)) + '점';
-        chip.className = 'score-chip ' + (rating === '○' ? 's-o' : rating === '△' ? 's-d' : 's-x');
+        chip.textContent = (it.severity ? sevLabel(it.severity) + ' ' : '') + '−' + d + '점';
+        chip.className = 'score-chip ' + (it.severity ? 's-x' : 's-d');
       }
       const memo = $('.memo', card);
       if (memo.value !== (state.memos[it.no] || '')) memo.value = state.memos[it.no] || '';
       const ph = state.photos[it.no] || [];
       const pbtn = $('.photoBtn', card);
       pbtn.textContent = ph.length ? '사진 ' + ph.length : '사진';
-      // 적발(△/X)인데 사진이 없으면 빨간 테두리로 촬영 유도 (추적성)
+      // 개선 필요(1건 이상)인데 사진이 없으면 빨간 테두리로 촬영 유도 (추적성)
       pbtn.className = 'photoBtn' + (ph.length ? ' has' : '') +
-        ((rating === '△' || rating === 'X') && !ph.length ? ' need' : '');
+        (typeof v === 'number' && v > 0 && !ph.length ? ' need' : '');
       const thumbs = $('.thumbs', card);
       thumbs.innerHTML = '';
       ph.forEach(function (url, i) {
@@ -208,7 +221,7 @@
     const a = document.createElement('a');
     a.href = '#g' + gi;
     a.id = 'nav' + gi;
-    a.innerHTML = shortName(g.name) + ' <span class="n">적발 0</span>';
+    a.innerHTML = shortName(g.name) + ' <span class="n">0건</span>';
     gnav.appendChild(a);
 
     const sec = document.createElement('section');
@@ -216,7 +229,7 @@
     sec.id = 'g' + gi;
     const head = document.createElement('div');
     head.className = 'ghead';
-    head.innerHTML = '<h2>' + g.name + '</h2><span class="gstat" id="gstat' + gi + '">적발 0 · 100.0점</span>';
+    head.innerHTML = '<h2>' + g.name + '</h2><span class="gstat" id="gstat' + gi + '">개선 필요 0건</span>';
     sec.appendChild(head);
     g.items.forEach(function (it) {
       const el = buildItem(it);
@@ -232,71 +245,95 @@
 
   // ---------- 집계 ----------
   function evalNow() {
-    const groups = master.qsc_groups.map(function (g) {
-      return { items: g.items.map(function (it) { return { critical: it.critical, value: state.values[it.no] == null ? null : state.values[it.no] }; }) };
+    return Scoring.evaluate(allItems.map(function (it) {
+      return { severity: it.severity || '', value: state.values[it.no] == null ? null : state.values[it.no] };
+    }));
+  }
+  function groupStats(items) {
+    let cases = 0, deduct = 0, issue = 0;
+    items.forEach(function (it) {
+      const v = state.values[it.no];
+      const d = Scoring.itemDeduct(v == null ? null : v, it.severity);
+      if (typeof d === 'number' && d > 0) { deduct += d; issue++; cases += v; }
     });
-    return Scoring.evaluate(groups);
+    return { cases: cases, deduct: deduct, issue: issue };
   }
-  function offenseIn(items) {
-    return items.filter(function (it) {
-      const v = state.values[it.no] == null ? null : state.values[it.no];
-      const r = Scoring.itemRating(v, it.critical);
-      return r === '△' || r === 'X';
-    }).length;
-  }
+  function fmtM(n) { return n > 0 ? '−' + n : '0'; }
   function recompute() {
     const res = evalNow();
-    res.groups.forEach(function (gr, gi) {
-      const off = offenseIn(master.qsc_groups[gi].items);
-      $('#gstat' + gi).innerHTML = '적발 ' + off + ' · ' +
-        (gr.score == null ? '—' : '<span class="gscore">' + gr.score.toFixed(1) + '점</span>');
-      $('#nav' + gi + ' .n').textContent = '적발 ' + off;
+    master.qsc_groups.forEach(function (g, gi) {
+      const st = groupStats(g.items);
+      $('#gstat' + gi).innerHTML = '개선 필요 ' + st.cases + '건' +
+        (st.deduct ? ' · <span class="gscore">감점 ' + st.deduct + '</span>' : '');
+      $('#nav' + gi + ' .n').textContent = st.cases + '건';
     });
-    $('#bbScore').textContent = res.final == null ? '—' : res.final.toFixed(1) + '점';
-    $('#bbGrade').textContent = res.grade || '';
-    const off = offenseIn(allItems);
-    const na = allItems.filter(function (it) { return state.values[it.no] === 'NA'; }).length;
-    const blank = allItems.filter(function (it) { return state.values[it.no] == null; }).length;
-    $('#bbProg').textContent = '적발 ' + off + '건 · NA ' + na + (blank ? ' · 미확인 ' + blank : '');
+    $('#bbScore').textContent = res.qsc == null ? '—' : 'QSC ' + res.qsc.toFixed(1) + '점';
+    $('#bbGrade').innerHTML = res.qsc == null ? '' :
+      (res.grade || '') + (res.criticalDeduct ? ' <span class="bb-crit">중대 −' + res.criticalDeduct + '점</span>' : '');
+    $('#bbProg').textContent = '개선 필요 ' + (res.genCases + res.s1.cases + res.s2.cases) + '건 · NA ' + res.na +
+      (res.blank ? ' · 미확인 ' + res.blank : '');
     renderSummary(res);
   }
 
-  // 하단 결과 요약: 엑셀 '항목별 집계' 블록과 같은 구성 (점수·가중치·가중반영·최종·등급) + 적발 목록
+  // 하단 결과 요약: 엑셀 '항목별 집계' 블록과 같은 구성 (감점 3층 + QSC + 중대 차감) + 개선 필요 목록
   function renderSummary(res) {
     const body = $('#sumBody');
     body.innerHTML = '';
-    res.groups.forEach(function (gr, gi) {
+    const R = Scoring.RULES;
+    const rows = [
+      ['일반 문항 감점 (1건 = −' + R.general.per + '점)',
+        res.genItems + '문항 / ' + res.genCases + '건', fmtM(res.genDeduct)],
+      ['★ 중대운영 (문항당 −' + R.S2.first + ' · 추가 건당 −' + R.S2.more + ' · 상한 −' + R.S2.cap + ')',
+        res.s2.items + '문항 / ' + res.s2.cases + '건' + (res.s2.capHit ? ' · 상한 도달(원값 ' + res.s2.raw + ')' : ''),
+        fmtM(res.s2.capped)],
+      ['★★ 즉시위해 (문항당 −' + R.S1.first + ' · 추가 건당 −' + R.S1.more + ' · 상한 −' + R.S1.cap + ')',
+        res.s1.items + '문항 / ' + res.s1.cases + '건' + (res.s1.capHit ? ' · 상한 도달(원값 ' + res.s1.raw + ')' : ''),
+        fmtM(res.s1.capped)],
+      ['중대 차감 합계 — 대시보드 최종점수에서 직접 차감', '★★ ' + res.s1.cases + '건 / ★ ' + res.s2.cases + '건' +
+        (res.naCritical ? ' · ⚠NA ' + res.naCritical + '문항' : ''), fmtM(res.criticalDeduct)],
+    ];
+    rows.forEach(function (r, i) {
       const tr = document.createElement('tr');
-      tr.innerHTML = '<td>' + shortName(master.qsc_groups[gi].name) + '</td>' +
-        '<td class="r">' + (gr.score == null ? '—' : gr.score.toFixed(1)) + '</td>' +
-        '<td class="r">' + (gr.weight * 100).toFixed(1) + '%</td>' +
-        '<td class="r">' + (gr.score == null ? '—' : (gr.score * gr.weight).toFixed(1)) + '</td>';
+      if (i === 3) tr.className = 'sum-crit';
+      tr.innerHTML = '<td>' + r[0] + '</td><td class="r">' + r[1] + '</td><td class="r">' + r[2] + '</td>';
       body.appendChild(tr);
     });
-    $('#sumFinal').innerHTML = res.final == null ? '최종 —' :
-      '최종 <b>' + res.final.toFixed(1) + '점</b> · <b>' + (res.grade || '') + '</b>';
+    const ref = $('#refBody');
+    if (ref) {
+      ref.innerHTML = '';
+      master.qsc_groups.forEach(function (g) {
+        const st = groupStats(g.items);
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + shortName(g.name) + '</td>' +
+          '<td class="r">' + fmtM(st.deduct) + '</td>' +
+          '<td class="r">' + g.items.length + '</td>' +
+          '<td class="r">' + st.cases + '건</td>';
+        ref.appendChild(tr);
+      });
+    }
+    $('#sumFinal').innerHTML = res.qsc == null
+      ? 'QSC — <span style="font-size:12px;color:var(--sub)">(미확인 ' + res.blank + '건 — 전 문항 확인 후 산출)</span>'
+      : 'QSC <b>' + res.qsc.toFixed(1) + '점</b> · <b>' + (res.grade || '') + '</b>' +
+        (res.criticalDeduct ? ' <span style="font-size:12px;color:var(--sub)">최종점수에서 중대 ' + res.criticalDeduct + '점 추가 차감</span>' : '');
 
     const list = $('#offList');
     list.innerHTML = '';
     const off = allItems.filter(function (it) {
-      const v = state.values[it.no] == null ? null : state.values[it.no];
-      const r = Scoring.itemRating(v, it.critical);
-      return r === '△' || r === 'X';
+      const v = state.values[it.no];
+      return typeof v === 'number' && v > 0;
     });
     if (!off.length) {
-      list.innerHTML = '<div class="offRow none">적발 없음</div>';
+      list.innerHTML = '<div class="offRow none">개선 필요 없음</div>';
     } else {
       off.forEach(function (it) {
         const v = state.values[it.no];
-        const r = Scoring.itemRating(v, it.critical);
-        const s = Scoring.itemScore(v, it.critical);
+        const d = Scoring.itemDeduct(v, it.severity);
         const ph = (state.photos[it.no] || []).length;
         const row = document.createElement('div');
-        row.className = 'offRow' + (it.critical ? ' crit' : '');
-        row.innerHTML = '<span class="no">' + it.no + '</span><span class="t"></span><span class="v">' +
-          r + (typeof v === 'number' ? ' ' + v + '건' : '') + ' · ' +
-          (s >= 0 ? s : '−' + Math.abs(s)) + '점' + (ph ? ' · 사진 ' + ph : '') + '</span>';
-        $('.t', row).textContent = (it.critical ? '[중대] ' : '') + it.text;
+        row.className = 'offRow' + (it.severity ? ' crit' : '');
+        row.innerHTML = '<span class="no">' + (it.code || it.no) + '</span><span class="t"></span><span class="v">' +
+          v + '건 · −' + d + '점' + (ph ? ' · 사진 ' + ph : '') + '</span>';
+        $('.t', row).textContent = (it.severity ? '[' + sevLabel(it.severity) + '] ' : '') + it.text;
         row.onclick = function () {
           if (cardEls[it.no]) cardEls[it.no].scrollIntoView({ behavior: 'smooth', block: 'center' });
         };
@@ -307,7 +344,7 @@
     if (na.length) {
       const naRow = document.createElement('div');
       naRow.className = 'offRow na';
-      naRow.textContent = 'NA 제외 문항: ' + na.map(function (it) { return it.no; }).join(', ');
+      naRow.textContent = 'NA 제외 문항: ' + na.map(function (it) { return it.code || it.no; }).join(', ');
       list.appendChild(naRow);
     }
   }
@@ -315,22 +352,36 @@
   // ---------- 제출 ----------
   $('#submitBtn').onclick = async function () {
     if (!$('#store').value.trim()) { alert('매장을 선택해 주세요.'); $('#store').focus(); return; }
-    const res = evalNow();
-    const off = offenseIn(allItems);
-    const naN = allItems.filter(function (it) { return state.values[it.no] === 'NA'; }).length;
-    const blank = allItems.filter(function (it) { return state.values[it.no] == null; }).length;
-    let msg = '적발 ' + off + '건 · NA ' + naN + '개' + (blank ? ' · 미확인 ' + blank + '개(채점 제외)' : '');
-    if (res.final != null) msg += '\n최종 ' + res.final.toFixed(1) + '점 · ' + res.grade;
+    if (!$('#inspector').value.trim()) { alert('점검자를 입력해 주세요.'); $('#inspector').focus(); return; }
+    // 완료 게이트: 미확인 문항이 있으면 제출 불가 — 전 문항 확인 또는 NA 처리 필수
+    const res0 = evalNow();
+    if (res0.blank > 0) {
+      alert('미확인 문항이 ' + res0.blank + '개 있습니다.\n모든 문항을 확인해 주세요. (해당 없는 문항은 NA)');
+      return;
+    }
+    const res = res0;
+    let msg = '개선 필요 ' + (res.genCases + res.s1.cases + res.s2.cases) + '건 · NA ' + res.na + '개' +
+      '\nQSC ' + res.qsc.toFixed(1) + '점 · ' + res.grade;
+    if (res.criticalDeduct) msg += '\n중대 차감 ' + res.criticalDeduct + '점 (최종점수에서 차감)';
     if (!confirm(msg + '\n제출할까요?')) return;
     const payload = {
       store: $('#store').value.trim(), date: $('#date').value, inspector: $('#inspector').value.trim(),
       submittedAt: new Date().toISOString(),
-      result: { final: res.final, grade: res.grade, groups: res.groups },
+      result: {
+        final: res.qsc, qsc: res.qsc, grade: res.grade,
+        criticalDeduct: res.criticalDeduct, genDeduct: res.genDeduct,
+        s1: { items: res.s1.items, cases: res.s1.cases, deduct: res.s1.capped },
+        s2: { items: res.s2.items, cases: res.s2.cases, deduct: res.s2.capped },
+      },
       items: allItems.map(function (it) {
         const v = state.values[it.no] == null ? null : state.values[it.no];
+        const d = Scoring.itemDeduct(v, it.severity);
         return {
-          no: it.no, row: it.row, text: it.text, critical: it.critical, group: it.group,
-          value: v, rating: Scoring.itemRating(v, it.critical), score: Scoring.itemScore(v, it.critical),
+          no: it.no, code: it.code || '', row: it.row, text: it.text,
+          severity: it.severity || '', critical: !!it.severity, group: it.group,
+          value: v, deduct: typeof d === 'number' ? d : null,
+          rating: v === 'NA' ? 'NA' : (typeof v === 'number' ? (v === 0 ? '이상 없음' : v + '건') : ''),
+          score: typeof d === 'number' ? -d : null,
           memo: state.memos[it.no] || '', photos: state.photos[it.no] || [],
         };
       }),
@@ -347,7 +398,8 @@
           .map(function (it) { return it.no; });
         localStorage.setItem(NA_KEY, JSON.stringify(presets));
         alert('저장 완료' + (r.mock ? ' (모의 저장 — 구글 연동 전)' : '') +
-          (res.final != null ? '\n최종 ' + res.final.toFixed(1) + '점 · ' + res.grade : ''));
+          '\nQSC ' + res.qsc.toFixed(1) + '점 · ' + res.grade +
+          (res.criticalDeduct ? ' · 중대 차감 ' + res.criticalDeduct + '점' : ''));
         if (confirm('입력을 초기화할까요? (새 점검 시작)')) {
           localStorage.removeItem(DRAFT_KEY);
           location.reload();
