@@ -74,22 +74,22 @@ function doPost(e) {
 function saveQsc(ss, p) {
   const photoMap = savePhotos(p); // {문항no: [{url, id}]}
   // v3.7 절대 감점제 스키마: 대분류 점수 대신 감점 3층 + 중대 차감 기록
-  const sum = sheet(ss, 'QSC_회차', ['제출시각', '점검일자', '매장명', '점검자', 'QSC점수', '등급',
+  const sum = sheet(ss, 'QSC_회차', ['제출시각', '점검일자', '방문시간', '매장명', '점검자', 'QSC점수', '등급',
     '일반감점', '★차감', '★★차감', '중대차감합계', '응답수', '사진수']);
   const r = p.result || {};
   let photoN = 0;
   p.items.forEach(function (it) { photoN += (photoMap[it.no] || []).length; });
-  sum.appendRow([p.submittedAt, p.date, p.store, p.inspector,
+  sum.appendRow([p.submittedAt, p.date, p.time || '', p.store, p.inspector,
     r.qsc == null ? '' : round1(r.qsc), r.grade || '',
     r.genDeduct || 0, (r.s2 && r.s2.deduct) || 0, (r.s1 && r.s1.deduct) || 0, r.criticalDeduct || 0,
     p.items.filter(function (it) { return it.value !== null; }).length, photoN]);
 
-  const det = sheet(ss, 'QSC_상세', ['점검일자', '매장명', '코드', '문항번호', '구분', '문항', '등급구분', '개선필요건수', '상태', '감점', '비고', '사진']);
+  const det = sheet(ss, 'QSC_상세', ['점검일자', '방문시간', '매장명', '코드', '문항번호', '구분', '문항', '등급구분', '개선필요건수', '상태', '감점', '비고', '사진']);
   const rows = p.items
     .filter(function (it) { return it.value !== null; })
     .map(function (it) {
       const sev = it.severity === 'S1' ? '★★' : it.severity === 'S2' ? '★' : '';
-      return [p.date, p.store, it.code || '', it.no, it.group || '', it.text, sev,
+      return [p.date, p.time || '', p.store, it.code || '', it.no, it.group || '', it.text, sev,
         String(it.value), it.rating || '', it.deduct == null ? '' : -it.deduct,
         it.memo || '', (photoMap[it.no] || []).map(function (x) { return x.url; }).join('\n')];
     });
@@ -123,20 +123,21 @@ function saveQsc(ss, p) {
 }
 
 function saveShopper(ss, p) {
-  const sh = sheet(ss, '쇼퍼_응답', ['제출시각', '방문날짜', '매장명', '응대직원설명', '주문내역', '연령대성별', '입력경로', '점수', '응답수']
+  const receipts = saveReceipts(p); // 영수증 사진 → 드라이브, 링크만 시트에
+  const sh = sheet(ss, '쇼퍼_응답', ['제출시각', '방문날짜', '방문시간', '매장명', '응대직원설명', '주문내역', '작성자연령대성별', '입력경로', '점수', '응답수', '영수증']
     .concat(p.answers.map(function (a) { return 'Q' + a.no; })));
-  sh.appendRow([p.submittedAt, p.date, p.store, p.staff, p.order, p.demographic,
+  sh.appendRow([p.submittedAt, p.date, p.time || '', p.store, p.staff, p.order, p.demographic,
     p.source === 'customer' ? '고객 직접' : '관리자 입력',
-    p.result.score == null ? '' : round1(p.result.score), p.result.answered]
+    p.result.score == null ? '' : round1(p.result.score), p.result.answered, receipts.join('\n')]
     .concat(p.answers.map(function (a) { return a.answer || ''; })));
 
   // 문항별 이유·비고 — 작성된 것만 1행씩 (추적용, 특히 '아니오'의 근거)
   const memoRows = p.answers.filter(function (a) { return a.memo; }).map(function (a) {
-    return [p.submittedAt, p.date, p.store, p.source === 'customer' ? '고객 직접' : '관리자 입력',
+    return [p.submittedAt, p.date, p.time || '', p.store, p.source === 'customer' ? '고객 직접' : '관리자 입력',
       a.no, a.text, a.answer || '', a.memo];
   });
   if (memoRows.length) {
-    const ms = sheet(ss, '쇼퍼_비고', ['제출시각', '방문날짜', '매장명', '입력경로', '문항번호', '문항', '응답', '비고']);
+    const ms = sheet(ss, '쇼퍼_비고', ['제출시각', '방문날짜', '방문시간', '매장명', '입력경로', '문항번호', '문항', '응답', '비고']);
     ms.getRange(ms.getLastRow() + 1, 1, memoRows.length, memoRows[0].length).setValues(memoRows);
   }
 
@@ -161,8 +162,9 @@ function shopperMonthAvg(sh, store, dateStr) {
     const dYm = (d instanceof Date)
       ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
       : String(d).slice(0, 7);
-    if (String(vals[i][2]).trim() === store.trim() && dYm === ym && typeof vals[i][7] === 'number') {
-      scores.push(vals[i][7]); // 7 = 점수 열 (입력경로 열 추가로 한 칸 밀림)
+    // 열 순서: 0 제출시각 · 1 방문날짜 · 2 방문시간 · 3 매장명 … 8 점수
+    if (String(vals[i][3]).trim() === store.trim() && dYm === ym && typeof vals[i][8] === 'number') {
+      scores.push(vals[i][8]);
     }
   }
   if (!scores.length) return 0;
@@ -225,6 +227,7 @@ function writeStoreQsc(p, photoMap) {
   if (!sh) return { ok: false, error: '월 탭 없음: ' + tab };
 
   setByLabel(sh, '방문일', p.date);
+  if (p.time) setByLabel(sh, '방문시간', p.time); // 월 탭에 라벨이 없으면 조용히 건너뜀
   if (p.result.final != null) setByLabel(sh, '위생점수', p.result.final / 100);
 
   // 개선요청 표: B열에서 'NO.' 헤더 행을 찾고, J열 첫 빈 행부터 개선 필요 문항(1건 이상)을 추가
@@ -290,6 +293,22 @@ function savePhotos(p) {
     });
   });
   return out;
+}
+
+// 쇼퍼 영수증 사진 — '미스터리쇼퍼/매장/날짜' 폴더에 저장하고 링크 배열 반환
+function saveReceipts(p) {
+  if (!PHOTO_FOLDER_ID || !p.receipts || !p.receipts.length) return [];
+  try {
+    const root = subFolder(DriveApp.getFolderById(PHOTO_FOLDER_ID), '미스터리쇼퍼');
+    const dir = subFolder(subFolder(root, p.store), p.date);
+    return p.receipts.map(function (dataUrl, i) {
+      const blob = Utilities.newBlob(Utilities.base64Decode(dataUrl.split(',')[1]), 'image/jpeg',
+        p.date + '_' + p.store + '_영수증_' + (i + 1) + '.jpg');
+      return dir.createFile(blob).getUrl();
+    });
+  } catch (err) {
+    return ['사진 저장 실패: ' + String(err)]; // 응답 자체는 저장되어야 한다
+  }
 }
 
 function subFolder(parent, name) {

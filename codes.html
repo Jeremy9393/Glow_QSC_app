@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>제출 코드 관리 — GLOW SEOUL</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="icons/icon-192-v2.png">
+<link rel="apple-touch-icon" href="icons/icon-192-v2.png">
+<link rel="stylesheet" href="css/app.css?v=29">
+</head>
+<body>
+<header class="topbar">
+  <a class="back" href="shopper.html">←</a>
+  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">제출 코드 관리 <span class="sub">관리자</span></span></div>
+  <span class="sub" id="cycleInfo"></span>
+</header>
+<div class="wrap">
+  <p class="note mockNote" id="mockNote">미리보기 — 구글 연동 전이라 발급 내용이 <b>이 기기에만</b> 저장됩니다. 연동 후에는 구글시트가 원장이 됩니다.</p>
+
+  <section class="card">
+    <h2>코드 발급</h2>
+    <div class="meta-grid">
+      <div class="full"><label class="f">매장</label><select id="store"><option value="">매장 선택</option></select></div>
+      <div class="full"><label class="f">유효시간</label>
+        <div class="seg3" id="ttl">
+          <button data-v="3h">3시간</button><button data-v="today">당일</button><button data-v="15d">15일</button>
+        </div>
+      </div>
+    </div>
+    <button class="issueBtn" id="issueBtn">발급</button>
+    <div id="issued"></div>
+  </section>
+
+  <section class="card">
+    <h2>이번 회차 현황</h2>
+    <div class="codeSum" id="sum"></div>
+    <div class="codeList" id="list"></div>
+  </section>
+</div>
+
+<!-- 스캔용 전체화면 — 다크 테마와 달리 흰 바탕이어야 카메라가 잘 읽는다 -->
+<div class="qrFull" id="qrFull" style="display:none">
+  <div class="qfStore" id="qfStore"></div>
+  <img class="qfImg" id="qfImg" alt="설문 QR">
+  <div class="qfCode" id="qfCode"></div>
+  <div class="qfHint">카메라로 QR을 찍어 설문에 들어간 뒤,<br>제출할 때 위 코드를 입력하세요</div>
+  <button class="qfClose" id="qfClose">닫기</button>
+</div>
+
+<script src="js/api.js?v=29"></script>
+<script src="js/codes-app.js?v=29"></script>
+<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
+</body>
+</html>

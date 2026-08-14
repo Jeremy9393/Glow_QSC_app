@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=23">
+<link rel="stylesheet" href="css/app.css?v=29">
 </head>
 <body>
 <header class="topbar">
@@ -22,7 +22,8 @@
     <div class="meta-grid">
       <div class="full"><label class="f">매장명 *</label><select id="store"><option value="">매장 선택</option></select></div>
       <div><label class="f">점검일자</label><input type="date" id="date"></div>
-      <div><label class="f">점검자</label><input type="text" id="inspector" placeholder="이름"></div>
+      <div><label class="f">방문 시간</label><div id="timeBox"></div></div>
+      <div class="full"><label class="f">점검자</label><input type="text" id="inspector" placeholder="이름"></div>
     </div>
   </section>
   <nav class="gnav" id="gnav"></nav>
@@ -53,9 +54,11 @@
   <button class="submit" id="submitBtn">제출</button>
 </div></footer>
 <input type="file" id="photoInput" accept="image/*" multiple hidden>
-<script src="js/scoring.js?v=23"></script>
-<script src="js/api.js?v=23"></script>
-<script src="js/qsc-app.js?v=23"></script>
+<script src="js/scoring.js?v=29"></script>
+<script src="js/api.js?v=29"></script>
+<script src="js/ui-time.js?v=29"></script>
+<script src="js/ui-photo.js?v=29"></script>
+<script src="js/qsc-app.js?v=29"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

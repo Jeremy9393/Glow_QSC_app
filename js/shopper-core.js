@@ -15,14 +15,18 @@ async function initShopperForm(opts) {
     { html: '본 평가는 <b>철저하게 익명이 보장</b>됩니다. 냉정하고 정확한 평가 부탁드립니다.' },
     { html: '1~10번 카테고리는 <b>예 / 아니오</b> 중 하나를, 11~13번 카테고리(맛·양·만족도)는 <b>1~5점</b> 중 하나를 선택해 주세요.' },
     { html: '답변에 대한 특이사항은 <b>비고</b>에 자유롭게 적어주세요.' },
-    { html: '기억이 안 나거나 판단이 어려운 문항은, <b>비고에 상황만 적어주셔도</b> 괜찮습니다.' },
+    { html: '기억이 안 나거나 판단이 어려운 문항은, <b>비고에 상황이나 이유를 꼭 적어주시길</b> 부탁드립니다.' },
+    { html: '<b>연령대·성별</b>은 직원이 아니라 <b>설문을 작성하시는 본인</b> 기준으로 적어주세요.' },
+    { tip: '영수증 필수', html: '방문을 확인할 수 있도록 <b>영수증 사진을 반드시 첨부</b>해 주세요. 미리 찍어두신 사진을 골라도 됩니다.' },
   ];
   const META_FIELDS = [
     { id: 'store', label: '매장명 *', full: true, control: '<select id="store"><option value="">방문한 매장 선택</option></select>' },
     { id: 'date', label: '방문날짜 *', control: '<input type="date" id="date">' },
+    { id: 'time', label: '방문 시간 *', control: TimePick.html('time') },
     { id: 'staff', label: '응대직원 설명 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 카운터 결제 응대 · 검은 뿔테 안경 직원">' },
     { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
-    { id: 'demo', label: '연령대·성별 *', full: true, control: '<input type="text" id="demo" placeholder="예: 30대 여성">' },
+    { id: 'demo', label: '연령대·성별 (작성자 본인) *', full: true, control: '<input type="text" id="demo" placeholder="직원이 아닌 본인 기준 — 예: 30대 여성">' },
+    { id: 'receipt', label: '영수증 사진 *', full: true, control: '<div id="receiptBox"></div>' },
   ];
   if ($('#guideBox')) {
     $('#guideBox').innerHTML = '<h2>평가 전 안내</h2><ul class="guideList">' +
@@ -36,6 +40,11 @@ async function initShopperForm(opts) {
         return '<div' + (f.full ? ' class="full"' : '') + '><label class="f">' + f.label + '</label>' + f.control + '</div>';
       }).join('') + '</div>';
   }
+  // 영수증 사진 — 방문 사실을 확인하는 증빙. 사진은 용량이 커서 임시저장에 넣지 않는다(새로고침 시 재첨부)
+  const receipt = PhotoPick.mount($('#receiptBox'), {
+    id: 'receipt', max: 3, label: '영수증 사진',
+    hint: '카메라로 찍거나 앨범에서 고를 수 있습니다 · 사진은 임시저장되지 않습니다',
+  });
   const DRAFT_KEY = ADMIN ? 'shopper-admin-v4' : 'shopper-guest-v4';
   const state = { answers: {}, memos: {} };
   const allQs = [];
@@ -52,7 +61,7 @@ async function initShopperForm(opts) {
     5: ['설명이 어려워서 다시 물어봤어요', '설명이 쉽고 명확했어요'],
     6: ['얼음 빼달라고 했는데 그대로 나왔어요', '요청한 대로 정확히 나왔어요'],
     7: ['메뉴 설명 없이 주문만 받았어요', '맛과 특징을 자세히 설명해 주셨어요'],
-    8: ['추천 메뉴 제안이 없었어요', '인기 메뉴를 먼저 추천해 주셨어요'],
+    8: ['추천이나 추가 제안이 없었어요', '어울리는 메뉴를 함께 추천해 주셨어요'],
     9: ['먹는 방법 안내가 없었어요', '보관 방법까지 챙겨서 알려주셨어요'],
     10: ['표정이 굳어 있어 불편했어요', '미소로 응대해 주셨어요'],
     11: ['반말이 섞여 있었어요', '끝까지 공손하게 말해 주셨어요'],
@@ -67,13 +76,13 @@ async function initShopperForm(opts) {
     20: ['영수증 안내가 없었어요', '이벤트까지 챙겨 알려주셨어요'],
     21: ['주문 안 한 메뉴가 결제됐어요', '내역이 정확히 일치했어요'],
     22: ['사진보다 많이 부실했어요', '사진 그대로 나왔어요'],
-    23: ['컵 겉에 소스가 묻어 있었어요', '그릇과 포장이 깨끗했어요'],
+    23: ['컵 겉에 소스가 묻어 있었어요', '그릇·식기와 포장이 깨끗했어요'],
     24: ['진열대 제품이 흐트러져 있었어요', '진열이 보기 좋게 정돈돼 있었어요'],
     25: ['시큼한 냄새가 났어요', '냄새가 신선했어요'],
     26: ['채소 끝이 갈변해 있었어요', '재료가 신선해 보였어요'],
     27: ['먹고 나서 씁쓸한 뒷맛이 남았어요', '끝맛까지 깔끔했어요'],
     28: ['뜨거워야 할 메뉴가 미지근했어요', '온도가 딱 맞게 나왔어요'],
-    29: ['가운데가 덜 익어 있었어요', '고르게 잘 익어 있었어요'],
+    29: ['가운데가 덜 익어 있었어요', '알맞게 잘 익어 있었어요'],
     30: ['빵이 눅눅했어요', '식감이 좋았어요'],
     31: ['국물이 너무 짰어요', '간이 딱 맞았어요'],
     32: ['소스 맛이 너무 강했어요', '재료 맛이 잘 어우러졌어요'],
@@ -105,12 +114,17 @@ async function initShopperForm(opts) {
   }
 
   // 방문 정보 필수 입력 항목 — 응대직원은 시간대·상황 설명까지 필수
+  // pick: 드롭다운(고르는 칸) — 안내 문구를 '선택해 주세요'로 바꾼다
   const REQUIRED_META = [
     { id: 'store', label: '매장명' },
     { id: 'date', label: '방문날짜' },
+    { id: 'time', label: '방문 시간', pick: true, focus: 'timeH', get: function () { return TimePick.get('time'); } },
     { id: 'staff', label: '응대직원 설명' },
     { id: 'order', label: '주문내역' },
     { id: 'demo', label: '연령대·성별' },
+    // 영수증은 방문 증빙이라 고객 화면에서는 필수. 종이 응답을 옮겨 적는 관리자만 확인 후 건너뛸 수 있다
+    { id: 'receipt', label: '영수증 사진', verb: '첨부해', focus: 'receiptBtn', adminSkip: true,
+      get: function () { return receipt.count() ? 'ok' : ''; } },
   ];
   function withEulReul(word) {
     const ch = word.charCodeAt(word.length - 1);
@@ -155,8 +169,8 @@ async function initShopperForm(opts) {
 
   function saveDraft() {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
-      store: $('#store').value, date: $('#date').value, staff: $('#staff').value,
-      order: $('#order').value, demo: $('#demo').value,
+      store: $('#store').value, date: $('#date').value, time: TimePick.get('time'),
+      staff: $('#staff').value, order: $('#order').value, demo: $('#demo').value,
       answers: state.answers, memos: state.memos, t: Date.now(),
     }));
     if (ADMIN && $('#saveNote')) $('#saveNote').textContent = '이 기기에 자동 임시저장됨 · ' + new Date().toLocaleTimeString('ko-KR');
@@ -277,11 +291,17 @@ async function initShopperForm(opts) {
   // ---------- 제출 ----------
   $('#submitBtn').onclick = async function () {
     for (const f of REQUIRED_META) {
-      const el = $('#' + f.id);
-      if (!el.value.trim()) {
-        alert(withEulReul(f.label) + ' 입력해 주세요.' +
-          (f.id === 'staff' ? '\n이름 또는 특징과 함께 응대 시간대·응대 상황을 적어 주세요.\n예) 14시경 카운터 결제 응대 · 검은 뿔테 안경 직원' : ''));
-        el.focus();
+      const val = f.get ? f.get() : $('#' + f.id).value.trim();
+      if (!val) {
+        if (f.adminSkip && ADMIN) {
+          if (confirm('영수증 사진이 없습니다.\n종이 응답이라 영수증을 받지 못한 경우에만 그대로 저장하세요.\n계속할까요?')) continue;
+          $('#' + (f.focus || f.id)).focus();
+          return;
+        }
+        alert(withEulReul(f.label) + ' ' + (f.verb || (f.pick ? '선택해' : '입력해')) + ' 주세요.' +
+          (f.id === 'staff' ? '\n이름 또는 특징과 함께 응대 시간대·응대 상황을 적어 주세요.\n예) 14시경 카운터 결제 응대 · 검은 뿔테 안경 직원' : '') +
+          (f.id === 'demo' ? '\n응대 직원이 아니라, 설문을 작성하시는 본인 기준으로 적어 주세요.' : ''));
+        $('#' + (f.focus || f.id)).focus();
         return;
       }
     }
@@ -307,8 +327,9 @@ async function initShopperForm(opts) {
         !confirm('응답 ' + answered + '/' + allQs.length + '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade + '\n제출할까요?')) return;
 
     const payload = {
-      store: $('#store').value.trim(), date: $('#date').value,
+      store: $('#store').value.trim(), date: $('#date').value, time: TimePick.get('time'),
       staff: $('#staff').value.trim(), order: $('#order').value.trim(), demographic: $('#demo').value.trim(),
+      receipts: receipt.get(),
       submittedAt: new Date().toISOString(),
       source: ADMIN ? 'admin' : 'customer',
       result: res,
@@ -348,12 +369,15 @@ async function initShopperForm(opts) {
   ['store', 'date', 'staff', 'order', 'demo'].forEach(function (id) {
     $('#' + id).addEventListener('input', saveDraft);
   });
+  TimePick.onChange('time', saveDraft);
 
   // ---------- 초기화 ----------
   const draft = loadDraft();
   if (draft) {
     if (!$('#store').disabled) $('#store').value = draft.store || '';
     $('#date').value = draft.date || todayStr();
+    // 방문 시간은 기본값을 두지 않는다 — 방문 시각과 작성 시각이 다를 수 있으므로 직접 고르게 함
+    TimePick.set('time', draft.time || '');
     $('#staff').value = draft.staff || '';
     $('#order').value = draft.order || '';
     $('#demo').value = draft.demo || '';

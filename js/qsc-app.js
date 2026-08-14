@@ -34,6 +34,9 @@
       ' · ★ 문항당 −' + R.S2.first + '(추가 −' + R.S2.more + ', 상한 ' + R.S2.cap + ')' +
       ' · ★★ 문항당 −' + R.S1.first + '(추가 −' + R.S1.more + ', 상한 ' + R.S1.cap + ') / ';
   }
+  // 방문 시간(시·분) 드롭다운 — 쇼퍼 화면과 같은 부품(js/ui-time.js)
+  $('#timeBox').innerHTML = TimePick.html('time');
+
   // 매장 목록: 연동 후엔 통합시트 실시간(숨김 제외) > 오프라인 캐시 > master.json 저장본 순
   const live = await Api.getConfig();
   const stores = (live && live.stores && live.stores.length) ? live.stores : (master.stores || []);
@@ -79,7 +82,8 @@
   // ---------- 임시저장 ----------
   function saveDraft() {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
-      store: $('#store').value, date: $('#date').value, inspector: $('#inspector').value,
+      store: $('#store').value, date: $('#date').value, time: TimePick.get('time'),
+      inspector: $('#inspector').value,
       values: state.values, memos: state.memos, t: Date.now(),
     }));
     $('#saveNote').textContent = '이 기기에 자동 임시저장됨 (사진 제외) · ' + new Date().toLocaleTimeString('ko-KR');
@@ -88,29 +92,13 @@
     try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { return null; }
   }
 
-  // ---------- 사진 ----------
-  async function shrink(file) {
-    const img = await new Promise(function (ok, err) {
-      const i = new Image();
-      i.onload = function () { ok(i); };
-      i.onerror = err;
-      i.src = URL.createObjectURL(file);
-    });
-    const M = 1280;
-    let w = img.width, h = img.height;
-    if (Math.max(w, h) > M) { const k = M / Math.max(w, h); w = Math.round(w * k); h = Math.round(h * k); }
-    const c = document.createElement('canvas');
-    c.width = w; c.height = h;
-    c.getContext('2d').drawImage(img, 0, 0, w, h);
-    URL.revokeObjectURL(img.src);
-    return c.toDataURL('image/jpeg', 0.8);
-  }
+  // ---------- 사진 ---------- (줄이기는 js/ui-photo.js의 공통 부품 — 쇼퍼 영수증과 같은 규격)
   $('#photoInput').addEventListener('change', async function (e) {
     const files = Array.from(e.target.files);
     e.target.value = '';
     if (photoTarget == null || !files.length) return;
     for (const f of files) {
-      const url = await shrink(f);
+      const url = await PhotoPick.shrink(f);
       (state.photos[photoTarget] = state.photos[photoTarget] || []).push(url);
     }
     updaters[photoTarget]();
@@ -365,7 +353,8 @@
     if (res.criticalDeduct) msg += '\n중대 차감 ' + res.criticalDeduct + '점 (최종점수에서 차감)';
     if (!confirm(msg + '\n제출할까요?')) return;
     const payload = {
-      store: $('#store').value.trim(), date: $('#date').value, inspector: $('#inspector').value.trim(),
+      store: $('#store').value.trim(), date: $('#date').value, time: TimePick.get('time'),
+      inspector: $('#inspector').value.trim(),
       submittedAt: new Date().toISOString(),
       result: {
         final: res.qsc, qsc: res.qsc, grade: res.grade,
@@ -412,12 +401,15 @@
   ['store', 'date', 'inspector'].forEach(function (id) {
     $('#' + id).addEventListener('input', saveDraft);
   });
+  TimePick.onChange('time', saveDraft);
 
   // ---------- 초기화 ----------
   const draft = loadDraft();
   if (draft) {
     $('#store').value = draft.store || '';
     $('#date').value = draft.date || todayStr();
+    // 점검은 현장에서 바로 쓰므로 시간은 '지금'을 기본값으로 (임시저장이 있으면 그 값 유지)
+    TimePick.set('time', draft.time || TimePick.now());
     $('#inspector').value = draft.inspector || '';
     Object.assign(state.values, draft.values || {});
     Object.assign(state.memos, draft.memos || {});
@@ -425,6 +417,7 @@
     $('#saveNote').textContent = '임시저장 불러옴 (' + new Date(draft.t).toLocaleString('ko-KR') + ')';
   } else {
     $('#date').value = todayStr();
+    TimePick.set('time', TimePick.now());
   }
   recompute();
 })();
