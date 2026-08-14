@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=23">
+<link rel="stylesheet" href="css/app.css?v=29">
 </head>
 <body>
 <header class="topbar">
@@ -18,6 +18,7 @@
   <button id="resetBtn" class="resetBtn">초기화</button>
 </header>
 <div class="wrap" id="formWrap">
+  <a class="codesLink" href="codes.html">제출 코드 관리 <span class="arrow">›</span></a>
   <a class="surveyLink" href="survey.html">고객용 미스터리쇼퍼 설문지 열기 <span class="arrow">›</span></a>
   <section class="card guide" id="guideBox"></section>
   <section class="card" id="metaBox"></section>
@@ -42,9 +43,11 @@
   </div>
   <button class="submit" id="submitBtn">제출</button>
 </div></footer>
-<script src="js/scoring.js?v=23"></script>
-<script src="js/api.js?v=23"></script>
-<script src="js/shopper-core.js?v=23"></script>
+<script src="js/scoring.js?v=29"></script>
+<script src="js/api.js?v=29"></script>
+<script src="js/ui-time.js?v=29"></script>
+<script src="js/ui-photo.js?v=29"></script>
+<script src="js/shopper-core.js?v=29"></script>
 <script>
 initShopperForm({ admin: true });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
