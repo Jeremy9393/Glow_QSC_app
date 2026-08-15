@@ -86,6 +86,9 @@
   const signedIn = await Auth.ensure();
   if (signedIn && !wantChg) { go(); return; }
 
+  // 세 칸(로그인·설정·변경)이 모두 마크업에 있으므로 한 번만 걸어 두면 된다
+  bindMask();
+
   if (signedIn) toChangePw();
   else initLogin();
 
@@ -105,6 +108,28 @@
       if (chk && chk.checked) localStorage.setItem(IDKEY, id);
       else localStorage.removeItem(IDKEY);
     } catch (e) { /* 사생활 모드 등 — 기억하지 못할 뿐 로그인은 끝났다 */ }
+  }
+
+  /* 비밀번호 가리기 토글.
+     체크(기본) = type을 password로 두어 ●●●로 가리고, 체크를 풀면 text로 바꿔 글자를 그대로 보인다.
+     ★기본을 '가림'으로 둔다★ — 매장은 홀에서 폰을 열고, 어깨너머로 보이는 것이 기본값이면 안 된다.
+     ★그래도 푸는 길을 남기는 이유★ — 받아 적은 비밀번호를 처음 칠 때 오타를 눈으로 확인할 수
+       없으면 "받은 비밀번호로 안 들어가진다"는 문의가 그대로 관리자에게 간다.
+     ★상태를 기억하지 않는다★ — 다음에 열 때는 항상 가려진 상태로 시작한다. */
+  function bindMask() {
+    const boxes = document.querySelectorAll('input[data-mask]');
+    for (let i = 0; i < boxes.length; i++) {
+      const box = boxes[i];
+      const ids = box.getAttribute('data-mask').split(' ');
+      const apply = function () {
+        for (let k = 0; k < ids.length; k++) {
+          const el = document.getElementById(ids[k]);
+          if (el) el.type = box.checked ? 'password' : 'text';
+        }
+      };
+      box.onchange = apply;
+      apply();
+    }
   }
 
   function toSetPw(id, code) {
