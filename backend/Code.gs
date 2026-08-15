@@ -14,7 +14,7 @@
    본사 계정 드라이브 구조 (연동 전에 이 모양으로 정리):
      📁 QSC
         📊 QSC 통합시트          … DASHBOARD_ID
-        📁 매장현황              … 매장별 QSC현황 시트 26개 (ID 불필요 — 통합시트 E열 링크에서 자동 추출)
+        📁 매장현황              … 매장별 QSC현황 시트 33개 (ID 불필요 — 통합시트 D열 링크에서 자동 추출)
         📁 사진                  … PHOTO_FOLDER_ID
              2026 / QSC점검      / 매장 / 날짜   ← 관리자 점검 사진
              2026 / 미스터리쇼퍼 / 매장 / 날짜   ← 영수증
@@ -24,7 +24,7 @@
    사진 보관 정책: 드라이브에는 올해치만. 새해에 지난해 폴더를 통째로 내려받아 로컬 보관 후 삭제.
                  사용량은 photoUsage()로 확인. 폴더 최상위를 '연도'로 둔 이유가 이 정리 때문이다.
 
-   준비물: 위 폴더 3개 + 시트 1개. 매장별 파일 주소는 통합시트 E열 하이퍼링크에서 자동으로 읽는다
+   준비물: 위 폴더 3개 + 시트 1개. 매장별 파일 주소는 통합시트 D열 하이퍼링크에서 자동으로 읽는다
           (링크가 없는 매장만 '매장파일맵' 탭으로 보완 — 선택). */
 
 /* 파일 ID는 코드에 적지 않는다 — 이 파일은 공개 GitHub 저장소에 올라간다.
@@ -53,7 +53,15 @@ const DASHBOARD_WRITE = false;
 const STORE_MAP_SHEET = '매장파일맵'; // 통합시트 안에 만들 탭: A=매장명, B=매장 파일 ID
 const PHOTO_EMBED = true;    // true면 개선요청 표에 사진을 =IMAGE()로 삽입 (사진 파일이 '링크 있는 사용자 보기'로 공유됨) / false면 링크만
 
-// 통합시트 월 블록의 위생(QSC) 점수 열 번호. CS(쇼퍼)는 +2. 분기 열이 끼어 있어 간격이 불규칙.
+/* 통합시트 [데이터] 탭 실물 구조 (2026-08-15 확인)
+     A 지역 · C 분류 · D 매장명(하이퍼링크로 매장 파일 연결) · 6행부터 매장, 숨김 행 = 관리 제외
+   ⚠로컬 엑셀 사본과 한 칸 어긋나 있었다(사본은 E열). 실제 시트 기준은 D열. */
+const STORE_NAME_COL = 4; // D열
+
+/* 월 블록의 위생(QSC) 점수 열 번호. CS(쇼퍼)는 +2.
+   ⚠아래 값은 로컬 엑셀 사본 기준이라 실제 시트와 다르다 (실물은 7월 위생 = AY열).
+     DASHBOARD_WRITE=false인 동안은 쓰이지 않으므로 그대로 두고,
+     통합시트 자동 기입을 켜기 전에 반드시 실물 열로 다시 매핑할 것. */
 const MONTH_COL = { 1: 6, 2: 13, 3: 20, 4: 29, 5: 36, 6: 43, 7: 52, 8: 59, 9: 66, 10: 75, 11: 82, 12: 89 };
 
 function doGet(e) {
@@ -68,7 +76,7 @@ function getConfig() {
   try {
     const sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET);
     const last = sh.getLastRow();
-    const names = sh.getRange(6, 5, last - 5, 1).getValues();
+    const names = sh.getRange(6, STORE_NAME_COL, last - 5, 1).getValues();
     const stores = [];
     for (let i = 0; i < names.length; i++) {
       const name = String(names[i][0]).trim();
@@ -229,7 +237,7 @@ function writeDashboard(store, dateStr, frac, offset) {
   const month = parseInt(dateStr.slice(5, 7), 10);
   const col = MONTH_COL[month] + offset;
   const last = sh.getLastRow();
-  const names = sh.getRange(6, 5, last - 5, 1).getValues(); // E6부터 매장명
+  const names = sh.getRange(6, STORE_NAME_COL, last - 5, 1).getValues(); // D6부터 매장명
   for (let i = 0; i < names.length; i++) {
     if (String(names[i][0]).trim() === store.trim()) {
       const row = 6 + i;
@@ -242,14 +250,14 @@ function writeDashboard(store, dateStr, frac, offset) {
 
 /* ---------- ③ 매장별 QSC현황 파일 ---------- */
 
-// 매장 파일 주소는 통합시트 E열 매장명 셀에 걸린 하이퍼링크에서 그대로 뽑는다.
+// 매장 파일 주소는 통합시트 D열 매장명 셀에 걸린 하이퍼링크에서 그대로 뽑는다.
 // (관리자가 이미 매장별 시트 링크를 걸어두고 쓰던 구조 — 별도 매핑 탭이 필요 없다.
 //  매장이 바뀌어도 링크만 걸면 앱이 자동으로 따라간다.)
 function storeFileId(store) {
   const sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET);
   const last = sh.getLastRow();
   if (last < 6) return storeFileIdFromMap(store);
-  const rng = sh.getRange(6, 5, last - 5, 1); // E6부터 매장명
+  const rng = sh.getRange(6, STORE_NAME_COL, last - 5, 1); // D6부터 매장명
   const names = rng.getValues();
   const rich = rng.getRichTextValues();
   for (let i = 0; i < names.length; i++) {
