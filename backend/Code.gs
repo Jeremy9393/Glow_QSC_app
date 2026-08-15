@@ -405,8 +405,18 @@ function yearFolder(dateStr, kind) {
   return subFolder(subFolder(DriveApp.getFolderById(PHOTO_FOLDER_ID), year), kind);
 }
 
+/* 처음 한 번만 — 사진 폴더를 만들고 그 ID를 실행 로그에 찍는다.
+   드라이브 화면에서 폴더를 만들고 주소를 복사하는 것보다 이쪽이 확실하다.
+   찍힌 값을 [프로젝트 설정] > [스크립트 속성]의 PHOTO_FOLDER_ID에 넣으면 된다. */
+function setupPhotoFolder() {
+  const it = DriveApp.getFoldersByName('QSC 사진');
+  const f = it.hasNext() ? it.next() : DriveApp.createFolder('QSC 사진');
+  Logger.log('PHOTO_FOLDER_ID = ' + f.getId());
+  return f.getId();
+}
+
 /* 지금 사진이 드라이브를 얼마나 쓰고 있는지 연도별로 알려준다 (앱스 스크립트에서 직접 실행).
-   본사 계정을 여럿이 쓰므로, 모르는 채 차오르지 않게 가끔 확인할 것. */
+   무료 15GB 안에서 도니, 모르는 채 차오르지 않게 가끔 확인할 것. */
 function photoUsage() {
   if (!PHOTO_FOLDER_ID) return '사진 폴더 ID가 비어 있음';
   function size(folder) {
