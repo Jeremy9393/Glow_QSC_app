@@ -38,6 +38,12 @@ const SPREADSHEET_ID = PROPS.getProperty('SPREADSHEET_ID') || '';
 const PHOTO_FOLDER_ID = PROPS.getProperty('PHOTO_FOLDER_ID') || '';
 const DASHBOARD_ID = PROPS.getProperty('DASHBOARD_ID') || '';
 const DASHBOARD_SHEET = '데이터';
+/* 실전 기록 스위치 — 매장별 QSC현황 파일에 실제로 쓸지 여부.
+   false = 응답 시트와 사진만 기록하고 매장 파일은 건드리지 않는다 (연동 시험용).
+           2026-09까지는 기존 수기 방식으로 운영하므로 반드시 false로 둘 것.
+   true  = 매장 파일 개선요청 표에 자동 기록 (2026-10-01 전환 시 켠다).
+   ※ 켜고 끄는 것은 스크립트 속성 STORE_FILE_WRITE = 'true' 로도 가능 */
+const STORE_FILE_WRITE = PROPS.getProperty('STORE_FILE_WRITE') === 'true';
 /* 통합시트에 점수를 직접 쓸지 여부.
    false = 매장 목록·매장시트 링크를 '읽기'만 하고, 위생·CS 점수는 관리자가 직접 입력한다.
            통합시트가 공용 계정 전용 편집이라 개인 계정 스크립트로 운영할 때의 기본값.
@@ -152,8 +158,12 @@ function saveQsc(ss, p) {
     } else {
       extra.dashboard = { ok: true, skipped: true, note: '통합시트 점수는 직접 입력' };
     }
-    try { extra.storeFile = writeStoreQsc(p, photoMap); }
-    catch (err) { extra.storeFile = { ok: false, error: String(err) }; }
+    if (STORE_FILE_WRITE) {
+      try { extra.storeFile = writeStoreQsc(p, photoMap); }
+      catch (err) { extra.storeFile = { ok: false, error: String(err) }; }
+    } else {
+      extra.storeFile = { ok: true, skipped: true, note: '매장 파일 기록 꺼짐 (시험 운영)' };
+    }
   }
   return json({ ok: true, saved: rows.length, photos: photoN, dashboard: extra.dashboard, storeFile: extra.storeFile });
 }
@@ -185,7 +195,9 @@ function saveShopper(ss, p) {
       extra.dashboard = DASHBOARD_WRITE
         ? writeDashboard(p.store, p.date, avg / 100, 2)
         : { ok: true, skipped: true, note: '통합시트 CS 점수는 직접 입력', monthAvg: round1(avg) };
-      extra.storeFile = writeStoreShopper(p.store, p.date, avg / 100);
+      extra.storeFile = STORE_FILE_WRITE
+        ? writeStoreShopper(p.store, p.date, avg / 100)
+        : { ok: true, skipped: true, note: '매장 파일 기록 꺼짐 (시험 운영)' };
     } catch (err) { extra.dashboard = { ok: false, error: String(err) }; }
   }
   return json({ ok: true, dashboard: extra.dashboard, storeFile: extra.storeFile });
