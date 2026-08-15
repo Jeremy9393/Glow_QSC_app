@@ -3,9 +3,9 @@
    구글 앱스 스크립트 배포 후 URL을 넣으면 실제 스프레드시트/드라이브에 저장된다. */
 const Api = (function () {
   const CONFIG = {
-    // 본사 계정(glowseoul.pulse) 앱스 스크립트 'QSC 앱 백엔드' 웹앱 · 2026-08-15 배포
+    // 개인 계정(tlsanstn93) 앱스 스크립트 'QSC 앱 백엔드' 웹앱 · 2026-08-15 배포
     // ⚠재배포는 '새 배포'가 아니라 '배포 관리 > 수정'으로 — 새 배포를 누르면 이 주소가 바뀐다
-    APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbw7pU0UWPtFvdHyLicb3PMtqxiyXbJx8Qymw_RSQFKOi4n4DN2VhrofCpg24RIhSS-b/exec',
+    APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyBwNdYNbvgw6R3d6tiqrYTURJnKrI0Jw-MZtZGlfJDegoUUMnzbOzrsbh-AscHT_xBiw/exec',
   };
 
   function photoCount(payload) {
