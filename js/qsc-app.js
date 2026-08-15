@@ -386,9 +386,14 @@
           .filter(function (it) { return state.values[it.no] === 'NA'; })
           .map(function (it) { return it.no; });
         localStorage.setItem(NA_KEY, JSON.stringify(presets));
-        alert('저장 완료' + (r.mock ? ' (모의 저장 — 구글 연동 전)' : '') +
+        let done = '저장 완료' + (r.mock ? ' (모의 저장 — 구글 연동 전)' : '') +
           '\nQSC ' + res.qsc.toFixed(1) + '점 · ' + res.grade +
-          (res.criticalDeduct ? ' · 중대 차감 ' + res.criticalDeduct + '점' : ''));
+          (res.criticalDeduct ? ' · 중대 차감 ' + res.criticalDeduct + '점' : '');
+        // 통합시트에 자동 기입하지 않는 운영(개인 계정 스크립트)에서는 옮겨 적을 숫자를 바로 알려준다
+        if (r.dashboard && r.dashboard.skipped) {
+          done += '\n\n▶ 통합시트 위생 칸에 입력\n   ' + res.qsc.toFixed(1) + '%';
+        }
+        alert(done);
         if (confirm('입력을 초기화할까요? (새 점검 시작)')) {
           localStorage.removeItem(DRAFT_KEY);
           location.reload();

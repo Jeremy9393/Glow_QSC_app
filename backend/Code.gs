@@ -6,12 +6,37 @@
 
    배포 절차: script.google.com 새 프로젝트 → 이 코드 붙여넣기 → 아래 ID들 입력
    → 배포 > 새 배포 > 웹 앱 (실행: 나, 액세스: 모든 사용자) → URL을 js/api.js의 APPS_SCRIPT_URL에 입력
-   준비물: 통합시트 안에 '매장파일맵' 탭 (A열=매장명, B열=해당 매장 QSC현황 파일 ID) */
+
+   ⚠어느 계정으로 만들 것인가: **본사 계정**. '실행: 나'로 배포되므로 스크립트는 그 계정 권한으로 동작한다.
+     개인 계정에 만들면 담당자가 바뀔 때 소유권 이전·재배포·배포주소 변경(매장 링크·QR 전부 무효)이 발생한다.
+     → 개인 계정이 소유하는 것은 0으로 둔다.
+
+   본사 계정 드라이브 구조 (연동 전에 이 모양으로 정리):
+     📁 QSC
+        📊 QSC 통합시트          … DASHBOARD_ID
+        📁 매장현황              … 매장별 QSC현황 시트 26개 (ID 불필요 — 통합시트 E열 링크에서 자동 추출)
+        📁 사진                  … PHOTO_FOLDER_ID
+             2026 / QSC점검      / 매장 / 날짜   ← 관리자 점검 사진
+             2026 / 미스터리쇼퍼 / 매장 / 날짜   ← 영수증
+             2026 / 개선보고     / 매장 / 날짜   ← 매장이 올리는 개선 후 사진
+        📊 QSC 응답              … SPREADSHEET_ID (신규 생성)
+
+   사진 보관 정책: 드라이브에는 올해치만. 새해에 지난해 폴더를 통째로 내려받아 로컬 보관 후 삭제.
+                 사용량은 photoUsage()로 확인. 폴더 최상위를 '연도'로 둔 이유가 이 정리 때문이다.
+
+   준비물: 위 폴더 3개 + 시트 1개. 매장별 파일 주소는 통합시트 E열 하이퍼링크에서 자동으로 읽는다
+          (링크가 없는 매장만 '매장파일맵' 탭으로 보완 — 선택). */
 
 const SPREADSHEET_ID = '';   // 응답 원본 저장용 스프레드시트 ID (새로 생성)
 const PHOTO_FOLDER_ID = '';  // 사진 보관용 드라이브 폴더 ID
-const DASHBOARD_ID = '';     // '[감사총무팀_QSC] 통합시트' 스프레드시트 ID
+const DASHBOARD_ID = '';     // '[감사총무팀_QSC] 통합시트' 스프레드시트 ID (보기 권한만 있어도 됨)
 const DASHBOARD_SHEET = '데이터';
+/* 통합시트에 점수를 직접 쓸지 여부.
+   false = 매장 목록·매장시트 링크를 '읽기'만 하고, 위생·CS 점수는 관리자가 직접 입력한다.
+           통합시트가 공용 계정 전용 편집이라 개인 계정 스크립트로 운영할 때의 기본값.
+   true  = 점수까지 자동 기입 (스크립트 실행 계정에 통합시트 편집 권한이 있을 때만).
+   ※ 매장별 QSC현황 파일 기록은 이 값과 무관하게 동작한다 — 그 파일들은 링크 편집이 열려 있음 */
+const DASHBOARD_WRITE = false;
 const STORE_MAP_SHEET = '매장파일맵'; // 통합시트 안에 만들 탭: A=매장명, B=매장 파일 ID
 const PHOTO_EMBED = true;    // true면 개선요청 표에 사진을 =IMAGE()로 삽입 (사진 파일이 '링크 있는 사용자 보기'로 공유됨) / false면 링크만
 
@@ -112,10 +137,14 @@ function saveQsc(ss, p) {
   // ②③ 연동 기록 — 실패해도 원본 저장은 유지하고 결과만 알림
   const extra = { dashboard: null, storeFile: null };
   if (DASHBOARD_ID) {
-    try {
-      extra.dashboard = p.result.final == null ? { ok: false, error: '점수 없음' }
-        : writeDashboard(p.store, p.date, p.result.final / 100, 0);
-    } catch (err) { extra.dashboard = { ok: false, error: String(err) }; }
+    if (DASHBOARD_WRITE) {
+      try {
+        extra.dashboard = p.result.final == null ? { ok: false, error: '점수 없음' }
+          : writeDashboard(p.store, p.date, p.result.final / 100, 0);
+      } catch (err) { extra.dashboard = { ok: false, error: String(err) }; }
+    } else {
+      extra.dashboard = { ok: true, skipped: true, note: '통합시트 점수는 직접 입력' };
+    }
     try { extra.storeFile = writeStoreQsc(p, photoMap); }
     catch (err) { extra.storeFile = { ok: false, error: String(err) }; }
   }
@@ -146,7 +175,9 @@ function saveShopper(ss, p) {
   if (DASHBOARD_ID && p.result.score != null) {
     try {
       const avg = shopperMonthAvg(sh, p.store, p.date);
-      extra.dashboard = writeDashboard(p.store, p.date, avg / 100, 2);
+      extra.dashboard = DASHBOARD_WRITE
+        ? writeDashboard(p.store, p.date, avg / 100, 2)
+        : { ok: true, skipped: true, note: '통합시트 CS 점수는 직접 입력', monthAvg: round1(avg) };
       extra.storeFile = writeStoreShopper(p.store, p.date, avg / 100);
     } catch (err) { extra.dashboard = { ok: false, error: String(err) }; }
   }
@@ -192,7 +223,33 @@ function writeDashboard(store, dateStr, frac, offset) {
 
 /* ---------- ③ 매장별 QSC현황 파일 ---------- */
 
+// 매장 파일 주소는 통합시트 E열 매장명 셀에 걸린 하이퍼링크에서 그대로 뽑는다.
+// (관리자가 이미 매장별 시트 링크를 걸어두고 쓰던 구조 — 별도 매핑 탭이 필요 없다.
+//  매장이 바뀌어도 링크만 걸면 앱이 자동으로 따라간다.)
 function storeFileId(store) {
+  const sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET);
+  const last = sh.getLastRow();
+  if (last < 6) return storeFileIdFromMap(store);
+  const rng = sh.getRange(6, 5, last - 5, 1); // E6부터 매장명
+  const names = rng.getValues();
+  const rich = rng.getRichTextValues();
+  for (let i = 0; i < names.length; i++) {
+    if (String(names[i][0]).trim() !== store.trim()) continue;
+    const rt = rich[i][0];
+    let url = rt ? rt.getLinkUrl() : null;
+    if (!url && rt) { // 셀 일부에만 링크가 걸린 경우
+      const runs = rt.getRuns();
+      for (let k = 0; k < runs.length && !url; k++) url = runs[k].getLinkUrl();
+    }
+    const m = url ? String(url).match(/\/d\/([a-zA-Z0-9_-]{20,})/) : null;
+    if (m) return m[1];
+    break;
+  }
+  return storeFileIdFromMap(store); // 링크가 없는 매장만 폴백
+}
+
+// 폴백: 통합시트 안에 '매장파일맵' 탭(A=매장명, B=파일ID)이 있으면 그것도 인정
+function storeFileIdFromMap(store) {
   const sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(STORE_MAP_SHEET);
   if (!sh) return null;
   const vals = sh.getDataRange().getValues();
@@ -283,7 +340,7 @@ function savePhotos(p) {
   let dayFolder = null;
   p.items.forEach(function (it) {
     (it.photos || []).forEach(function (dataUrl, i) {
-      if (!dayFolder) dayFolder = subFolder(subFolder(DriveApp.getFolderById(PHOTO_FOLDER_ID), p.store), p.date);
+      if (!dayFolder) dayFolder = subFolder(subFolder(yearFolder(p.date, 'QSC점검'), p.store), p.date);
       const base64 = dataUrl.split(',')[1];
       const blob = Utilities.newBlob(Utilities.base64Decode(base64), 'image/jpeg',
         p.date + '_' + p.store + '_문항' + it.no + '_' + (i + 1) + '.jpg');
@@ -299,8 +356,7 @@ function savePhotos(p) {
 function saveReceipts(p) {
   if (!PHOTO_FOLDER_ID || !p.receipts || !p.receipts.length) return [];
   try {
-    const root = subFolder(DriveApp.getFolderById(PHOTO_FOLDER_ID), '미스터리쇼퍼');
-    const dir = subFolder(subFolder(root, p.store), p.date);
+    const dir = subFolder(subFolder(yearFolder(p.date, '미스터리쇼퍼'), p.store), p.date);
     return p.receipts.map(function (dataUrl, i) {
       const blob = Utilities.newBlob(Utilities.base64Decode(dataUrl.split(',')[1]), 'image/jpeg',
         p.date + '_' + p.store + '_영수증_' + (i + 1) + '.jpg');
@@ -309,6 +365,43 @@ function saveReceipts(p) {
   } catch (err) {
     return ['사진 저장 실패: ' + String(err)]; // 응답 자체는 저장되어야 한다
   }
+}
+
+/* 사진 폴더는 '연도'를 맨 위에 둔다 — 연말에 그 해 폴더 하나만 내려받고 지우면 정리가 끝나도록.
+     QSC 사진 / 2026 / QSC점검     / 매장 / 날짜
+              / 2026 / 미스터리쇼퍼 / 매장 / 날짜
+   보관 정책: 드라이브에는 올해치만. 새해가 되면 지난해 폴더를 통째로 내려받아 로컬 보관 후 삭제. */
+function yearFolder(dateStr, kind) {
+  const year = String(dateStr).slice(0, 4) || String(new Date().getFullYear());
+  return subFolder(subFolder(DriveApp.getFolderById(PHOTO_FOLDER_ID), year), kind);
+}
+
+/* 지금 사진이 드라이브를 얼마나 쓰고 있는지 연도별로 알려준다 (앱스 스크립트에서 직접 실행).
+   본사 계정을 여럿이 쓰므로, 모르는 채 차오르지 않게 가끔 확인할 것. */
+function photoUsage() {
+  if (!PHOTO_FOLDER_ID) return '사진 폴더 ID가 비어 있음';
+  function size(folder) {
+    let bytes = 0, n = 0;
+    const files = folder.getFiles();
+    while (files.hasNext()) { bytes += files.next().getSize(); n++; }
+    const subs = folder.getFolders();
+    while (subs.hasNext()) { const r = size(subs.next()); bytes += r.bytes; n += r.n; }
+    return { bytes: bytes, n: n };
+  }
+  const root = DriveApp.getFolderById(PHOTO_FOLDER_ID);
+  const lines = [];
+  let total = 0;
+  const years = root.getFolders();
+  while (years.hasNext()) {
+    const y = years.next();
+    const r = size(y);
+    total += r.bytes;
+    lines.push(y.getName() + ' : ' + Math.round(r.bytes / 1048576) + 'MB · 사진 ' + r.n + '장');
+  }
+  lines.sort();
+  const msg = lines.join('\n') + '\n────────\n합계 ' + Math.round(total / 1048576) + 'MB';
+  Logger.log(msg);
+  return msg;
 }
 
 function subFolder(parent, name) {
