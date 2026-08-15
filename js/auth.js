@@ -460,7 +460,43 @@ const Auth = (function () {
     b.onclick = function () { if (confirm('로그아웃하시겠습니까?')) logout(); };
     bar.appendChild(b);
   }
-  whenReady(function () { mountLogout(); autoNotice(); });
+  /* 뒤로가기.
+     ★상단바의 ←만으로는 부족하다★ — QSC 점검은 74문항, 매장현황은 지적 건수만큼 길어서
+       뒤로 가려면 맨 위까지 스크롤해 올라가야 한다. 그래서 본문 맨 아래에도 같은 버튼을 둔다.
+     ★href가 아니라 실제 방문 기록으로 돌아간다★ — 매장현황은 순위표에서도, 홈에서도 들어온다.
+       href를 박아 두면 홈에서 들어온 사람이 순위표로 튕긴다. 온 곳으로 돌려보내는 것이 맞다.
+       단 로그인 화면에서 온 경우는 예외다(돌아가면 다시 홈으로 튕겨 제자리다).
+     ★.back이 없는 화면(홈·로그인)에는 만들지 않는다★ — 돌아갈 곳이 없는 화면이다. */
+  function goBack(fallback) {
+    const ref = document.referrer || '';
+    const inside = ref.indexOf(location.origin) === 0 && ref.indexOf('login.html') < 0
+      && ref.split('#')[0] !== location.href.split('#')[0];
+    if (inside && history.length > 1) history.back();
+    else location.href = fallback;
+  }
+
+  function mountBack() {
+    const top = document.querySelector('.topbar .back');
+    if (!top) return;                       // 홈·로그인·고객설문 — 돌아갈 곳이 없다
+    const fallback = top.getAttribute('href') || 'index.html';
+
+    // 상단: 화살표만 있던 것에 글자를 붙여 누를 곳을 넓힌다 (폰에서 19px 화살표는 너무 작다)
+    if (top.textContent.trim() === '←') top.textContent = '← 뒤로';
+    top.onclick = function (e) { e.preventDefault(); goBack(fallback); };
+
+    // 하단: 본문 맨 끝. 긴 화면에서 위로 올라가지 않아도 되게
+    const host = document.querySelector('.wrap');
+    if (!host || document.getElementById('backBottom')) return;
+    const b = document.createElement('button');
+    b.id = 'backBottom';
+    b.type = 'button';
+    b.className = 'backBtn';
+    b.textContent = '← 뒤로';
+    b.onclick = function () { goBack(fallback); };
+    host.appendChild(b);
+  }
+
+  whenReady(function () { mountLogout(); mountBack(); autoNotice(); });
 
   return {
     NEXT_OK: NEXT_OK,
@@ -470,7 +506,7 @@ const Auth = (function () {
     can: can, hasMenu: hasMenu, menus: menus,
     ensure: ensure, relogin: relogin, guard: guard, sync: sync, logout: logout,
     login: login, post: post, endpoint: endpoint,
-    safeNext: safeNext, loginUrl: loginUrl, mountLogout: mountLogout,
+    safeNext: safeNext, loginUrl: loginUrl, mountLogout: mountLogout, mountBack: mountBack,
     notice: notice, mountNotice: mountNotice, maint: maint,
   };
 })();
