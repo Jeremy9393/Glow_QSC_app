@@ -4391,12 +4391,23 @@ function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
-/* 처음 한 번만 — 인증 스프레드시트를 만들고 속성에 등록한 뒤 탭까지 깔아 준다.
-   드라이브 화면에서 파일을 만들고 주소창의 긴 문자열을 복사해 속성에 붙여넣는 절차가
-   번번이 어긋나서(공백 한 칸, 잘린 ID) 코드로 끝낸다.
-   ★두 번 눌러도 안전하다★ — AUTH_SHEET_ID가 이미 있으면 새로 만들지 않고,
-     initSecrets()도 값이 있으면 덮어쓰지 않는다. */
+
+/* ══════════════════════════════════════════════════════════════
+   처음 한 번만 — 설치 절차 전체.
+   편집기에서 이 함수 하나만 골라 [실행]하면 끝난다.
+
+   함수를 여러 개로 나눠 두면 실제로 가장 잘 어긋난다 — 고르는 것을 잊거나,
+   순서를 바꾸거나, 중간 로그를 못 보고 지나간다. 그래서 하나로 묶어 두었다.
+
+   ★두 번 눌러도 안전하다★ 이미 만들어진 것은 다시 만들지 않고,
+     비밀값(TOKEN_KEY·PW_PEPPER)도 절대 덮어쓰지 않는다.
+     (덮어쓰면 그 순간 전 계정의 비밀번호 해시가 맞지 않게 되고 모든 토큰이 죽는다.)
+     단 관리자 설정코드는 누를 때마다 새로 나오고 직전 코드는 무효가 된다.
+   ══════════════════════════════════════════════════════════════ */
 function setupAuthSheet_once() {
+  const out = [];
+
+  // ① 인증 스프레드시트 — 드라이브에서 만들고 주소를 복사해 붙여넣는 절차가 번번이 어긋나서 코드로 끝낸다
   let id = prop('AUTH_SHEET_ID', '');
   let made = false;
   if (!id) {
@@ -4404,49 +4415,51 @@ function setupAuthSheet_once() {
     PROPS.setProperty('AUTH_SHEET_ID', id);
     made = true;
   }
-  const msg = [
-    'AUTH_SHEET_ID = ' + id + (made ? '  (새로 만듦)' : '  (이미 있던 것)'),
-    initSecrets(),
-    JSON.stringify(ensureAuthSheets()),
-  ].join('\n');
-  Logger.log(msg);
-  return msg;
-}
+  out.push('① 인증 시트  AUTH_SHEET_ID = ' + id + (made ? '  (새로 만듦)' : '  (이미 있던 것)'));
 
-/* 처음 한 번만 — 설치 절차 전체를 한 번에 돌린다.
-   편집기에서 함수를 하나씩 골라 실행하는 것이 실제로 가장 잘 어긋나는 지점이라
-   (고르는 것을 잊거나, 순서를 바꾸거나, 로그를 못 보고 지나간다) 하나로 묶어 둔다.
-   ★두 번 눌러도 안전하다★ — 만들어진 것은 다시 만들지 않는다.
-   다만 설정코드는 누를 때마다 새로 발급되고 직전 코드는 무효가 된다. */
-function setupAll_once() {
-  const out = [];
-  out.push(setupAuthSheet_once());
+  // ② 비밀값 — 사람이 "qsc2026!" 같은 값을 넣으면 서명과 페퍼가 통째로 무의미해진다
+  out.push('② ' + initSecrets());
 
-  /* 비밀번호 해시 반복수. 250ms를 넘기면 요청 1건으로 서버 시간을 태우는 증폭 공격이 되고,
-     너무 낮으면 해시가 헐거워진다. 이 기기가 아니라 앱스 스크립트 서버에서 재 보는 값이다. */
+  // ③ 탭 준비 (계정·역할·감사로그·매장파일맵)
+  const ens = ensureAuthSheets();
+  out.push('③ 탭 준비  ' + JSON.stringify(ens));
+
+  /* ④ 비밀번호 해시 반복수.
+     250ms를 넘기면 요청 1건으로 서버 시간을 태우는 증폭 공격이 되고, 너무 낮으면 해시가 헐거워진다.
+     이 PC가 아니라 앱스 스크립트 서버에서 실제로 재 본 값을 쓴다. */
   if (!prop('PW_ITER', '')) {
     let best = 1000;
     [1000, 5000, 10000, 20000].forEach(function (n) {
-      const t = Date.now();
+      const t0 = Date.now();
       pwHash('bench-salt-0000', 'benchmark-password', n);
-      if (Date.now() - t <= 250) best = n;
+      if (Date.now() - t0 <= 250) best = n;
     });
     PROPS.setProperty('PW_ITER', String(best));
-    out.push('PW_ITER = ' + best + ' (250ms 이내 최대값으로 자동 설정)');
+    out.push('④ PW_ITER = ' + best + '  (250ms 이내 최대값으로 자동 측정)');
   } else {
-    out.push('PW_ITER = ' + prop('PW_ITER', '') + ' (이미 설정됨)');
+    out.push('④ PW_ITER = ' + prop('PW_ITER', '') + '  (이미 설정됨)');
   }
 
+  // ⑤ 매장 계정 — 통합시트 매장명을 그대로 아이디로. '사용 · 비밀번호 미설정' 상태로 생성된다
   const sync = syncStoreAccountsCore();
-  out.push('매장 계정: 새로 ' + (sync.added || []).length + '개 · 건너뜀 ' +
-    (sync.skipped || []).length + '개' + (sync.error ? ' · 오류: ' + sync.error : ''));
+  out.push('⑤ 매장 계정  새로 ' + (sync.added || []).length + '개 · 건너뜀 ' +
+    (sync.skipped || []).length + '개' + (sync.error ? '  ⚠' + sync.error : ''));
 
   out.push('');
-  out.push('■ 관리자 비밀번호 설정코드 (24시간): ' + issueAdminSetupCode('admin'));
-  out.push('  login.html에서 아이디 admin + 이 코드를 넣고 비밀번호를 정하십시오.');
-  out.push('  그 뒤 accounts.html에서 매장별 비밀번호를 설정해 전달하시면 됩니다.');
+  out.push('══ 다음은 사람이 합니다 ══');
+  out.push('1) 관리자 비밀번호 설정코드 (24시간 유효): ' + issueAdminSetupCode('admin'));
+  out.push('   → login.html 에서 아이디 admin + 이 코드를 넣고 비밀번호를 정하십시오.');
+  out.push('2) 로그인한 뒤 accounts.html 에서 매장별 비밀번호를 설정해 전달하십시오.');
+  out.push('');
+  out.push('★배포 당일만★ 스크립트 속성 HASH_BUDGET 을 1000 으로 올려 두고 다음 날 300 으로');
+  out.push('  되돌리십시오. 26곳 비밀번호 설정 + 그날 저녁 첫 로그인 + 오타 재시도가 하루에');
+  out.push('  몰리는데, 한도에 닿으면 "받은 비밀번호로 안 들어가진다"로만 보이고 원인이 안 뜹니다.');
 
-  const msg = out.join('\n');
+  const msg = out.join('
+');
   Logger.log(msg);
   return msg;
 }
+
+// 이름이 기억나지 않을 때를 위한 별칭. 하는 일은 위와 같다.
+function setupAll_once() { return setupAuthSheet_once(); }
