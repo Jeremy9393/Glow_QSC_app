@@ -344,7 +344,12 @@ async function initShopperForm(opts) {
     const btn = $('#submitBtn');
     btn.disabled = true; btn.textContent = ADMIN ? '저장 중…' : '전송 중…';
     try {
-      const r = await Api.submit('shopper', payload);
+      /* ★관리자와 고객이 서로 다른 액션으로 보낸다★
+         고객 설문(survey.html)은 주소만 알면 누구나 열 수 있으므로 서버에서 '익명 허용' 액션으로
+         따로 받아야 한다. 둘 다 'shopper'로 보내면, 로그인 강제(AUTH_ENFORCE)를 켜는 순간
+         토큰이 없는 고객 설문이 전부 거부되어 조사 자체가 멈춘다.
+         서버는 survey.submit을 anon으로 열어 두고, 그 응답은 공식 CS 평균 집계에서 제외한다. */
+      const r = await Api.submit(ADMIN ? 'shopper' : 'survey', payload);
       if (r.ok) {
         localStorage.removeItem(DRAFT_KEY);
         if (ADMIN) {

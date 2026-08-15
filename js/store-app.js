@@ -1,0 +1,676 @@
+/* 우리 매장 QSC현황 — 명세 §11(서버 로직) · §12-5(store.html) · §9(시트 결합 안전 규칙)
+   쓰는 사람은 매장 점장·매니저이고 도구는 폰이다. 시트를 어려워해서 앱을 만드는 것이므로,
+   화면에서 고칠 수 있는 것은 '매장이 채워야 하는 칸'뿐이어야 한다.
+
+   ★ 본사 영역(NO·구분·본사 사진·개선요청 본문)은 disabled input이 아니라 아예 입력 요소가 아니다.
+     서버가 K열 미만을 쓰지 않는 것(§8-3 방어④)과 짝을 이루는 화면 쪽 장치다.
+     disabled input은 개발자도구로 한 번 푸는 것으로 '고칠 수 있는 것처럼' 보이게 되고,
+     그 순간 매장은 본사 지적 본문을 고치려고 시도한다.
+   ★ 제출 버튼이 없다. 점장과 부점장이 같은 화면을 동시에 여는 일이 실제로 있어(아이디 공용)
+     전체 저장은 서로의 입력을 지운다. 저장 단위는 항목 1건이고 충돌은 rev로 잡는다.
+   ★ 임시저장에 사진 base64를 절대 넣지 않는다 — localStorage 용량(대개 5MB)을 한 장으로 태운다. */
+(async function () {
+  const $ = function (s, el) { return (el || document).querySelector(s); };
+
+  const DRAFT_KEY = 'qsc-store-draft-v1';
+  const SNAP_KEY = 'qsc-store-snap-v1';
+  const SNAP_MAX = 6;                     // 매장 여러 곳을 오가도 스냅샷이 무한히 쌓이지 않도록
+
+  /* codes-app.js:15의 cycle()을 그대로 옮겨 왔다(§12-3-5).
+     공용 파일을 새로 만들면 sw.js 캐시 목록·로드 순서가 늘어나므로 복사가 더 싸다. */
+  function cycle(d) {
+    d = d || new Date();
+    return String(d.getFullYear()).slice(2) + String(d.getMonth() + 1).padStart(2, '0');
+  }
+  function ymLabel(ym) {
+    if (!/^\d{4}$/.test(String(ym))) return String(ym || '');
+    return '20' + ym.slice(0, 2) + '년 ' + Number(ym.slice(2, 4)) + '월';
+  }
+  /* 서버(store.get)는 예정일을 'yyyy-MM-dd'로 준다 — 스프레드시트 타임존으로 계산된 값이다.
+     폰 한 줄에 연도까지 들어갈 자리가 없고 어차피 보고 있는 달과 같은 해라 '10/15'로 줄인다.
+     ★자르기만 한다. 여기서 날짜를 다시 계산하면 기기 시계·시간대가 끼어들어
+       §5가 막으려던 '월초에 하루 어긋남'이 그대로 돌아온다. 못 읽으면 받은 문자열 그대로 적는다. */
+  function dueLabel(v) {
+    const s = String(v == null ? '' : v);
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    return m ? (Number(m[2]) + '/' + Number(m[3])) : s;
+  }
+  function num1(v) { return (typeof v === 'number') ? v.toFixed(1) : '—'; }
+  function ratePct(v) { return (typeof v === 'number') ? Math.round(v * 100) + '%' : '—'; }
+  function cnt(v) { return (typeof v === 'number') ? v : 0; }
+  function str(v) { return v == null ? '' : String(v); }
+  function online() { return navigator.onLine !== false; }
+
+  // ---------- 상태 ----------
+  let scope = { all: false, list: [] };   // Auth.stores() 사본 — 화면 조립용일 뿐 권한 판정은 서버가 한다
+  let curStore = '';
+  let curYm = '';
+  let data = null;                        // 마지막 store.get 응답
+  let fromSnap = false;                   // 지금 화면이 오프라인 스냅샷인가
+  let loading = false;
+  let maint = '';                         // 점검 모드 문구 (''이면 점검 아님)
+  let modes = [];                         // 그려져 있는 항목 카드들의 applyMode 목록
+
+  /* 점검 모드 — 서버 스크립트 속성 MAINT에 문구가 들어 있는 동안 모든 요청이 code:'MAINT'로 막힌다.
+     관리자 역할만 통과하므로 이 화면에서 이 코드를 보는 사람은 사실상 매장이다.
+     ★오류로 취급하지 않는다. 고장이 아니라 잠깐 멈춘 것이고, 매장이 '앱이 깨졌다'고 판단해
+       시트를 직접 열기 시작하면 §9의 결합 안전 규칙이 통째로 무너진다. */
+  function showMaint(msg) {
+    maint = str(msg);
+    const el = $('#maintNote');
+    el.textContent = maint;               // 서버가 담당자에게 받아 적어 둔 문구 — 반드시 textContent
+    el.style.display = maint ? '' : 'none';
+    refreshModes();                       // 저장 버튼 잠금/해제를 이미 그려진 카드에도 즉시 반영
+  }
+  function refreshModes() {
+    modes.forEach(function (f) { try { f(); } catch (e) { /* 카드 하나가 죽어도 나머지는 그린다 */ } });
+  }
+
+  function showState(msg) {
+    const el = $('#stateNote');
+    if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.style.display = '';
+    el.textContent = msg;                 // 서버 문구·매장명이 섞이므로 textContent
+  }
+  function clearBody() {
+    $('#sumCard').style.display = 'none';
+    $('#items').innerHTML = '';
+    modes = [];                           // 카드를 지웠으므로 죽은 applyMode를 남기지 않는다
+    $('#listNote').textContent = '';
+    $('#bbRate').textContent = '—';
+    $('#bbProg').textContent = '완료 0 / 요청 0';
+  }
+  /* ?next= 화이트리스트는 auth.js 한 곳이 정본이다(§5-1). 여기서 주소를 직접 조립하면
+     화이트리스트가 바뀔 때 이 파일만 옛 주소로 남는다. */
+  function goLogin() {
+    location.replace((Auth.loginUrl && Auth.loginUrl()) || 'login.html?next=store.html');
+  }
+
+  // ---------- 세션 ----------
+  /* auth.js·api.js는 최상위 const로 선언되어 window에 붙지 않는다(브라우저 규격).
+     window.Auth로 확인하면 파일이 정상 로드돼도 '없다'고 판정한다 — typeof로 봐야 한다. */
+  if (typeof Auth === 'undefined' || typeof Api === 'undefined') {
+    showState('앱을 새로 고쳐 주세요 (앱 종료 후 다시 실행).');
+    return;
+  }
+
+  /* 이 화면이 읽는 쿼리는 ym·store 둘뿐이다. 주소로 자격증명을 넘겨받는 경로는 없다 —
+     앱 주소를 회사 관련자 전원에게 공유하는 구조라, 주소에 실린 자격증명은 곧 전원에게 열린 문이다.
+     매장도 아이디(매장명) + 비밀번호로 login.html에서 들어온다.
+     그래서 주소를 다시 쓰는(history.replaceState) 코드도 여기 없다 — 지울 것이 없다. */
+  const q = new URLSearchParams(location.search);
+
+  let sessionOk = false;
+  try { sessionOk = !!(await Auth.ensure()); } catch (e) { sessionOk = false; }
+  /* 시트에서 역할·담당 매장을 고치면 여기서 반영된다(§7-3 auth.session).
+     store.get보다 앞에 두는 이유: 매장 선택 드롭다운을 옛 목록으로 그려 두면
+     방금 담당에서 빠진 매장을 골라 SCOPE_DENIED를 맞는다. */
+  if (sessionOk && online()) { try { await Auth.sync(); } catch (e) { /* 실패해도 기존 세션으로 진행 */ } }
+  scope = (Auth.stores && Auth.stores()) || { all: false, list: [] };
+  scope.list = scope.list || [];
+
+  /* 오프라인이면 Auth.ensure()가 실패할 수밖에 없다(로그인은 네트워크가 필요하다).
+     저장해 둔 세션이 있으면 로그인 화면으로 튕기지 않고 스냅샷을 보여준다 —
+     지하 매장에서 화면이 로그인으로 바뀌는 것이 이 앱에서 가장 비싼 사고다. */
+  if (!sessionOk && (online() || !scope.list.length)) { goLogin(); return; }
+
+  if (!Auth.hasMenu('store')) {
+    showState('이 화면을 볼 권한이 없습니다. 감사총무팀에 문의해 주세요.');
+    $('#pickCard').style.display = 'none';
+    return;
+  }
+
+  // ---------- 매장·월 선택 ----------
+  const qYm = q.get('ym');
+  const qStore = q.get('store');
+
+  curYm = /^\d{4}$/.test(str(qYm)) ? qYm : cycle();
+
+  if (scope.list.length > 1) {
+    /* 담당 매장이 2곳 이상일 때만 드롭다운을 그린다. 지역담당·관리자가 생기면
+       계정 D열에 매장을 더 적는 것만으로 여기가 저절로 나타난다(코드 무변경). */
+    const sel = $('#storeSel');
+    scope.list.forEach(function (s) {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s;
+      sel.appendChild(o);
+    });
+    curStore = (qStore && scope.list.indexOf(qStore) >= 0) ? qStore : scope.list[0];
+    sel.value = curStore;
+    $('#storeBox').style.display = '';
+    sel.onchange = function () { curStore = sel.value; load(); };
+  } else {
+    curStore = scope.list[0] || '';
+    $('#whoInfo').textContent = curStore;
+  }
+
+  $('#ymSel').onchange = function () { curYm = $('#ymSel').value; load(); };
+  $('#reloadBtn').onclick = function () { load(); };
+  // 다시 연결되면 스냅샷 화면을 실제 값으로 바꿔 준다 (저장 버튼도 그때 살아난다)
+  window.addEventListener('online', function () { if (fromSnap) load(); });
+
+  // ---------- 임시저장 (사진 제외) ----------
+  function draftAll() { try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || '{}'); } catch (e) { return {}; } }
+  function draftKey(no) { return (curStore || '-') + '|' + curYm + '|' + no; }
+  function draftSave(map) { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(map)); } catch (e) { /* 용량 초과 등 — 임시저장은 실패해도 업무가 멈추지 않는다 */ } }
+  function draftPut(no, v) { const a = draftAll(); a[draftKey(no)] = v; draftSave(a); }
+  function draftDel(no) { const a = draftAll(); delete a[draftKey(no)]; draftSave(a); }
+
+  // ---------- 오프라인 스냅샷 ----------
+  function snapAll() { try { return JSON.parse(localStorage.getItem(SNAP_KEY) || '{}'); } catch (e) { return {}; } }
+  function snapKey() { return (curStore || '-') + '|' + curYm; }
+  function snapGet() { return snapAll()[snapKey()] || null; }
+  function snapPut(res) {
+    const a = snapAll();
+    const copy = JSON.parse(JSON.stringify(res));
+    copy._at = Date.now();
+    a[snapKey()] = copy;
+    const keys = Object.keys(a);
+    if (keys.length > SNAP_MAX) {
+      keys.sort(function (x, y) { return (a[x]._at || 0) - (a[y]._at || 0); });
+      while (keys.length > SNAP_MAX) delete a[keys.shift()];
+    }
+    try { localStorage.setItem(SNAP_KEY, JSON.stringify(a)); } catch (e) { /* 무시 */ }
+  }
+
+  // ---------- 불러오기 ----------
+  function handleErr(res) {
+    const code = res && res.code;
+
+    /* 점검 모드. 표는 비우되 로그인으로 보내지 않고, 안내 문구를 상단에 남긴다. */
+    if (code === 'MAINT') {
+      clearBody();
+      showState('');
+      showMaint(str(res && res.error) || '지금은 점검 중입니다. 잠시 후 다시 열어 주세요.');
+      return;
+    }
+
+    /* AUTH_*는 자동 재로그인 수단이 없어진 뒤로 '정말 다시 로그인해야 하는 상태'만 뜻한다.
+       ★세션은 무기한이라(로그아웃 전까지 유지) 이 경로는 사실상 세 가지 경우에만 탄다:
+         ① 관리자가 비밀번호를 바꿔 credFingerprint가 달라졌을 때
+         ② 계정 상태를 '중지'로 돌렸을 때
+         ③ 스크립트 속성 TOKEN_MINV를 올려 전원을 강제 로그아웃시켰을 때
+       셋 다 '이 사람을 지금 끊어야 한다'는 뜻이므로, 조용히 되돌려 보내지 말고 로그인 화면을 보여야 한다.
+       FORBIDDEN·SCOPE_DENIED는 이동하지 않는다(§7-1) — 로그인해도 달라지지 않는 문제다. */
+    if (code === 'AUTH_REQUIRED' || code === 'AUTH_EXPIRED' || code === 'AUTH_INVALID') {
+      if (Auth.clear) Auth.clear();
+      goLogin();
+      return;
+    }
+    showState(str(res && res.error) || '불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    clearBody();
+  }
+
+  async function load() {
+    if (loading) return;
+    loading = true;
+    showState('');
+    $('#listNote').textContent = '불러오는 중…';
+
+    const payload = { ym: curYm };
+    // 담당 매장이 1곳이면 서버가 payload.store를 아예 읽지 않는다(§8-3). 보낼 이유가 없다.
+    if (scope.list.length > 1 && curStore) payload.store = curStore;
+
+    let res = null;
+    if (online()) {
+      try { res = await Api.call('store.get', payload); } catch (e) { res = null; }
+    }
+    loading = false;
+    $('#listNote').textContent = '';
+
+    // api.js는 던지지 않고 code:'NETWORK'로 돌려준다 — 오프라인 판정은 이 코드까지 봐야 한다
+    if (!res || res.code === 'NETWORK') {
+      const snap = snapGet();
+      if (snap) {
+        data = snap; fromSnap = true;
+        renderAll();
+        showState('오프라인 — 마지막으로 받아둔 화면입니다. 저장은 전파가 되는 곳에서 해 주세요.');
+      } else {
+        clearBody();
+        showState('오프라인이라 불러오지 못했습니다. 전파가 되는 곳에서 다시 열어 주세요.');
+      }
+      return;
+    }
+    if (!res.ok) { handleErr(res); return; }
+
+    // 여기까지 왔으면 서버가 정상 응답한 것이다 — 점검이 풀렸다는 뜻이므로 안내를 내린다
+    if (maint) showMaint('');
+    data = res; fromSnap = false;
+    snapPut(res);
+    renderAll();
+  }
+
+  // ---------- 그리기 ----------
+  function renderYmSel() {
+    const sel = $('#ymSel');
+    const months = (data && data.months && data.months.length) ? data.months.slice() : [];
+    // 아직 탭이 없는 달을 보고 있을 수도 있으므로 현재 선택값은 항상 목록에 넣는다
+    if (months.indexOf(curYm) < 0) months.unshift(curYm);
+    sel.innerHTML = '';
+    months.forEach(function (m) {
+      const o = document.createElement('option');
+      o.value = m; o.textContent = ymLabel(m);
+      sel.appendChild(o);
+    });
+    sel.value = curYm;
+  }
+
+  function writable() {
+    // 하나라도 아니면 저장할 수 없다: 점검 아님 · 역할 권한 · 서버 조회전용 아님 · 실데이터 · 온라인
+    return !!(!maint && Auth.can('store', '쓰기') && data && !data.readOnly && !fromSnap && online());
+  }
+
+  function renderAll() {
+    renderYmSel();
+
+    if (data.exists === false) {
+      clearBody();
+      showState(str(data.error) || (ymLabel(curYm) + ' 탭이 아직 만들어지지 않았습니다. 본사 담당자에게 문의해 주세요.'));
+      return;
+    }
+    if (!fromSnap) {
+      if (data.readOnly) showState('지금은 조회만 가능합니다. 개선보고 입력은 준비되는 대로 열립니다.');
+      else if (!Auth.can('store', '쓰기')) showState('조회 권한만 있습니다. 개선보고 입력은 매장 담당자 계정으로 해 주세요.');
+      else showState('');
+    }
+
+    renderSummary(data.summary);
+    renderItems(data.items || []);
+  }
+
+  function renderSummary(sum) {
+    sum = sum || {};
+    $('#sumCard').style.display = '';
+
+    const rows = [
+      ['위생', sum.hygiene, sum.hygieneGrade, false],
+      ['CS', sum.cs, sum.csGrade, false],
+      ['종합', sum.total, sum.totalGrade, true],
+    ];
+    const body = $('#sumBody');
+    body.innerHTML = '';
+    rows.forEach(function (r) {
+      const tr = document.createElement('tr');
+      if (r[3]) tr.className = 'sum-crit';
+      const td0 = document.createElement('td');
+      td0.textContent = r[0];
+      // '잠정'은 개선율(익월 IMPROVE_DUE_DAY 이전)이 아직 확정 전이라는 뜻 — 숫자만 보면 낮게 보인다
+      if (r[3] && sum.provisional) {
+        const tag = document.createElement('span');
+        tag.className = 'provTag';
+        tag.textContent = '잠정';
+        td0.appendChild(document.createTextNode(' '));
+        td0.appendChild(tag);
+      }
+      const td1 = document.createElement('td');
+      td1.className = 'r'; td1.textContent = num1(r[1]);
+      const td2 = document.createElement('td');
+      td2.className = 'r'; td2.textContent = str(r[2]) || '—';
+      tr.appendChild(td0); tr.appendChild(td1); tr.appendChild(td2);
+      body.appendChild(tr);
+    });
+
+    const req = cnt(sum.req), done = cnt(sum.done);
+    const fin = $('#sumFinal');
+    fin.innerHTML = '';
+    /* 서버가 진행·미조치 건수까지 내려주는데 완료만 보여주면, 매장은 '남은 게 몇 건인지'를
+       카드를 세어 봐야 안다. 다만 서버가 그 칸을 못 읽었을 때(숫자가 아닐 때) 0으로 단정하면
+       "미조치 0건"이라는 거짓말이 되므로, 숫자로 온 것만 골라 적는다. */
+    const seg = [];
+    if (typeof sum.prog === 'number') seg.push('진행 ' + sum.prog);
+    seg.push('완료 ' + done);
+    if (typeof sum.todo === 'number') seg.push('미조치 ' + sum.todo);
+    fin.appendChild(document.createTextNode('개선요청 ' + req + '건 (' + seg.join(' · ') + ') · '));
+    const b = document.createElement('b');
+    b.textContent = '개선율 ' + ratePct(sum.rate);
+    fin.appendChild(b);
+    $('#sumFill').style.width = Math.round((typeof sum.rate === 'number' ? sum.rate : 0) * 100) + '%';
+
+    $('#visitNote').textContent = sum.visitDate ? ('방문일 ' + str(sum.visitDate)) : '';
+
+    /* 라벨을 못 찾아 값이 비었다는 경고는 그대로 보여준다.
+       조용히 0을 표시하는 것이 이 화면에서 가장 위험하다(§9-7). */
+    const warn = $('#warnNote');
+    const ws = sum.warn && sum.warn.length ? sum.warn : null;
+    if (ws) { warn.style.display = ''; warn.textContent = ws.join(' / '); }
+    else { warn.style.display = 'none'; warn.textContent = ''; }
+
+    /* 지연 건수는 서버가 항목마다 내려준 overdue를 세기만 한다 — 화면에서 예정일을 다시
+       계산하지 않는다(§5 주의). 0건이면 아예 적지 않는다: '지연 0건'이 매달 붙어 있으면
+       글자가 배경이 되어, 정작 1건이 생긴 달에 눈에 걸리지 않는다. */
+    const late = lateCount();
+    if (late > 0) {
+      const lc = document.createElement('span');
+      lc.className = 'lateCount';
+      lc.textContent = ' · 지연 ' + late + '건';
+      fin.appendChild(lc);
+    }
+
+    $('#bbRate').textContent = '개선율 ' + ratePct(sum.rate);
+    const bp = $('#bbProg');
+    // 하단바는 스크롤과 무관하게 늘 보이는 자리다. 지연이 있을 때만 한 조각을 빨갛게 덧붙인다.
+    bp.textContent = '완료 ' + done + ' / 요청 ' + req;
+    if (late > 0) {
+      const s = document.createElement('span');
+      s.className = 'lateCount';
+      s.textContent = ' · 지연 ' + late + '건';
+      bp.appendChild(s);
+    }
+  }
+
+  /* 요약·하단바가 함께 쓰는 지연 건수. data.items 하나를 정본으로 삼아야
+     두 자리에 다른 숫자가 뜨는 일이 없다. */
+  function lateCount() {
+    const arr = (data && data.items) || [];
+    let n = 0;
+    for (let i = 0; i < arr.length; i++) if (arr[i] && arr[i].overdue) n++;
+    return n;
+  }
+
+  function has(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
+
+  /* 저장·충돌 응답으로 받은 최신 항목을 카드와 원본 배열(data.items) 양쪽에 반영한다.
+     반영하지 않으면 방금 완료 처리한 항목이 data.items에는 지연인 채로 남아
+     요약의 '지연 n건'이 실제 카드와 어긋난다.
+
+     ★통째로 갈아끼우지 않고 '서버가 보낸 칸만' 덮어쓴다.
+       store.saveImprove 응답의 항목에는 store.get이 주던 칸이 일부 없다
+       (구분·본문·본사 사진·예정일·지연·NEW). 그대로 대입하면 방금 저장한 그 항목만
+       그 칸들을 잃어, ①아직 기한이 지난 항목인데 '지연 ⚠'과 빨간 선이 사라지고
+       ②요약·하단바의 '지연 n건'이 실제보다 적게 나오며 ③나중에 목록을 다시 그리는 코드가
+       생기는 순간 본문이 통째로 비어 보인다.
+       빠진 칸은 '바뀌지 않았다'는 뜻이므로 직전 값을 그대로 두는 편이 맞다. */
+  function mergeItem(next) {
+    const arr = (data && data.items) || [];
+    let prev = null, at = -1;
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i] && String(arr[i].no) === String(next.no)) { prev = arr[i]; at = i; break; }
+    }
+    const out = {};
+    Object.keys(prev || {}).forEach(function (k) { out[k] = prev[k]; });
+    Object.keys(next || {}).forEach(function (k) { out[k] = next[k]; });
+
+    /* 지연은 '예정일이 지났는데 완료일이 비었다'는 뜻이다. 서버가 이 응답에 overdue를
+       안 실어 준 경우, 방금 완료로 바뀐 항목까지 직전 값(지연)을 물려받으면
+       이미 처리한 항목에 빨강이 남는다 — 확실히 내릴 수 있는 이 한 경우만 손으로 내린다.
+       반대로 '완료가 아닌' 항목의 지연을 화면에서 새로 판정하지는 않는다(§5 주의). */
+    if (!has(next, 'overdue') && String(out.state) === '완료') out.overdue = false;
+
+    if (at >= 0) arr[at] = out;
+    return out;
+  }
+
+  const STATE_CLASS = { '완료': 'done', '진행': 'prog', '미조치': 'todo' };
+
+  function renderItems(items) {
+    const box = $('#items');
+    box.innerHTML = '';
+    modes = [];                           // 카드를 다시 그리므로 옛 applyMode 참조를 버린다
+    if (!items.length) {
+      $('#listNote').textContent = '이 달에는 개선요청 항목이 없습니다.';
+      return;
+    }
+    $('#listNote').textContent = '';
+
+    /* 지연 → NEW → 나머지 순으로 올린다.
+       왜 서버가 준 NO. 순서를 흐트러뜨리면서까지 이렇게 하냐면, 이 화면을 보는 도구가 폰이고
+       한 화면에 카드가 두세 개밖에 안 들어가기 때문이다. 매장이 위에서부터 읽다가 스크롤을 멈추면
+       정작 기한이 지난 항목을 못 본 채 앱을 닫는다. 급한 순서를 화면 순서로 만들어 둔다.
+       같은 순위 안에서는 원래 순서(=시트 NO. 순)를 그대로 지킨다 —
+       Array.prototype.sort가 안정 정렬이 아닌 브라우저가 아직 있어 원래 위치를 tie-breaker로 넣었다. */
+    function rank(it) { return (it && it.overdue) ? 0 : ((it && it.isNew) ? 1 : 2); }
+    const ordered = items.map(function (it, i) { return { it: it, i: i }; });
+    ordered.sort(function (a, b) {
+      const d = rank(a.it) - rank(b.it);
+      return d !== 0 ? d : a.i - b.i;
+    });
+    ordered.forEach(function (o) { box.appendChild(buildItem(o.it)); });
+  }
+
+  function buildItem(item) {
+    let it = item;
+    let pendingClear = false;
+
+    const el = document.createElement('section');
+    el.className = 'item storeItem';
+    // 정적 뼈대만 innerHTML로 만든다. 매장명·본문·담당자명은 아래에서 전부 textContent로 넣는다.
+    el.innerHTML =
+      '<div class="itemTop"><span class="no"></span><span class="stTag"></span>' +
+        '<span class="flagTag late" style="display:none">지연 ⚠</span>' +
+        '<span class="flagTag new" style="display:none">NEW</span></div>' +
+      '<p class="hqBody"></p>' +
+      '<p class="lateNote" style="display:none"></p>' +
+      '<div class="thumbs hqThumbs"></div>' +
+      '<div class="itemSplit"></div>' +
+      '<div class="meta-grid">' +
+        '<div><label class="f">담당부서</label><select class="dept"></select></div>' +
+        '<div><label class="f">담당자</label><input type="text" class="owner" placeholder="이름"></div>' +
+        '<div class="full"><label class="f">진행 내용</label>' +
+          '<textarea class="plan" rows="2" placeholder="어떻게 조치할지 적어 주세요"></textarea></div>' +
+        '<div class="full"><label class="f">완료 내용</label>' +
+          '<textarea class="doneNote" rows="2" placeholder="완료한 내용을 적어 주세요"></textarea></div>' +
+        '<div class="full"><div class="savedPhoto" style="display:none"></div><div class="pickBox"></div></div>' +
+      '</div>' +
+      '<div class="itemFoot"><span class="itemNote"></span>' +
+        '<button type="button" class="miniBtn saveBtn">저장</button></div>';
+
+    const noEl = $('.no', el), stEl = $('.stTag', el), bodyEl = $('.hqBody', el);
+    const lateTag = $('.flagTag.late', el), newTag = $('.flagTag.new', el);
+    const lateNote = $('.lateNote', el);
+    const thumbs = $('.hqThumbs', el);
+    const deptSel = $('.dept', el), ownerIn = $('.owner', el);
+    const planIn = $('.plan', el), doneIn = $('.doneNote', el);
+    const savedBox = $('.savedPhoto', el), pickBox = $('.pickBox', el);
+    const noteEl = $('.itemNote', el), saveBtn = $('.saveBtn', el);
+
+    const pick = PhotoPick.mount(pickBox, { id: 'af' + it.no, label: '개선 후 사진', max: 1 });
+
+    // ----- 본사 영역 (읽기 전용 텍스트. 입력 요소를 만들지 않는다) -----
+    noEl.textContent = 'NO.' + str(it.no) + (it.cat ? ' · ' + str(it.cat) : '');
+    bodyEl.textContent = str(it.text);
+    (it.beforePhotos || []).forEach(function (url) {
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener';
+      const im = document.createElement('img');
+      im.src = url; im.alt = '본사 지적 사진'; im.title = '누르면 크게 보입니다';
+      a.appendChild(im);
+      thumbs.appendChild(a);
+    });
+
+    // ----- 담당부서 목록 -----
+    function fillDept(cur) {
+      deptSel.innerHTML = '';
+      const opts = (data.deptOptions || []).slice();
+      // 시트에 적혀 있던 값이 목록에 없더라도 조용히 바꾸지 않는다 — 저장하면 그 값이 지워진다
+      if (cur && opts.indexOf(cur) < 0) opts.unshift(cur);
+      const blank = document.createElement('option');
+      blank.value = ''; blank.textContent = '선택';
+      deptSel.appendChild(blank);
+      opts.forEach(function (d) {
+        const o = document.createElement('option');
+        o.value = d; o.textContent = d;
+        deptSel.appendChild(o);
+      });
+      deptSel.value = cur || '';
+    }
+
+    function paintPhoto() {
+      if (it.afterPhoto && !pendingClear) {
+        savedBox.style.display = '';
+        savedBox.innerHTML = '<label class="f">현재 개선 후 사진</label>' +
+          '<div class="thumbs"><img alt="개선 후 사진"></div>' +
+          '<button type="button" class="miniBtn warn delPhoto">사진 삭제</button>';
+        $('img', savedBox).src = it.afterPhoto;
+        $('.delPhoto', savedBox).onclick = function () {
+          if (!confirm('개선 후 사진을 삭제할까요?\n저장을 눌러야 실제로 지워집니다.')) return;
+          pendingClear = true;
+          paintPhoto();
+          noteEl.textContent = '저장을 누르면 사진이 삭제됩니다.';
+        };
+      } else {
+        savedBox.style.display = 'none';
+        savedBox.innerHTML = '';
+      }
+    }
+
+    /* ----- 지연 · NEW 표시 -----
+       판정은 전부 서버가 한 것(it.overdue·it.isNew)을 그대로 옮기기만 한다.
+       ★화면에서 M열(예정일+진행 내용)을 다시 파싱해 추측하지 않는다. 한 번이라도 멀쩡한 항목에
+         빨강이 붙으면 매장은 그다음부터 빨강 전체를 무시한다 — 없는 빨강이 틀린 빨강보다 낫다.
+       서버가 필드를 안 보내면 undefined → 거짓으로 떨어져 뱃지가 안 붙는다(같은 이유로 이게 맞다). */
+    function paintFlags() {
+      const late = !!it.overdue;
+      el.className = 'item storeItem' + (late ? ' lateItem' : '');
+      lateTag.style.display = late ? '' : 'none';
+      newTag.style.display = it.isNew ? '' : 'none';
+
+      /* '며칠 지났는지'는 날짜가 있어야 쓸 수 있는데, 그 계산도 서버 몫이다(스프레드시트 타임존).
+         서버가 예정일(due)이나 지난 일수(overdueDays)를 함께 주면 적고, 없으면 뱃지만 남긴다. */
+      const seg = [];
+      if (late && str(it.due)) seg.push('예정일 ' + dueLabel(it.due));
+      if (late && typeof it.overdueDays === 'number' && it.overdueDays > 0) seg.push(it.overdueDays + '일 지남');
+      lateNote.textContent = seg.join(' · ');   // 서버 문구가 섞이므로 textContent
+      lateNote.style.display = seg.length ? '' : 'none';
+    }
+
+    // ----- 카드 내용 채우기 (최초·저장 후·CONFLICT 후 모두 이 함수 하나를 쓴다) -----
+    function fill(next) {
+      it = next;
+      pendingClear = false;
+      const st = str(it.state) || '미조치';
+      stEl.textContent = st;
+      stEl.className = 'stTag ' + (STATE_CLASS[st] || 'todo');
+      fillDept(str(it.dept));
+      ownerIn.value = str(it.owner);
+      planIn.value = str(it.plan);
+      doneIn.value = str(it.doneNote);
+      pick.set([]);
+      paintPhoto();
+      paintFlags();
+      applyMode();
+    }
+
+    function applyMode() {
+      const w = writable();
+      [deptSel, ownerIn, planIn, doneIn].forEach(function (x) { x.disabled = !w; });
+      saveBtn.disabled = !w;
+      const btn = $('.photoBtn', pickBox);
+      if (btn) btn.disabled = !w;
+      /* 왜 저장이 안 되는지 카드마다 알려준다 — 버튼만 회색이면 고장으로 오해한다.
+         점검 문구 본문은 상단 maintNote에 한 번만 두고, 여기서는 '지금 저장이 안 된다'만 짧게 알린다. */
+      if (!w) {
+        noteEl.className = 'itemNote';
+        noteEl.textContent = maint ? '점검 중에는 저장할 수 없습니다.'
+          : (fromSnap ? '오프라인에서는 저장할 수 없습니다.' : '');
+      }
+    }
+    modes.push(applyMode);
+
+    // ----- 임시저장 -----
+    function draftNow() {
+      draftPut(it.no, {
+        rev: it.rev, dept: deptSel.value, owner: ownerIn.value,
+        plan: planIn.value, doneNote: doneIn.value,
+      });
+    }
+    [deptSel, ownerIn, planIn, doneIn].forEach(function (x) {
+      x.addEventListener('change', draftNow);
+      x.addEventListener('input', draftNow);
+    });
+
+    fill(it);
+
+    /* 임시저장은 서버 값과 rev가 같을 때만 되살린다.
+       본사가 그 사이 항목을 고쳤다면 옛 입력을 덮어씌우는 편보다 버리는 편이 안전하다. */
+    const d = draftAll()[draftKey(it.no)];
+    if (d && d.rev === it.rev) {
+      fillDept(str(d.dept));
+      ownerIn.value = str(d.owner);
+      planIn.value = str(d.plan);
+      doneIn.value = str(d.doneNote);
+      noteEl.textContent = '저장하지 않은 입력을 되살렸습니다.';
+    }
+
+    // ----- 항목별 저장 -----
+    saveBtn.onclick = async function () {
+      if (!writable()) return;
+      saveBtn.disabled = true;
+      const label = saveBtn.textContent;
+      saveBtn.textContent = '저장 중…';
+      noteEl.textContent = '';
+      noteEl.className = 'itemNote';
+
+      const body = {
+        ym: curYm, no: it.no, rev: it.rev,
+        dept: deptSel.value, owner: ownerIn.value.trim(),
+        plan: planIn.value, doneNote: doneIn.value,
+        clearPhoto: !!pendingClear,
+      };
+      if (scope.list.length > 1 && curStore) body.store = curStore;
+      const pics = pick.get();
+      if (pics.length) body.photo = { name: 'after.jpg', dataUrl: pics[0] };
+
+      let res = null;
+      try { res = await Api.call('store.saveImprove', body); } catch (e) { res = null; }
+
+      saveBtn.textContent = label;
+      saveBtn.disabled = false;
+
+      if (!res || res.code === 'NETWORK') {
+        noteEl.className = 'itemNote bad';
+        // 입력값은 임시저장에 남아 있으므로 다시 눌러도 처음부터 적을 필요가 없다
+        noteEl.textContent = '저장하지 못했습니다. 연결을 확인하고 다시 눌러 주세요.';
+        return;
+      }
+
+      if (res.ok) {
+        draftDel(it.no);
+        if (res.duplicate) { noteEl.textContent = '이미 저장된 내용입니다.'; return; }
+        if (res.item) fill(mergeItem(res.item));
+        /* 저장 응답의 summary에는 건수·개선율만 들어 있다(§7-3).
+           그대로 renderSummary에 넘기면 위생·CS·종합이 '—'로 지워진다 — 덮어쓰지 말고 겹쳐 쓴다. */
+        if (res.summary) {
+          const merged = data.summary || {};
+          Object.keys(res.summary).forEach(function (k) { merged[k] = res.summary[k]; });
+          data.summary = merged;
+          renderSummary(merged);
+        } else if (res.item) {
+          // summary가 안 왔어도 지연 건수는 방금 바뀌었을 수 있다 — 요약을 같은 값으로 다시 그린다
+          renderSummary(data.summary || {});
+        }
+        noteEl.textContent = '저장되었습니다.';
+        return;
+      }
+      if (res.code === 'CONFLICT' && res.item) {
+        /* 다른 사람이 먼저 고쳤다 — 이 카드만 서버 최신값으로 되돌린다.
+           화면 전체를 새로 그리면 다른 카드에 쓰던 내용이 함께 날아간다. */
+        draftDel(it.no);
+        fill(mergeItem(res.item));
+        renderSummary(data.summary || {});   // 남이 고친 결과로 지연 건수가 달라질 수 있다
+        noteEl.className = 'itemNote bad';
+        noteEl.textContent = str(res.error) || '다른 분이 방금 이 항목을 수정했습니다. 최신 내용을 확인해 주세요.';
+        return;
+      }
+      /* 저장을 누른 순간 점검이 걸린 경우. 화면을 비우지 않는다 —
+         적어 둔 내용을 날리는 것이 이 화면에서 가장 비싼 사고이고, 입력값은 임시저장에 남아 있다.
+         상단에 문구를 띄우고 모든 카드의 저장 버튼만 잠근다. */
+      if (res.code === 'MAINT') {
+        showMaint(str(res.error) || '지금은 점검 중입니다. 잠시 후 다시 시도해 주세요.');
+        noteEl.className = 'itemNote bad';
+        noteEl.textContent = '점검 중이라 저장하지 못했습니다. 적으신 내용은 남아 있습니다.';
+        return;
+      }
+      if (res.code === 'AUTH_REQUIRED' || res.code === 'AUTH_EXPIRED' || res.code === 'AUTH_INVALID') {
+        if (Auth.clear) Auth.clear();
+        goLogin();
+        return;
+      }
+      noteEl.className = 'itemNote bad';
+      noteEl.textContent = str(res.error) || '저장하지 못했습니다.';
+    };
+
+    return el;
+  }
+
+  await load();
+})();

@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=31">
+<link rel="stylesheet" href="css/app.css?v=32">
 </head>
 <body>
 <header class="topbar">
@@ -49,8 +49,16 @@
   <button class="qfClose" id="qfClose">닫기</button>
 </div>
 
-<script src="js/api.js?v=31"></script>
-<script src="js/codes-app.js?v=31"></script>
+<!-- auth.js는 항상 가장 먼저. 이 화면은 본사 담당자 전용 도구라 세션이 없으면
+     login.html로 보내도 안전하다 — 현장에서 오프라인으로 쓰지 않고, 작성 중이던 내용도 없다.
+     점검 2화면(qsc·shopper)도 이제 auth.js를 싣지만 그쪽은 리다이렉트 대신 제출 버튼만 잠근다.
+     차이는 '날아갈 입력이 있느냐'뿐이다.
+     ★ensure()가 아니라 guard()다 — ensure()는 세션만 확보할 뿐 화면을 옮기지 않아,
+     미로그인 사용자에게는 아무 안내 없는 빈 화면이 남는다. 리다이렉트는 guard()의 몫이다. -->
+<script src="js/auth.js?v=32"></script>
+<script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard();</script>
+<script src="js/api.js?v=32"></script>
+<script src="js/codes-app.js?v=32"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

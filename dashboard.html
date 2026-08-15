@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 화면 이름은 '순위표'로 통일한다 (명세 §16 화면 목록 · index.html 카드 문구와 동일).
+     누른 카드 이름과 들어간 화면 제목이 다르면 "다른 화면에 왔다"는 문의가 생긴다. -->
+<title>QSC 순위표 — GLOW SEOUL</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="icons/icon-192-v2.png">
+<link rel="apple-touch-icon" href="icons/icon-192-v2.png">
+<link rel="stylesheet" href="css/app.css?v=32">
+</head>
+<body>
+<!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼. 조작 버튼은 '수동 새로고침' 하나뿐이다 —
+     월 단위 데이터이고 시트 읽기 쿼터가 걸려 있어 자동 폴링을 하지 않는다. -->
+<header class="topbar">
+  <a class="back" href="index.html">←</a>
+  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">QSC 순위표 <span class="sub" id="whoInfo"></span></span></div>
+  <span class="sub" id="freshInfo"></span>
+  <button id="reloadBtn" class="resetBtn">새로고침</button>
+</header>
+
+<div class="wrap">
+  <!-- 점검 모드 안내. warnNote와 따로 두는 이유: warnNote는 표를 그릴 때마다 통째로 다시 쓰이므로
+       거기에 점검 문구를 얹으면 다음 렌더에서 조용히 지워진다. -->
+  <p class="note mockNote" id="maintNote" style="display:none"></p>
+
+  <!-- 산식 경계 경고 · 오프라인 안내가 들어간다. 평소에는 숨어 있다. -->
+  <p class="note mockNote" id="warnNote" style="display:none"></p>
+
+  <!-- 미제출 현황판. 관리자(계정 관리 권한 보유자)에게만, 그리고 기간이 '월'일 때만 그려진다.
+       기본값이 display:none인 이유: 매장 계정에게는 끝까지 한 번도 보이면 안 되고,
+       불러오기에 실패했을 때도 조용히 사라지는 것이 이 카드의 정상 동작이기 때문이다.
+       ★순위표(아래 카드)와 완전히 독립이다 — 이 카드가 실패해도 순위표는 그대로 나와야 한다. -->
+  <section class="card" id="monthCard" style="display:none">
+    <!-- 제목은 고른 기간을 따라간다. 지난달을 보고 있는데 '이번 달 진행'이라고 적혀 있으면
+         남은 매장 명단을 이번 달 것으로 오해해 매장에 잘못 연락하게 된다. -->
+    <h2 id="monthTitle">이번 달 진행</h2>
+    <div id="monthRows"></div>
+    <p class="note" id="monthNote" style="display:none"></p>
+  </section>
+
+  <section class="card">
+    <div class="meta-grid">
+      <div class="full"><label class="f">기간</label><select id="period"></select></div>
+    </div>
+    <div class="codeSum" id="stats"></div>
+  </section>
+
+  <section class="card">
+    <h2>매장 순위</h2>
+    <p class="note" id="stateNote">불러오는 중입니다…</p>
+    <div class="tableScroll">
+      <table class="sumTable" id="rankTable">
+        <thead><tr id="rankHead"></tr></thead>
+        <tbody id="rankBody"></tbody>
+      </table>
+    </div>
+    <p class="note" id="adminNote" style="display:none"></p>
+    <p class="note" id="trust"></p>
+    <p class="note">점수는 본사 집계 후 반영됩니다.</p>
+  </section>
+</div>
+
+<script src="js/auth.js?v=32"></script>
+<script src="js/api.js?v=32"></script>
+<script src="js/dashboard-app.js?v=32"></script>
+<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
+</body>
+</html>
