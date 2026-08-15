@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=32">
+<link rel="stylesheet" href="css/app.css?v=33">
 </head>
 <body>
 <div class="home">
@@ -45,6 +45,13 @@
           <input type="password" id="lpw" name="password" autocomplete="current-password">
         </div>
       </div>
+      <!-- 기본은 가려 둔다. 어깨너머로 보이는 것이 기본값이어서는 안 된다.
+           체크를 풀면 글자가 그대로 보인다 — 매장에서 받아 적은 비밀번호를 처음 칠 때
+           오타를 눈으로 확인할 수 있어야 "왜 안 들어가지"가 줄어든다. -->
+      <label class="chkRow" for="maskLogin">
+        <input type="checkbox" id="maskLogin" data-mask="lpw" checked>
+        <span>비밀번호 가리기</span>
+      </label>
       <!-- 아이디만 기기에 남긴다(qsc-login-id-v1). 비밀번호는 앱이 어디에도 저장하지 않는다 -->
       <label class="chkRow" for="rememberId">
         <input type="checkbox" id="rememberId" checked>
@@ -65,6 +72,10 @@
           <input type="password" id="np2" name="new-password-confirm" autocomplete="new-password">
         </div>
       </div>
+      <label class="chkRow" for="maskPw">
+        <input type="checkbox" id="maskPw" data-mask="np1 np2" checked>
+        <span>비밀번호 가리기</span>
+      </label>
       <p class="note">8자 이상 · 아이디와 다르게 · 발급받은 설정코드와 다르게 정해 주세요.</p>
     </div>
 
@@ -85,6 +96,10 @@
           <input type="password" id="cp2" name="new-password-confirm" autocomplete="new-password">
         </div>
       </div>
+      <label class="chkRow" for="maskChg">
+        <input type="checkbox" id="maskChg" data-mask="cp0 cp1 cp2" checked>
+        <span>비밀번호 가리기</span>
+      </label>
       <p class="note">8자 이상 · 아이디와 다르게 · 지금 비밀번호와 다르게 정해 주세요.</p>
     </div>
 
@@ -96,8 +111,8 @@
   <div class="homeFoot">GLOW SEOUL · QSC</div>
 </div>
 
-<script src="js/auth.js?v=32"></script>
-<script src="js/login-app.js?v=32"></script>
+<script src="js/auth.js?v=33"></script>
+<script src="js/login-app.js?v=33"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
