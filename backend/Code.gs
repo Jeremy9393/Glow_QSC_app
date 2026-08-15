@@ -27,9 +27,16 @@
    준비물: 위 폴더 3개 + 시트 1개. 매장별 파일 주소는 통합시트 E열 하이퍼링크에서 자동으로 읽는다
           (링크가 없는 매장만 '매장파일맵' 탭으로 보완 — 선택). */
 
-const SPREADSHEET_ID = '';   // 응답 원본 저장용 스프레드시트 ID (새로 생성)
-const PHOTO_FOLDER_ID = '';  // 사진 보관용 드라이브 폴더 ID
-const DASHBOARD_ID = '';     // '[감사총무팀_QSC] 통합시트' 스프레드시트 ID (보기 권한만 있어도 됨)
+/* 파일 ID는 코드에 적지 않는다 — 이 파일은 공개 GitHub 저장소에 올라간다.
+   앱스 스크립트 편집기에서 [프로젝트 설정] > [스크립트 속성]에 아래 세 개를 등록할 것.
+     SPREADSHEET_ID   응답 원본 저장용 'QSC 응답' 스프레드시트
+     PHOTO_FOLDER_ID  사진 보관용 '사진' 폴더
+     DASHBOARD_ID     '[감사총무팀_QSC] 통합시트'
+   (실제 ID는 로컬 문서 `1. QSC\연동_설정값.md`에 기록해 두었다 — 저장소에 올리지 말 것) */
+const PROPS = PropertiesService.getScriptProperties();
+const SPREADSHEET_ID = PROPS.getProperty('SPREADSHEET_ID') || '';
+const PHOTO_FOLDER_ID = PROPS.getProperty('PHOTO_FOLDER_ID') || '';
+const DASHBOARD_ID = PROPS.getProperty('DASHBOARD_ID') || '';
 const DASHBOARD_SHEET = '데이터';
 /* 통합시트에 점수를 직접 쓸지 여부.
    false = 매장 목록·매장시트 링크를 '읽기'만 하고, 위생·CS 점수는 관리자가 직접 입력한다.
