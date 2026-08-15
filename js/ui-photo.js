@@ -2,23 +2,51 @@
    원본을 그대로 올리면 폰 사진 한 장이 수 MB라 제출이 느려지므로, 긴 변 1280px·JPEG 80%로 줄여서 보낸다.
    저장 형식은 data:image/jpeg;base64,... 문자열 배열. */
 var PhotoPick = (function () {
-  var MAX_PX = 1280;
-  var QUALITY = 0.8;
+  /* 용량 상한제 — 해상도만 줄이면 사진 내용에 따라 크기가 들쭉날쭉해서(복잡한 매장 사진은 500KB 초과),
+     '한 장 몇 KB 이하'를 목표로 두고 품질을 낮춰가며 다시 인코딩한다.
+     드라이브 용량과 폰 업로드 시간이 예측 가능해진다. 캔버스로 다시 그리므로 위치정보(EXIF)도 함께 제거된다. */
+  var MAX_PX = 1280;                    // 긴 변 — 영수증 글씨가 읽히는 선
+  var TARGET_BYTES = 180 * 1024;        // 한 장 목표 용량
+  var QUALITY_STEPS = [0.8, 0.65, 0.5, 0.4];
+  var PX_STEPS = [1280, 1024, 800];     // 최저 품질로도 목표를 못 맞추면 해상도를 한 단계 낮춘다
+
+  function bytesOf(dataUrl) {
+    var i = dataUrl.indexOf(',') + 1;
+    return Math.round((dataUrl.length - i) * 0.75);
+  }
+  function render(img, px) {
+    var w = img.width, h = img.height;
+    if (Math.max(w, h) > px) {
+      var k = px / Math.max(w, h);
+      w = Math.round(w * k); h = Math.round(h * k);
+    }
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    var g = c.getContext('2d');
+    g.fillStyle = '#fff';               // 투명 PNG가 검게 변하는 것 방지
+    g.fillRect(0, 0, w, h);
+    g.drawImage(img, 0, 0, w, h);
+    return c;
+  }
 
   function shrink(file) {
     return new Promise(function (resolve, reject) {
       var img = new Image();
       img.onload = function () {
-        var w = img.width, h = img.height;
-        if (Math.max(w, h) > MAX_PX) {
-          var k = MAX_PX / Math.max(w, h);
-          w = Math.round(w * k); h = Math.round(h * k);
+        var best = null;
+        for (var p = 0; p < PX_STEPS.length; p++) {
+          var c = render(img, PX_STEPS[p]);
+          for (var q = 0; q < QUALITY_STEPS.length; q++) {
+            var url = c.toDataURL('image/jpeg', QUALITY_STEPS[q]);
+            best = url;
+            if (bytesOf(url) <= TARGET_BYTES) {  // 목표 달성 — 더 낮출 필요 없음
+              URL.revokeObjectURL(img.src);
+              return resolve(url);
+            }
+          }
         }
-        var c = document.createElement('canvas');
-        c.width = w; c.height = h;
-        c.getContext('2d').drawImage(img, 0, 0, w, h);
         URL.revokeObjectURL(img.src);
-        resolve(c.toDataURL('image/jpeg', QUALITY));
+        resolve(best);                  // 최저 해상도·최저 품질까지 갔을 때의 최선
       };
       img.onerror = reject;
       img.src = URL.createObjectURL(file);
@@ -93,5 +121,5 @@ var PhotoPick = (function () {
     };
   }
 
-  return { shrink: shrink, mount: mount, MAX_PX: MAX_PX };
+  return { shrink: shrink, mount: mount, MAX_PX: MAX_PX, TARGET_BYTES: TARGET_BYTES, bytesOf: bytesOf };
 })();

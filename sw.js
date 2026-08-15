@@ -1,13 +1,13 @@
 ﻿/* 오프라인 대응 서비스 워커.
    전략: 네트워크 우선(항상 최신) → 실패 시 캐시(오프라인에서도 앱 실행).
    제출(POST)과 외부 주소(앱스 스크립트)는 건드리지 않는다 — 오프라인 제출 큐는 추후. */
-const VER = 'v29';
+const VER = 'v30';
 const CACHE = 'qsc-app-' + VER;
 const ASSETS = [
   'index.html', 'qsc.html', 'shopper.html', 'survey.html', 'codes.html', 'manifest.json',
-  'css/app.css?v=29',
-  'js/scoring.js?v=29', 'js/api.js?v=29', 'js/ui-time.js?v=29', 'js/ui-photo.js?v=29',
-  'js/qsc-app.js?v=29', 'js/shopper-core.js?v=29', 'js/codes-app.js?v=29',
+  'css/app.css?v=30',
+  'js/scoring.js?v=30', 'js/api.js?v=30', 'js/ui-time.js?v=30', 'js/ui-photo.js?v=30',
+  'js/qsc-app.js?v=30', 'js/shopper-core.js?v=30', 'js/codes-app.js?v=30',
   'data/master.json', 'data/qr.json',
   'fonts/NanumSquareL.woff2', 'fonts/NanumSquareR.woff2', 'fonts/NanumSquareB.woff2', 'fonts/NanumSquareEB.woff2',
   'icons/icon-192-v2.png', 'icons/icon-512-v2.png',

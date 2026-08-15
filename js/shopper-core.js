@@ -348,8 +348,13 @@ async function initShopperForm(opts) {
       if (r.ok) {
         localStorage.removeItem(DRAFT_KEY);
         if (ADMIN) {
-          alert('저장 완료' + (r.mock ? ' (모의 저장 — 구글 연동 전)' : '') +
-            (res.score != null ? '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade : ''));
+          let done = '저장 완료' + (r.mock ? ' (모의 저장 — 구글 연동 전)' : '') +
+            (res.score != null ? '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade : '');
+          // 같은 달에 쇼퍼가 여러 명이면 통합시트에는 '월 평균'이 들어가므로 그 값을 알려준다
+          if (r.dashboard && r.dashboard.skipped && r.dashboard.monthAvg != null) {
+            done += '\n\n▶ 통합시트 CS 칸에 입력\n   ' + Number(r.dashboard.monthAvg).toFixed(1) + '% (이번 달 평균)';
+          }
+          alert(done);
           location.reload();
         } else {
           $('#formWrap').style.display = 'none';
