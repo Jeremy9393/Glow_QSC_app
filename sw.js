@@ -1,17 +1,23 @@
 ﻿/* 오프라인 대응 서비스 워커.
    전략: 네트워크 우선(항상 최신) → 실패 시 캐시(오프라인에서도 앱 실행).
    제출(POST)과 외부 주소(앱스 스크립트)는 건드리지 않는다 — 오프라인 제출 큐는 추후. */
+/* ⚠버전은 여기 한 곳만 고친다. html 쪽 ?v=N 과 숫자를 맞출 것.
+   예전엔 아래 목록에도 ?v=30 을 일일이 적어서, VER만 올리고 목록을 안 고쳐
+   새 파일이 캐시에 안 담기는 사고가 반복됐다. 이제 v()가 붙여주므로 어긋날 수 없다. */
 const VER = 'v31';
 const CACHE = 'qsc-app-' + VER;
+const QS = '?v=' + VER.slice(1); // 'v31' → '?v=31'
+function v(path) { return path + QS; }
 const ASSETS = [
   'index.html', 'qsc.html', 'shopper.html', 'survey.html', 'codes.html', 'manifest.json',
-  'css/app.css?v=30',
-  'js/scoring.js?v=30', 'js/api.js?v=30', 'js/ui-time.js?v=30', 'js/ui-photo.js?v=30',
-  'js/qsc-app.js?v=30', 'js/shopper-core.js?v=30', 'js/codes-app.js?v=30',
   'data/master.json', 'data/qr.json',
   'fonts/NanumSquareL.woff2', 'fonts/NanumSquareR.woff2', 'fonts/NanumSquareB.woff2', 'fonts/NanumSquareEB.woff2',
   'icons/icon-192-v2.png', 'icons/icon-512-v2.png',
-];
+].concat([
+  'css/app.css',
+  'js/scoring.js', 'js/api.js', 'js/ui-time.js', 'js/ui-photo.js',
+  'js/qsc-app.js', 'js/shopper-core.js', 'js/codes-app.js',
+].map(v));
 
 self.addEventListener('install', function (e) {
   e.waitUntil(
