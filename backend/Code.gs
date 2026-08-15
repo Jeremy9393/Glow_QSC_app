@@ -4455,8 +4455,7 @@ function setupAuthSheet_once() {
   out.push('  되돌리십시오. 26곳 비밀번호 설정 + 그날 저녁 첫 로그인 + 오타 재시도가 하루에');
   out.push('  몰리는데, 한도에 닿으면 "받은 비밀번호로 안 들어가진다"로만 보이고 원인이 안 뜹니다.');
 
-  const msg = out.join('
-');
+  const msg = out.join(String.fromCharCode(10));
   Logger.log(msg);
   return msg;
 }
