@@ -4390,3 +4390,25 @@ function round1(n) { return Math.round(n * 10) / 10; }
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
+
+/* 처음 한 번만 — 인증 스프레드시트를 만들고 속성에 등록한 뒤 탭까지 깔아 준다.
+   드라이브 화면에서 파일을 만들고 주소창의 긴 문자열을 복사해 속성에 붙여넣는 절차가
+   번번이 어긋나서(공백 한 칸, 잘린 ID) 코드로 끝낸다.
+   ★두 번 눌러도 안전하다★ — AUTH_SHEET_ID가 이미 있으면 새로 만들지 않고,
+     initSecrets()도 값이 있으면 덮어쓰지 않는다. */
+function setupAuthSheet_once() {
+  let id = prop('AUTH_SHEET_ID', '');
+  let made = false;
+  if (!id) {
+    id = SpreadsheetApp.create('QSC 인증').getId();
+    PROPS.setProperty('AUTH_SHEET_ID', id);
+    made = true;
+  }
+  const msg = [
+    'AUTH_SHEET_ID = ' + id + (made ? '  (새로 만듦)' : '  (이미 있던 것)'),
+    initSecrets(),
+    JSON.stringify(ensureAuthSheets()),
+  ].join('\n');
+  Logger.log(msg);
+  return msg;
+}
