@@ -4412,3 +4412,41 @@ function setupAuthSheet_once() {
   Logger.log(msg);
   return msg;
 }
+
+/* 처음 한 번만 — 설치 절차 전체를 한 번에 돌린다.
+   편집기에서 함수를 하나씩 골라 실행하는 것이 실제로 가장 잘 어긋나는 지점이라
+   (고르는 것을 잊거나, 순서를 바꾸거나, 로그를 못 보고 지나간다) 하나로 묶어 둔다.
+   ★두 번 눌러도 안전하다★ — 만들어진 것은 다시 만들지 않는다.
+   다만 설정코드는 누를 때마다 새로 발급되고 직전 코드는 무효가 된다. */
+function setupAll_once() {
+  const out = [];
+  out.push(setupAuthSheet_once());
+
+  /* 비밀번호 해시 반복수. 250ms를 넘기면 요청 1건으로 서버 시간을 태우는 증폭 공격이 되고,
+     너무 낮으면 해시가 헐거워진다. 이 기기가 아니라 앱스 스크립트 서버에서 재 보는 값이다. */
+  if (!prop('PW_ITER', '')) {
+    let best = 1000;
+    [1000, 5000, 10000, 20000].forEach(function (n) {
+      const t = Date.now();
+      pwHash('bench-salt-0000', 'benchmark-password', n);
+      if (Date.now() - t <= 250) best = n;
+    });
+    PROPS.setProperty('PW_ITER', String(best));
+    out.push('PW_ITER = ' + best + ' (250ms 이내 최대값으로 자동 설정)');
+  } else {
+    out.push('PW_ITER = ' + prop('PW_ITER', '') + ' (이미 설정됨)');
+  }
+
+  const sync = syncStoreAccountsCore();
+  out.push('매장 계정: 새로 ' + (sync.added || []).length + '개 · 건너뜀 ' +
+    (sync.skipped || []).length + '개' + (sync.error ? ' · 오류: ' + sync.error : ''));
+
+  out.push('');
+  out.push('■ 관리자 비밀번호 설정코드 (24시간): ' + issueAdminSetupCode('admin'));
+  out.push('  login.html에서 아이디 admin + 이 코드를 넣고 비밀번호를 정하십시오.');
+  out.push('  그 뒤 accounts.html에서 매장별 비밀번호를 설정해 전달하시면 됩니다.');
+
+  const msg = out.join('\n');
+  Logger.log(msg);
+  return msg;
+}
