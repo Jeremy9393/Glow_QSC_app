@@ -1,0 +1,529 @@
+/* QSC 대시보드 — 매장 순위표 (조회 전용, 2단계)
+
+   데이터 출처는 본사 통합시트 [데이터] 탭 1회 읽기다(§10-1). 앱은 계산을 하나도 하지 않는다 —
+   점수·등급·순위·가중치·개선 라벨까지 전부 서버가 정해 준 값을 그대로 그린다. 그래서 10월 산식
+   개편에도 이 파일은 한 줄도 바뀌지 않는다.
+
+   ★폴링하지 않는다. 월 단위로 갱신되는 데이터인데 26곳이 자동 갱신을 돌리면 시트 읽기 쿼터가
+     먼저 죽는다. 갱신은 topbar의 수동 새로고침뿐이다.
+   ★매장명·등급 같은 서버 문자열은 전부 textContent로 넣는다. 외부 스크립트가 0개인 것과
+     이 관례가 이 앱의 XSS 방어 전부다.
+   ★역할 이름을 비교하지 않는다. 무엇을 보여줄지는 Auth.can()·Auth.hasMenu()만 묻는다. */
+(async function () {
+  const $ = function (s, el) { return (el || document).querySelector(s); };
+
+  const SNAP = 'qsc-dash-snap-v1';   // 오프라인일 때 그려 줄 마지막 성공 응답
+
+  let loading = false;
+  let scrolled = false;   // 자기 매장 자동 스크롤은 진입 시 1회만 (기간을 바꿀 때마다 튀면 거슬린다)
+
+  /* 미제출 현황판 전용 상태.
+     msSeq — 응답 경합 방지용 일련번호. 기간을 빠르게 두 번 바꾸면 먼저 보낸 9월 응답이
+             나중에 도착해 10월 화면을 덮을 수 있다(시트를 읽는 액션이라 1~3초 걸린다).
+     msOpen — '남은 곳 N곳 보기'를 펼쳐 둔 항목. 기간이 바뀌면 초기화한다. */
+  let msSeq = 0;
+  const msOpen = { qsc: false, shopper: false };
+
+  // ---------- 작은 도구들 ----------
+
+  // 이번 달 기간 키. codes-app.js의 cycle()과 같은 계산이지만 대시보드 기간 키는 'YYYY-MM' 형식이다.
+  function curPeriod(d) {
+    d = d || new Date();
+    return String(d.getFullYear()) + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  }
+  // 'YYYY-MM' → 매장 화면이 쓰는 'YYMM'. 연간 키('YYYY')에는 월 탭이 없으므로 null.
+  function ymOf(key) {
+    const s = String(key || '');
+    return /^\d{4}-\d{2}$/.test(s) ? s.slice(2, 4) + s.slice(5, 7) : null;
+  }
+  // 점수는 소수 1자리 고정. 값이 없으면 '—' (0으로 채우지 않는다 — 조용히 틀린 숫자가 가장 위험하다)
+  function fmt1(v) { return (typeof v === 'number') ? v.toFixed(1) : '—'; }
+  /* 개선 열은 기간에 따라 '개선율(%)'이거나 '개선요청(건)'이다. 어느 쪽인지는 서버가 cols.improve
+     라벨로 정하므로 화면은 묻지 않고, 정수면 정수로 소수면 1자리로만 찍는다(조건문을 두지 않는 방법). */
+  function fmtNum(v) {
+    if (typeof v !== 'number') return '—';
+    return (v === Math.floor(v)) ? String(v) : v.toFixed(1);
+  }
+  function minsAgo(iso) {
+    const t = Date.parse(iso);
+    if (isNaN(t)) return null;
+    return Math.max(0, Math.round((Date.now() - t) / 60000));
+  }
+  function setNote(el, text) {
+    el.textContent = text || '';
+    el.style.display = text ? '' : 'none';
+  }
+
+  /* 점검 모드 — 서버 스크립트 속성 MAINT에 문구가 들어 있는 동안 모든 요청이 code:'MAINT'로 막힌다
+     (관리자 역할만 통과). 조회 전용 화면이라 잠글 버튼이 없으므로, 표를 비우고 문구만 남긴다.
+     ★스냅샷으로 덮지 않는다. 점검은 대개 숫자를 손보는 중이라는 뜻이고,
+       그때 지난달 숫자를 최신인 양 보여주는 것이 빈 표보다 훨씬 나쁘다. */
+  function showMaint(msg) {
+    setNote($('#maintNote'), msg || '');
+    if (!msg) return;
+    /* 점검 중에는 현황판도 접는다. 표를 비우는 이유(숫자를 손보는 중일 수 있다)가
+       제출 건수에도 똑같이 해당하고, 떠 있던 요청이 늦게 도착해 되살리지 못하도록 순번도 올린다. */
+    msSeq++;
+    hideMonth();
+    $('#rankBody').innerHTML = '';
+    $('#rankHead').innerHTML = '';
+    $('#stats').innerHTML = '';
+    setNote($('#adminNote'), '');
+    setNote($('#warnNote'), '');
+    $('#trust').textContent = '';
+    $('#freshInfo').textContent = '점검 중';
+    setNote($('#stateNote'), '');   // 문구는 maintNote 한 곳에만 — 같은 말을 두 번 적지 않는다
+  }
+
+  // ---------- 가드 ----------
+
+  /* 로그인 화면 주소는 직접 조립하지 않는다. ?next= 화이트리스트(Auth.NEXT_OK)가 auth.js
+     한 곳에만 있어야 화면 이름이 바뀌는 날 한 곳만 고치면 된다.
+     auth.js가 아예 안 실린 경우(캐시 사고)에만 옛 주소로 떨어진다 — 그때도 로그인은 가능해야 한다. */
+  function goLogin() {
+    let u = 'login.html?next=dashboard.html';
+    try { if (typeof Auth !== 'undefined' && Auth && typeof Auth.loginUrl === 'function') u = Auth.loginUrl(); }
+    catch (e) { /* auth.js 미로드 — 위 폴백 주소를 쓴다 */ }
+    location.replace(u);
+  }
+
+  /* 대시보드는 '리다이렉트' 가드로 충분하다(§2). 현장에서 작성 중인 입력이 없는 조회 화면이라
+     로그인 화면으로 보내도 잃는 것이 없다 — 점검표 2화면과 다른 점이 이것이다. */
+  let ok = false;
+  try { ok = await Auth.ensure(); } catch (e) { ok = false; }
+  if (!ok) { goLogin(); return; }
+
+  const me = (Auth.user && Auth.user()) || null;
+  if (me && me.name) $('#whoInfo').textContent = me.name;
+
+  if (!Auth.hasMenu('dashboard')) {
+    setNote($('#stateNote'), '순위표 열람 권한이 없습니다. 감사총무팀에 문의해 주세요.');
+    return;
+  }
+  // 매장 화면 권한이 없으면 순위표에서 링크를 걸지 않는다(눌러도 막힐 링크를 보여주지 않는다).
+  const canStore = Auth.hasMenu('store');
+  /* '미입력 매장 N곳' 배너는 통합시트에 점수를 옮겨 적는 사람에게만 의미가 있다.
+     그 사람이 누구인지는 역할 이름이 아니라 대시보드 쓰기 권한이 정한다. */
+  const isCollector = Auth.can('dashboard', '쓰기');
+
+  // ---------- 렌더 ----------
+
+  function renderPeriods(data) {
+    const sel = $('#period');
+    const list = (data.periods && data.periods.length) ? data.periods
+      : [{ key: data.period.key, label: data.period.label }];
+    sel.innerHTML = '';
+    list.forEach(function (p) {
+      const o = document.createElement('option');
+      o.value = p.key;
+      o.textContent = p.label || p.key;
+      sel.appendChild(o);
+    });
+    sel.value = data.period.key;
+    /* 서버가 실제로 응답한 기간이 periods 목록에 없으면 select가 빈칸이 된다 —
+       그 상태로 새로고침을 누르면 화면과 다른 기간을 다시 불러오게 되므로 그 항목을 끼워 넣는다. */
+    if (sel.value !== data.period.key) {
+      const o = document.createElement('option');
+      o.value = data.period.key;
+      o.textContent = data.period.label || data.period.key;
+      sel.insertBefore(o, sel.firstChild);
+      sel.value = data.period.key;
+    }
+  }
+
+  function renderStats(data) {
+    const box = $('#stats');
+    box.innerHTML = '';
+    const s = data.stats || {};
+    const pairs = [
+      ['대상', (typeof s.n === 'number') ? String(s.n) : '—'],
+      ['점검', (typeof s.scored === 'number') ? String(s.scored) : '—'],
+      ['평균', fmt1(s.avgTotal)],
+      ['최고', fmt1(s.top)],
+      ['최저', fmt1(s.bottom)],
+    ];
+    pairs.forEach(function (p) {
+      const sp = document.createElement('span');
+      const b = document.createElement('b');
+      b.textContent = p[1];
+      sp.appendChild(document.createTextNode(p[0] + ' '));
+      sp.appendChild(b);
+      box.appendChild(sp);
+    });
+
+    if (isCollector && typeof s.n === 'number' && typeof s.scored === 'number' && s.n > s.scored) {
+      setNote($('#adminNote'), '아직 점수가 입력되지 않은 매장이 ' + (s.n - s.scored) + '곳 있습니다. 통합시트에 옮겨 적으면 이 화면에 바로 반영됩니다.');
+    } else {
+      setNote($('#adminNote'), '');
+    }
+  }
+
+  function renderHead(cols, hasHC) {
+    const tr = $('#rankHead');
+    tr.innerHTML = '';
+    const heads = [['순위', false], ['매장', false]];
+    if (hasHC) { heads.push(['위생', true]); heads.push(['CS', true]); }
+    // 개선 열 머리글은 서버가 준 문자열 그대로. 화면이 의미를 해석하지 않는다.
+    heads.push([(cols && cols.improve) || '개선', true]);
+    heads.push(['종합', true]);
+    heads.push(['등급', true]);
+    heads.forEach(function (h) {
+      const th = document.createElement('th');
+      if (h[1]) th.className = 'r';
+      th.textContent = h[0];
+      tr.appendChild(th);
+    });
+  }
+
+  function td(row, text, cls) {
+    const c = document.createElement('td');
+    if (cls) c.className = cls;
+    c.textContent = text;
+    row.appendChild(c);
+    return c;
+  }
+
+  function renderRows(data, hasHC) {
+    const body = $('#rankBody');
+    body.innerHTML = '';
+    const ym = (data.period && data.period.type === 'month') ? ymOf(data.period.key) : null;
+
+    /* 서버가 이미 정렬해 주지만 화면에서도 한 번 더 내려 둔다. 미점검 매장이 순위표 중간에
+       0점으로 섞이면 그 매장에 "우리가 꼴찌"라는 잘못된 신호가 간다. */
+    const rows = (data.rows || []).slice().sort(function (a, b) {
+      const an = (a.status === 'none') ? 1 : 0, bn = (b.status === 'none') ? 1 : 0;
+      if (an !== bn) return an - bn;
+      if (an) return String(a.store).localeCompare(String(b.store));
+      return (a.rank == null ? 9999 : a.rank) - (b.rank == null ? 9999 : b.rank);
+    });
+
+    let mineRow = null;
+    rows.forEach(function (r) {
+      const tr = document.createElement('tr');
+      const none = (r.status === 'none');
+      const cls = [];
+      if (r.mine) cls.push('sum-crit');
+      if (none) cls.push('na');
+      if (cls.length) tr.className = cls.join(' ');
+
+      // 순위 — 자기 매장은 좌측 ▶로 눈에 띄게
+      const rk = document.createElement('td');
+      if (r.mine) {
+        const mk = document.createElement('span');
+        mk.className = 'mineMark';
+        mk.textContent = '▶';
+        rk.appendChild(mk);
+      }
+      rk.appendChild(document.createTextNode(typeof r.rank === 'number' ? String(r.rank) : '—'));
+      tr.appendChild(rk);
+
+      // 매장 — 자기 범위 행만 매장 화면으로 링크한다. 남의 행은 눌리지 않는다.
+      const nm = document.createElement('td');
+      nm.className = 'nm';
+      if (r.mine && canStore && ym) {
+        const a = document.createElement('a');
+        a.href = 'store.html?ym=' + encodeURIComponent(ym) + '&store=' + encodeURIComponent(r.store);
+        a.textContent = r.store;
+        nm.appendChild(a);
+      } else {
+        nm.textContent = r.store;
+      }
+      tr.appendChild(nm);
+
+      if (hasHC) {
+        td(tr, none ? '—' : fmt1(r.qsc), 'r');
+        td(tr, none ? '—' : fmt1(r.cs), 'r');
+      }
+      td(tr, none ? '—' : fmtNum(r.improve), 'r');
+
+      // 종합 — 증감은 산식 경계를 넘지 않을 때만 서버가 채워 준다(delta:null이면 아무것도 그리지 않는다)
+      const tot = document.createElement('td');
+      tot.className = 'r';
+      tot.appendChild(document.createTextNode(none ? '—' : fmt1(r.total)));
+      if (!none && typeof r.delta === 'number' && r.delta !== 0) {
+        const d = document.createElement('span');
+        d.className = 'dashDelta ' + (r.delta > 0 ? 'up' : 'down');
+        d.textContent = (r.delta > 0 ? '▲' : '▼') + Math.abs(r.delta).toFixed(1);
+        tot.appendChild(d);
+      }
+      tr.appendChild(tot);
+
+      td(tr, none ? '—' : (r.grade || '—'), 'r');
+
+      body.appendChild(tr);
+      if (r.mine && !mineRow) mineRow = tr;
+    });
+
+    if (!rows.length) setNote($('#stateNote'), '이 기간에 표시할 매장이 없습니다.');
+
+    // 자기 매장이 26행 중 어디 있든 바로 보이게. 진입 시 1회만.
+    if (mineRow && !scrolled) {
+      scrolled = true;
+      try { mineRow.scrollIntoView({ block: 'center' }); } catch (e) { /* 구형 브라우저 — 스크롤 없이도 표는 정상 */ }
+    }
+  }
+
+  function renderWarn(data, offline) {
+    const msgs = [];
+    if (offline) msgs.push('오프라인 — 마지막으로 받아둔 화면입니다.');
+
+    // 산식 경계: 10월부터 종합점수 구성이 달라져 이전 달과 그대로 비교하면 전 매장이 '개선'으로 보인다.
+    if (data && data.period && data.period.formula === 'v2') {
+      msgs.push('2026년 10월부터 산식이 바뀌었습니다(QSC 60% · CS 30% · 개선 10%). 이전 달과의 증감은 비교하지 않습니다.');
+    }
+    // 연간처럼 서버가 기간 자체에 경고를 달아 준 경우 그 문구를 그대로 보여 준다.
+    if (data && data.periods) {
+      data.periods.forEach(function (p) {
+        if (data.period && p.key === data.period.key && p.warn) msgs.push(p.warn);
+      });
+    }
+    setNote($('#warnNote'), msgs.join(' · '));
+  }
+
+  function renderTrust(data, offline) {
+    /* "왜 안 바뀌지" 문의를 없애는 한 줄. 관리자가 통합시트를 브라우저에서 직접 고치면 백엔드는
+       알 수 없고 캐시 TTL이 유일한 방어선이므로, 기준 시각을 상시 표기한다. */
+    let n = minsAgo(data && data.updatedAt);
+    if (n == null && data && typeof data.cacheAge === 'number') n = Math.round(data.cacheAge / 60);
+    const when = (n == null) ? '방금' : (n <= 0 ? '방금' : n + '분 전');
+    $('#trust').textContent = '본사 통합시트 입력 기준 · ' + when + (offline ? ' (저장된 화면)' : '');
+    $('#freshInfo').textContent = offline ? '오프라인' : when;
+  }
+
+  // ---------- 미제출 현황판 (관리자 전용) ----------
+
+  /* 이 카드를 볼 사람인가. 역할 이름을 비교하지 않는다 —
+     '남은 매장에 연락해서 받아내는 사람' = 계정 관리 화면을 쓰는 사람이므로 그 권한으로 판정한다.
+     매장 계정은 hasMenu('accounts')가 거짓이라 아래 함수들이 아예 돌지 않는다. */
+  const canMonth = Auth.hasMenu('accounts');
+
+  function hideMonth() {
+    $('#monthCard').style.display = 'none';
+    $('#monthRows').innerHTML = '';
+    setNote($('#monthNote'), '');
+  }
+
+  /* 한 줄(QSC 점검 / 미스터리쇼퍼)을 그린다.
+     seg = { done, missing }. total은 통합시트 표시 매장 수(서버가 준 값)를 그대로 쓴다. */
+  function monthRow(key, label, seg, total) {
+    const done = (seg && typeof seg.done === 'number') ? seg.done : null;
+    /* ★배열일 때만 명단으로 인정한다★ — seg가 통째로 없거나 missing이 배열이 아니면
+       '아직 모른다'이지 '남은 곳이 없다'가 아니다. 빈 배열로 뭉뚱그리면 카운트는 '— / 26'인데
+       아래 문구만 "모든 매장이 제출했습니다"가 되어, 하필 가장 위험한 방향
+       (독촉을 통째로 건너뛰는 쪽)으로 조용히 틀린다. */
+    const missing = (seg && Array.isArray(seg.missing)) ? seg.missing : null;
+
+    const row = document.createElement('div');
+    row.className = 'msRow';
+
+    const head = document.createElement('div');
+    head.className = 'msHead';
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = label;
+    head.appendChild(nm);
+    const cnt = document.createElement('b');
+    // 전 매장이 끝났을 때만 초록. 숫자를 세지 않고 색만 보고도 "다 받았다"를 알 수 있게 한다.
+    if (done != null && total > 0 && done >= total) cnt.className = 'done';
+    cnt.textContent = (done == null ? '—' : String(done)) + ' / ' + (total > 0 ? String(total) : '—');
+    head.appendChild(cnt);
+    row.appendChild(head);
+
+    const bar = document.createElement('div');
+    bar.className = 'progressbar';
+    const fill = document.createElement('div');
+    fill.className = 'fill';
+    if (done != null && total > 0) {
+      const pct = Math.max(0, Math.min(100, Math.round(done * 100 / total)));
+      fill.style.width = pct + '%';
+    }
+    bar.appendChild(fill);
+    row.appendChild(bar);
+
+    const miss = document.createElement('div');
+    miss.className = 'msMiss';
+    // 명단을 못 받았거나 건수를 못 센 응답. '모두 제출'로 읽히지 않게 못 셌다고 적는다.
+    if (!missing || done == null) {
+      miss.textContent = '제출 현황을 세지 못했습니다.';
+      row.appendChild(miss);
+      return row;
+    }
+    if (!missing.length) {
+      miss.textContent = '모든 매장이 제출했습니다.';
+      row.appendChild(miss);
+      return row;
+    }
+
+    /* 3곳 이하면 이름을 다 적는다. 그 이상이면 접는다 —
+       26곳 중 20곳이 미제출인 월초에 카드가 화면을 가득 채우면 정작 순위표가 안 보인다. */
+    function names() {
+      // 매장명은 서버 문자열이라 반드시 textContent. 가운뎃점은 이름과 헷갈리지 않는 구분자다.
+      return '남은 곳: ' + missing.join(' · ');
+    }
+    if (missing.length <= 3) {
+      miss.textContent = names();
+      row.appendChild(miss);
+      return row;
+    }
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'msMore';
+    function paint() {
+      miss.textContent = msOpen[key] ? names() : '';
+      miss.style.display = msOpen[key] ? '' : 'none';
+      btn.textContent = msOpen[key] ? '접기 ▴' : ('남은 곳 ' + missing.length + '곳 보기 ▾');
+    }
+    btn.onclick = function () { msOpen[key] = !msOpen[key]; paint(); };
+    paint();
+    row.appendChild(btn);
+    row.appendChild(miss);
+    return row;
+  }
+
+  function renderMonth(res) {
+    const box = $('#monthRows');
+    box.innerHTML = '';
+    const total = (typeof res.total === 'number') ? res.total : 0;
+    box.appendChild(monthRow('qsc', 'QSC 점검', res.qsc, total));
+    box.appendChild(monthRow('shopper', '미스터리쇼퍼', res.shopper, total));
+    setNote($('#monthNote'), '');
+    $('#monthCard').style.display = '';
+  }
+
+  /* 순위표가 보고 있는 기간을 따라 현황판을 새로 받는다.
+     ★순위표와 같은 요청에 묶지 않는다★ — status.month는 QSC 응답 시트를 따로 읽어 느리고,
+       실패도 잦다. 실패하면 카드만 조용히 사라지고 순위표는 그대로 남는 것이 이 카드의 계약이다. */
+  async function loadMonth(period, offline) {
+    if (!canMonth) return;                       // 매장 계정에게는 아예 그리지 않는다
+    // 연간·분기는 '이번 달 제출 여부'라는 개념 자체가 없다. 숨긴다.
+    const ym = (period && period.type === 'month') ? ymOf(period.key) : null;
+    if (!ym) { hideMonth(); return; }
+    // 오프라인 스냅샷을 그리는 중이면 부르지 않는다 — 어차피 실패하고, 저장해 둘 값도 아니다.
+    if (offline) { hideMonth(); return; }
+
+    const seq = ++msSeq;
+    msOpen.qsc = false; msOpen.shopper = false;   // 기간이 바뀌었으니 펼침 상태도 초기화
+
+    // 제목은 기간을 따라간다. 이번 달일 때만 '이번 달'이라고 쓴다.
+    const isNow = (period.key === curPeriod());
+    $('#monthTitle').textContent = isNow ? '이번 달 진행' : ((period.label || period.key) + ' 진행');
+
+    // 불러오는 동안 지난 기간의 숫자를 남겨 두지 않는다. 남은 매장 명단은 틀리면 바로 오연락이 된다.
+    $('#monthRows').innerHTML = '';
+    setNote($('#monthNote'), '제출 현황을 불러오는 중입니다…');
+    $('#monthCard').style.display = '';
+
+    let res = null;
+    try { res = await Api.call('status.month', { ym: ym }); }
+    catch (e) { res = null; }                     // Api 자체가 없는 경우 — 카드만 접는다
+
+    if (seq !== msSeq) return;                    // 더 최근 요청이 이미 떠났다. 이 응답은 버린다
+    /* 서버가 다른 달을 돌려주면 그리지 않는다. 늦게 온 응답을 순번으로 거르지만,
+       순번이 같아도 달이 어긋나면 그건 그릴 수 없는 값이다. */
+    if (!res || !res.ok || (res.ym && String(res.ym) !== ym)) { hideMonth(); return; }
+    renderMonth(res);
+  }
+
+  function render(data, offline) {
+    // period는 필수 필드지만, 옛 스냅샷을 그릴 때 없을 수 있어 화면이 통째로 죽지 않도록 채워 둔다.
+    if (!data.period) data.period = { key: $('#period').value || curPeriod(), label: '', type: 'month' };
+    const hasHC = !(data.cols && data.cols.hasHygieneCs === false);
+    renderPeriods(data);
+    renderStats(data);
+    renderHead(data.cols, hasHC);
+    renderRows(data, hasHC);
+    renderWarn(data, offline);
+    renderTrust(data, offline);
+    /* await하지 않는다 — 현황판은 시트를 따로 읽어 1~3초 걸린다.
+       기다리면 그 시간만큼 순위표가 늦게 뜨고, 실패하면 순위표까지 끌고 넘어진다. */
+    loadMonth(data.period, offline);
+  }
+
+  // ---------- 불러오기 ----------
+
+  function snapRead() {
+    try { return JSON.parse(localStorage.getItem(SNAP) || 'null'); } catch (e) { return null; }
+  }
+  function snapWrite(data) {
+    try { localStorage.setItem(SNAP, JSON.stringify(data)); }
+    catch (e) { /* 용량 초과 등 — 스냅샷은 편의 기능이라 실패해도 화면은 정상 */ }
+  }
+
+  function showSnapshot(reason) {
+    const snap = snapRead();
+    if (!snap) { setNote($('#stateNote'), reason); return; }
+    render(snap, true);
+    setNote($('#stateNote'), '');
+  }
+
+  async function load(key) {
+    if (loading) return;
+    loading = true;
+    $('#reloadBtn').disabled = true;
+    setNote($('#stateNote'), '불러오는 중입니다…');
+
+    const OFFMSG = '연결이 되지 않아 불러오지 못했습니다. 잠시 후 새로고침해 주세요.';
+    let res = null;
+    try {
+      res = await Api.call('dashboard.get', { period: key });
+    } catch (e) {
+      /* Api.call은 네트워크 실패를 던지지 않고 code:'NETWORK'로 돌려준다(아래에서 받는다).
+         여기까지 오는 것은 Api 자체가 없거나 예상 못 한 예외뿐이라, 그때도 화면은 비우지 않는다. */
+      showSnapshot(OFFMSG);
+      loading = false; $('#reloadBtn').disabled = false;
+      return;
+    }
+
+    loading = false;
+    $('#reloadBtn').disabled = false;
+
+    if (res && res.ok) {
+      setNote($('#stateNote'), '');
+      showMaint('');           // 정상 응답이 왔다 = 점검이 풀렸다
+      snapWrite(res);
+      render(res, false);
+      return;
+    }
+
+    /* 오류 분기는 code 상수로만 한다. 한국어 문구로 분기하면 서버가 문구를 다듬는 날 조용히 깨진다.
+       error 문구는 사용자에게 보여줄 용도로만 쓴다. */
+    const code = (res && res.code) || 'SERVER_ERROR';
+    const msg = (res && res.error) || '불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
+
+    /* NETWORK는 서버 코드가 아니라 api.js가 붙이는 클라이언트 전용 코드다(오프라인·DNS 실패).
+       ★이것을 서버 오류와 같이 취급하면 지하 매장에서 스냅샷이 뜨지 않고 오류 문구만 남는다. */
+    if (code === 'NETWORK') { showSnapshot(OFFMSG); return; }
+
+    // 점검 중. 오류가 아니므로 스냅샷도 오류 문구도 아닌, 담당자가 적어 둔 안내를 그대로 보여 준다.
+    if (code === 'MAINT') {
+      showMaint(msg || '지금은 점검 중입니다. 잠시 후 새로고침해 주세요.');
+      return;
+    }
+
+    if (code === 'AUTH_REQUIRED' || code === 'AUTH_EXPIRED' || code === 'AUTH_INVALID') {
+      /* 세션은 무기한이라(로그아웃 전까지 유지) 여기까지 오는 것은 '지금 이 사람을 끊었다'는 뜻이다:
+         비밀번호 변경(credFingerprint 변경) · 계정 상태 '중지' · TOKEN_MINV 전원 강제 로그아웃.
+         자동으로 다시 들어올 수단은 없으므로 세션을 버리고 로그인 화면을 보여 준다. */
+      Auth.clear();
+      goLogin();
+      return;
+    }
+    if (code === 'FORBIDDEN' || code === 'SCOPE_DENIED') { setNote($('#stateNote'), msg); return; }
+    if (code === 'APP_OUTDATED') { setNote($('#stateNote'), '앱을 새로 고쳐 주세요 (앱 종료 후 다시 실행)'); return; }
+    // 그 밖의 오류(RATE_LIMITED·SERVER_ERROR 등)는 서버 문구를 그대로 보여 준다.
+    // 스냅샷으로 덮지 않는다 — 오래된 숫자를 최신인 양 보여주는 것이 오류 문구보다 나쁘다.
+    setNote($('#stateNote'), msg);
+  }
+
+  // ---------- 조작 ----------
+
+  $('#period').onchange = function () { load($('#period').value); };
+  $('#reloadBtn').onclick = function () { load($('#period').value || curPeriod()); };
+
+  // 오프라인 진입이면 네트워크를 기다리지 않고 저장해 둔 화면을 먼저 그린다.
+  if (navigator.onLine === false) {
+    showSnapshot('오프라인입니다. 저장된 화면이 없어 표시할 내용이 없습니다.');
+  }
+  await load(curPeriod());
+})();

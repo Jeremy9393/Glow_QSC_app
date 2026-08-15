@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>우리 매장 QSC현황 — GLOW SEOUL</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="icons/icon-192-v2.png">
+<link rel="apple-touch-icon" href="icons/icon-192-v2.png">
+<link rel="stylesheet" href="css/app.css?v=32">
+</head>
+<body>
+<header class="topbar">
+  <a class="back" href="dashboard.html">←</a>
+  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">우리 매장 QSC현황</span></div>
+  <!-- 담당 매장이 1곳이면 선택 드롭다운을 그리지 않으므로, 어느 매장을 보고 있는지는 여기에만 남는다 -->
+  <span class="sub" id="whoInfo"></span>
+</header>
+
+<div class="wrap">
+  <!-- 점검 모드 안내. 서버 스크립트 속성 MAINT에 문구가 들어 있는 동안 그 문구를 그대로 띄운다.
+       stateNote와 따로 두는 이유: 점검은 '지금 앱이 멈춘 이유'라 다른 안내에 밀려 사라지면 안 되고,
+       점선 앰버(.mockNote)여야 회색 안내문들 사이에서 눈에 띈다. 평소에는 숨어 있다. -->
+  <p class="note mockNote" id="maintNote" style="display:none"></p>
+
+  <!-- 상태 안내(권한 없음·월 탭 없음·오프라인·조회 전용)는 전부 이 한 줄에 모은다.
+       화면 여기저기에 안내가 흩어지면 매장에서 무엇이 문제인지 못 찾는다. -->
+  <p class="note" id="stateNote" style="display:none"></p>
+
+  <section class="card" id="pickCard">
+    <div class="meta-grid">
+      <!-- 매장 선택은 담당 매장이 2곳 이상일 때만 js가 보이게 한다 (지역담당이 생기면 코드 변경 없이 나타난다) -->
+      <div class="full" id="storeBox" style="display:none">
+        <label class="f">매장</label>
+        <select id="storeSel"></select>
+      </div>
+      <div class="full">
+        <label class="f">점검 월</label>
+        <select id="ymSel"></select>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="sumCard" style="display:none">
+    <h2>요약</h2>
+    <p class="note mockNote" id="warnNote" style="display:none"></p>
+    <table class="sumTable">
+      <thead><tr><th>구분</th><th class="r">점수</th><th class="r">등급</th></tr></thead>
+      <tbody id="sumBody"></tbody>
+    </table>
+    <div class="sumFinal" id="sumFinal">—</div>
+    <div class="progressbar"><div class="fill" id="sumFill"></div></div>
+    <p class="note" id="visitNote"></p>
+  </section>
+
+  <div id="items"></div>
+  <p class="note" id="listNote"></p>
+</div>
+
+<!-- 제출 버튼이 없다. 항목마다 저장하므로 '전체 제출'이라는 동작 자체가 존재하지 않는다(§12-5) -->
+<footer class="bottombar"><div class="in">
+  <div class="bb-score">
+    <span class="big" id="bbRate">—</span>
+    <span class="prog" id="bbProg">완료 0 / 요청 0</span>
+  </div>
+  <button class="resetBtn" id="reloadBtn">전체 새로고침</button>
+</div></footer>
+
+<script src="js/auth.js?v=32"></script>
+<script src="js/api.js?v=32"></script>
+<script src="js/ui-photo.js?v=32"></script>
+<script src="js/store-app.js?v=32"></script>
+<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
+</body>
+</html>

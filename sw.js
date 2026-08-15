@@ -4,19 +4,24 @@
 /* ⚠버전은 여기 한 곳만 고친다. html 쪽 ?v=N 과 숫자를 맞출 것.
    예전엔 아래 목록에도 ?v=30 을 일일이 적어서, VER만 올리고 목록을 안 고쳐
    새 파일이 캐시에 안 담기는 사고가 반복됐다. 이제 v()가 붙여주므로 어긋날 수 없다. */
-const VER = 'v31';
+const VER = 'v32';
 const CACHE = 'qsc-app-' + VER;
-const QS = '?v=' + VER.slice(1); // 'v31' → '?v=31'
+const QS = '?v=' + VER.slice(1); // 'v32' → '?v=32'
 function v(path) { return path + QS; }
 const ASSETS = [
-  'index.html', 'qsc.html', 'shopper.html', 'survey.html', 'codes.html', 'manifest.json',
+  'index.html', 'login.html', 'qsc.html', 'shopper.html', 'survey.html',
+  'codes.html', 'dashboard.html', 'store.html', 'accounts.html', 'manifest.json',
+  /* ⚠쿼리 없이 적는다. js/login-app.js·index.html이 fetch('data/master.json', {cache:'no-store'})로
+     부르는데, caches.match는 주소가 한 글자라도 다르면 안 맞는다. 여기에 ?v=32를 붙여두면
+     설치 직후 오프라인 진입에서 매장 목록이 통째로 빈다. */
   'data/master.json', 'data/qr.json',
   'fonts/NanumSquareL.woff2', 'fonts/NanumSquareR.woff2', 'fonts/NanumSquareB.woff2', 'fonts/NanumSquareEB.woff2',
   'icons/icon-192-v2.png', 'icons/icon-512-v2.png',
 ].concat([
   'css/app.css',
-  'js/scoring.js', 'js/api.js', 'js/ui-time.js', 'js/ui-photo.js',
+  'js/auth.js', 'js/api.js', 'js/menu.js', 'js/scoring.js', 'js/ui-time.js', 'js/ui-photo.js',
   'js/qsc-app.js', 'js/shopper-core.js', 'js/codes-app.js',
+  'js/login-app.js', 'js/dashboard-app.js', 'js/store-app.js', 'js/accounts-app.js',
 ].map(v));
 
 self.addEventListener('install', function (e) {
