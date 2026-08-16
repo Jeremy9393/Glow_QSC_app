@@ -3685,8 +3685,14 @@ function setByLabel(sh, label, value) {
 function writeStoreQsc(p, photoMap) {
   const id = storeFileId(p.store);
   if (!id) return { ok: false, error: STORE_MAP_SHEET + '에 매장 없음: ' + p.store };
-  const ss = SpreadsheetApp.openById(id);
-  const tab = yymm(p.date);
+  return writeStoreQscInto(SpreadsheetApp.openById(id), p, photoMap, yymm(p.date));
+}
+
+/* 실제 기록. ★스프레드시트를 인자로 받는다★ — 사본 테스트(testStoreCopy)가 이 함수를
+   그대로 타야 "테스트는 통과했는데 실전은 다르더라"가 생기지 않는다.
+   여기서 storeFileId를 부르지 않는 것이 그 조건이다. */
+function writeStoreQscInto(ss, p, photoMap, tab) {
+  photoMap = photoMap || {};
   const sh = ss.getSheetByName(tab);
   if (!sh) return { ok: false, error: '월 탭 없음: ' + tab };
 
@@ -4242,6 +4248,51 @@ function setMaintenance(msg) {
   return out;
 }
 
+/* 월 탭 하나를 만든다. ★스프레드시트 객체를 인자로 받는다★ —
+   매장 목록으로 도는 makeMonthTabs와, 사본 하나만 만지는 테스트가 **같은 코드**를 타야
+   테스트가 의미를 갖는다. 여기서 storeFileId를 부르지 않는 것이 그 조건이다. */
+function makeMonthTabIn(ss, ym) {
+  if (ss.getSheetByName(ym)) return { mark: '·', msg: '이미 있음' };
+  const tabs = monthTabs(ss).filter(function (t) { return t < ym; });
+  if (!tabs.length) return { mark: '✗', msg: '복제할 직전 월 탭 없음' };
+  const src = ss.getSheetByName(tabs[0]);
+  const sh = src.copyTo(ss);          // 이름이 "2608의 사본"이 된다
+  sh.setName(ym);                     // ★setName 필수★
+  // ① 개선요청 표 본문
+  const bodyRng = grid(sh, 12, 2, sh.getMaxRows() - 11, 14);
+  if (bodyRng) bodyRng.clearContent();
+  // ② 라벨 옆 값 칸 중 수식이 아닌 것
+  const lm = labelMap(sh);
+  /* ★요약 건수 칸을 반드시 함께 지운다★ — 종전 목록에는 방문일·점수·등급만 있어서,
+     I5~I8이 수기인 파일은 10월 탭이 8월의 '요청 5 / 완료 4'를 안고 태어난다. 개선요청
+     표(B12 이하)는 비었는데 요약은 값이 있으므로 readStoreTab의 폴백(라벨을 못 찾을 때만
+     작동)도 걸리지 않는다 → 매장 화면에 "개선율 80%", 표는 빈 상태.
+     수식이면 아래 getFormula 검사가 어차피 건너뛴다. */
+  ['방문일', '방문일자', '점검일', '방문시간', '위생점수', 'CS점수', '종합점수',
+    '위생등급', 'CS등급', '종합등급',
+    '개선요청', '요청', '요청건수', '개선요청건수',
+    '진행', '개선진행', '진행중', '개선예정',
+    '완료', '조치완료', '개선완료', '미조치', '미이행'].forEach(function (label) {
+      const p = labelValue(lm, [label]);
+      if (!p.found || !p.row) return;
+      const c = grid(sh, p.row, p.col, 1, 1);
+      if (c && String(c.getFormula() || '') === '') c.clearContent();
+    });
+  /* ★복제된 보호 설정을 보고한다★ — copyTo는 보호까지 복제한다. 원본 탭이 보호돼 있으면
+     새 탭도 보호된 채 태어나고, store.saveImprove가 게이트·락·rev를 다 통과한 뒤
+     setValues 한 줄에서 죽어 SERVER_ERROR로만 보인다. 만드는 김에 알려주는 편이
+     26곳 전수 재감사보다 싸다. */
+  let mark = '✓';
+  let note = '';
+  try {
+    const pr = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE)
+      .concat(sh.getProtections(SpreadsheetApp.ProtectionType.SHEET));
+    const bad = pr.filter(function (x) { return !x.canEdit(); });
+    if (bad.length) { mark = '✗'; note = '  ★보호 ' + bad.length + '건 — 이 매장은 저장되지 않습니다★'; }
+  } catch (e2) { note = '  (보호 확인 실패)'; }
+  return { mark: mark, msg: tabs[0] + ' → ' + ym + note };
+}
+
 /* 월 탭 자동 생성. 직전 월 탭을 copyTo → setName → 내용만 지우기.
    ★clear()가 아니라 clearContent()★ — clear()는 병합·데이터 유효성·서식을 날려
      D:I 병합과 K열 드롭다운이 사라진다.
@@ -4259,46 +4310,8 @@ function makeMonthTabs(stores, ym, page) {
     try {
       const id = storeFileId(store);
       if (!id) { out.push('✗ ' + store + ' : 파일 ID 없음'); return; }
-      const ss = SpreadsheetApp.openById(id);
-      if (ss.getSheetByName(ym)) { out.push('· ' + store + ' : 이미 있음'); return; }
-      const tabs = monthTabs(ss).filter(function (t) { return t < ym; });
-      if (!tabs.length) { out.push('✗ ' + store + ' : 복제할 직전 월 탭 없음'); return; }
-      const src = ss.getSheetByName(tabs[0]);
-      const sh = src.copyTo(ss);          // 이름이 "2608의 사본"이 된다
-      sh.setName(ym);                     // ★setName 필수★
-      // ① 개선요청 표 본문
-      const bodyRng = grid(sh, 12, 2, sh.getMaxRows() - 11, 14);
-      if (bodyRng) bodyRng.clearContent();
-      // ② 라벨 옆 값 칸 중 수식이 아닌 것
-      const lm = labelMap(sh);
-      /* ★요약 건수 칸을 반드시 함께 지운다★ — 종전 목록에는 방문일·점수·등급만 있어서,
-         I5~I8이 수기인 파일은 10월 탭이 8월의 '요청 5 / 완료 4'를 안고 태어난다. 개선요청
-         표(B12 이하)는 비었는데 요약은 값이 있으므로 readStoreTab의 폴백(라벨을 못 찾을 때만
-         작동)도 걸리지 않는다 → 매장 화면에 "개선율 80%", 표는 빈 상태.
-         수식이면 아래 getFormula 검사가 어차피 건너뛴다. */
-      ['방문일', '방문일자', '점검일', '방문시간', '위생점수', 'CS점수', '종합점수',
-        '위생등급', 'CS등급', '종합등급',
-        '개선요청', '요청', '요청건수', '개선요청건수',
-        '진행', '개선진행', '진행중', '개선예정',
-        '완료', '조치완료', '개선완료', '미조치', '미이행'].forEach(function (label) {
-          const p = labelValue(lm, [label]);
-          if (!p.found || !p.row) return;
-          const c = grid(sh, p.row, p.col, 1, 1);
-          if (c && String(c.getFormula() || '') === '') c.clearContent();
-        });
-      /* ★복제된 보호 설정을 보고한다★ — copyTo는 보호까지 복제한다. 원본 탭이 보호돼 있으면
-         새 탭도 보호된 채 태어나고, store.saveImprove가 게이트·락·rev를 다 통과한 뒤
-         setValues 한 줄에서 죽어 SERVER_ERROR로만 보인다. 만드는 김에 알려주는 편이
-         26곳 전수 재감사보다 싸다. */
-      let mark = '✓';
-      let note = '';
-      try {
-        const pr = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE)
-          .concat(sh.getProtections(SpreadsheetApp.ProtectionType.SHEET));
-        const bad = pr.filter(function (x) { return !x.canEdit(); });
-        if (bad.length) { mark = '✗'; note = '  ★보호 ' + bad.length + '건 — 이 매장은 저장되지 않습니다★'; }
-      } catch (e2) { note = '  (보호 확인 실패)'; }
-      out.push(mark + ' ' + store + ' : ' + tabs[0] + ' → ' + ym + note);
+      const r = makeMonthTabIn(SpreadsheetApp.openById(id), ym);
+      out.push(r.mark + ' ' + store + ' : ' + r.msg);
     } catch (e) {
       out.push('✗ ' + store + ' : ' + String(e));
     }
@@ -4554,3 +4567,110 @@ function setupAuthSheet_once() {
 
 // 이름이 기억나지 않을 때를 위한 별칭. 하는 일은 위와 같다.
 function setupAll_once() { return setupAuthSheet_once(); }
+
+/* ══════════════════════════════════════════════════════════════
+   매장 시트 사본 테스트 — 원본은 열지도 쓰지도 않는다.
+
+   ★안전장치 3겹★
+     ① 사본은 이 함수가 직접 만든다(makeCopy). 원본 ID는 '복사할 원본'으로만 쓰인다
+     ② 쓰기 대상 파일 이름에 '_연동테스트'가 없으면 즉시 중단한다
+     ③ 통합시트·storeFileId를 한 번도 부르지 않는다. 실매장 파일에 닿을 경로가 없다
+
+   무엇을 보는가 (10/1 전에 확인해야 하는 것들):
+     1) 없는 월 탭이 자동으로 생기는가
+     2) 그때 D:I 병합과 K열 드롭다운이 살아남는가 (clear()였다면 날아간다)
+     3) 개선율 같은 수식이 새 탭에서도 계산되는가
+     4) 본사 기록이 B·C·D·J만 쓰고 매장 몫 K~O를 건드리지 않는가
+     5) 보호 설정이 복제돼 매장이 저장하지 못하게 되지는 않는가
+   ══════════════════════════════════════════════════════════════ */
+function testStoreCopy(srcId, ym) {
+  const SRC = srcId || '1mUSyz0ItpTa5HsUKVHWqxhD3wTobdP9xJO4NdNQ0InE'; // 금종제과_익산 (원본 — 읽기만)
+  ym = ym || '2610';
+  const out = [];
+  const TAG = '_연동테스트';
+
+  // ── 1. 사본 만들기 (없으면) ─────────────────────────────
+  let id = prop('TEST_STORE_ID', '');
+  if (!id) {
+    const copy = DriveApp.getFileById(SRC).makeCopy(
+      DriveApp.getFileById(SRC).getName() + TAG);
+    id = copy.getId();
+    PROPS.setProperty('TEST_STORE_ID', id);
+    out.push('① 사본 생성: ' + copy.getName());
+  } else {
+    out.push('① 사본 재사용: ' + id);
+  }
+
+  // ── 안전장치 ② 이름 확인 ────────────────────────────────
+  const ss = SpreadsheetApp.openById(id);
+  if (ss.getName().indexOf(TAG) < 0) {
+    const msg = '★중단★ 대상 파일 이름에 ' + TAG + '가 없습니다: ' + ss.getName();
+    Logger.log(msg);
+    return msg;
+  }
+  out.push('   대상: ' + ss.getName() + '  (원본 아님을 확인)');
+
+  // ── 2. 월 탭 자동 생성 ──────────────────────────────────
+  const before = monthTabs(ss).join(',');
+  out.push('② 탭(생성 전): ' + before);
+  const made = makeMonthTabIn(ss, ym);
+  out.push('   ' + made.mark + ' ' + made.msg);
+  const sh = ss.getSheetByName(ym);
+  if (!sh) { const m = out.join('\n'); Logger.log(m); return m; }
+
+  // ── 3. 서식이 살아남았는가 ──────────────────────────────
+  const merges = sh.getRange(11, 2, 6, 14).getMergedRanges().map(function (r) { return r.getA1Notation(); });
+  out.push('③ 11~16행 병합: ' + (merges.length ? merges.join(' ') : '없음 ★clear()로 날아갔을 수 있음★'));
+  let dv = '없음';
+  try {
+    const r = sh.getRange(12, 11); // K12 담당부서
+    dv = r.getDataValidation() ? '있음' : '없음 ★드롭다운 소실★';
+  } catch (e) { dv = '확인 실패'; }
+  out.push('   K12 담당부서 드롭다운: ' + dv);
+
+  // ── 4. 수식이 남아 계산되는가 ───────────────────────────
+  const lm = labelMap(sh);
+  ['개선요청', '개선완료', '미조치', '개선율'].forEach(function (lab) {
+    const p = labelValue(lm, [lab]);
+    if (!p.found || !p.row) { out.push('   ' + lab + ' : 라벨 못 찾음'); return; }
+    const c = sh.getRange(p.row, p.col);
+    const f = String(c.getFormula() || '');
+    out.push('   ' + lab + ' @' + c.getA1Notation() + ' : ' + (f ? '수식 ' + f.slice(0, 40) : '값 ' + c.getValue()));
+  });
+
+  // ── 5. 본사 기록이 매장 몫을 건드리지 않는가 ────────────
+  // 매장이 이미 적어 둔 것처럼 K~O에 표식을 넣어 두고, 본사 기록 뒤에 살아 있는지 본다
+  const row = 12;
+  sh.getRange(row, 11, 1, 5).setValues([['F&B 3팀', '점장', '진행중 메모', '완료 메모', '매장사진자리']]);
+  SpreadsheetApp.flush();
+  const p2 = {
+    store: '연동테스트', date: '2026-' + ym.slice(2) + '-05', time: '10:00',
+    items: [{ no: 1, code: 'A-01', group: '관리', text: '사본 테스트 문항', value: 2, severity: '', memo: '테스트' }],
+    result: {},
+  };
+  let w;
+  try { w = writeStoreQscInto(ss, p2, {}, ym); }
+  catch (e) { w = { ok: false, error: String(e) }; }
+  out.push('④ 본사 기록: ' + JSON.stringify(w));
+  const after = sh.getRange(row, 2, 1, 14).getValues()[0];
+  out.push('   12행 B~O: ' + after.map(function (v) { return String(v).slice(0, 12); }).join(' | '));
+  const keep = sh.getRange(row, 11, 1, 5).getValues()[0].join('|');
+  out.push('   매장 몫 K~O 보존: ' + (keep.indexOf('F&B 3팀') === 0 ? '✓ 그대로' : '✗ 덮어써짐 → ' + keep));
+
+  const msg = out.join('\n');
+  Logger.log(msg);
+  return msg;
+}
+
+/* 사본 정리. 다 보고 나면 이걸 눌러 휴지통으로 보낸다. */
+function testStoreCopyCleanup() {
+  const id = prop('TEST_STORE_ID', '');
+  if (!id) return '지울 사본이 없습니다.';
+  const f = DriveApp.getFileById(id);
+  if (f.getName().indexOf('_연동테스트') < 0) return '★중단★ 이름이 사본 같지 않습니다: ' + f.getName();
+  f.setTrashed(true);
+  PROPS.deleteProperty('TEST_STORE_ID');
+  const m = '사본을 휴지통으로 보냈습니다: ' + f.getName();
+  Logger.log(m);
+  return m;
+}
