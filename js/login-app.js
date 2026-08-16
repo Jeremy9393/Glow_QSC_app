@@ -112,13 +112,50 @@
   else initLogin();
 
   // ---------- ① 로그인 ----------
+  /* ★아이디의 정본은 언제나 #lid(직접 입력 칸)다★ — 드롭다운은 거기에 값을 써 넣는 장치일 뿐이다.
+     doLogin이 #lid 하나만 읽으면 되므로, 목록이 오든 안 오든 로그인 경로는 한 갈래로 남는다. */
+  const MANUAL = '__manual__';   // 매장명과 절대 겹치지 않는 값
+  let storeList = [];              // fillStores가 채운 '운영 중인 매장' 목록
+
+  function useManual(on) {
+    const box = $('#lidManual');
+    if (box) box.style.display = on ? '' : 'none';
+  }
+
+  /* #lid가 들고 있는 값을 드롭다운에 맞춰 다시 고른다.
+     목록에 있으면 그 항목을 고르고, 없으면(관리자 계정 · 아직 시트에 없는 새 매장)
+     직접 입력 칸을 열어 둔다. 목록을 아직 못 받았으면 아무것도 하지 않는다 —
+     여기서 성급히 직접 입력 칸을 열면, 잠시 뒤 목록이 도착하며 칸이 닫혀 화면이 덜컥거린다. */
+  function syncPick() {
+    const sel = $('#lidSel');
+    if (!sel) return;
+    const cur = String($('#lid').value || '').trim();
+    if (!storeList.length) return;
+    if (cur && storeList.indexOf(cur) >= 0) { sel.value = cur; useManual(false); return; }
+    if (cur) { sel.value = MANUAL; useManual(true); return; }
+    sel.value = '';
+    useManual(false);
+  }
+
   function initLogin() {
     const savedId = (function () { try { return localStorage.getItem(IDKEY) || ''; } catch (e) { return ''; } })();
     /* 체크박스 기본값은 '켬'이다. 저장되는 값은 매장명(사내 공개 정보)뿐이라 위험이 없고,
        매달 한 번 쓰는 앱에서 한글 매장명을 매번 치게 하는 편이 훨씬 나쁘다.
        공용 기기라 남기고 싶지 않으면 체크를 한 번 풀면 그때 지워진다. */
-    if (savedId) { $('#lid').value = savedId; $('#lpw').focus(); }
-    else { $('#lid').focus(); }
+    if (savedId) $('#lid').value = savedId;
+
+    const sel = $('#lidSel');
+    if (sel) {
+      sel.onchange = function () {
+        const v = sel.value;
+        if (v === MANUAL) { $('#lid').value = ''; useManual(true); $('#lid').focus(); return; }
+        $('#lid').value = v;
+        useManual(false);
+        if (v) $('#lpw').focus();
+      };
+    }
+    // 목록은 아직 오지 않았다. 도착하면 fill()이 syncPick()으로 이 값을 다시 맞춘다
+    if (savedId) $('#lpw').focus();
   }
 
   function rememberId(id) {
@@ -308,18 +345,32 @@
     // 비밀번호 변경으로 들어온 경우에는 아이디 칸이 아예 없다. 쓸데없는 왕복을 만들지 않는다
     if (mode !== 'login') return;
 
+    function opt(sel, value, text) {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = text;  // 시트에서 온 값이지만 textContent라 마크업으로 해석되지 않는다
+      sel.appendChild(o);
+    }
+
     function fill(list) {
       if (!list || !list.length) return false;
-      const dl = $('#storeIds');
-      if (!dl) return false;
-      dl.textContent = '';   // 두 번째 호출이면 갈아 끼운다
+      const sel = $('#lidSel');
+      if (!sel) return false;
+      const names = [];
       for (let i = 0; i < list.length; i++) {
         const name = String(list[i] == null ? '' : list[i]).trim();
-        if (!name) continue;
-        const o = document.createElement('option');
-        o.value = name;      // 시트에서 온 값이지만 value 대입은 마크업으로 해석되지 않는다
-        dl.appendChild(o);
+        if (name && names.indexOf(name) < 0) names.push(name);
       }
+      if (!names.length) return false;
+      storeList = names;
+      sel.textContent = '';  // 두 번째 호출이면 갈아 끼운다
+      opt(sel, '', '— 매장을 골라 주세요 —');
+      for (let i = 0; i < names.length; i++) opt(sel, names[i], names[i]);
+      /* ★'직접 입력…'을 반드시 남긴다★ — 관리자 계정(admin)은 매장 목록에 없고,
+         통합시트에 갓 추가된 매장도 캐시가 도는 동안에는 목록에 없다. 고르는 길만 두면
+         그 사람들이 들어올 방법이 사라진다. */
+      opt(sel, MANUAL, '직접 입력…');
+      syncPick();
       return true;
     }
 
@@ -359,11 +410,22 @@
        통과하고, 매장명 배열 하나만 돌려준다(naPresets는 싣지 않는다).
        ★응답 형태★ Code.gs fnConfigStores → { ok: true, stores: [매장명, …], notice?: {…} }
          config.get과 stores 칸의 모양이 같아서 fill()을 그대로 쓴다. */
+    /* ★목록을 끝내 못 받았으면 직접 입력 칸을 연다★ — 드롭다운만 있는 화면에서 목록이 비면
+       그 기기에서는 아무도 로그인할 수 없다. 목록은 편의이고 로그인은 업무다.
+       두 갈래 출구(점검 모드 return · 정상 종료)에서 모두 불러야 해서 함수로 뺐다. */
+    function settle() {
+      if (storeList.length) return;
+      const sel = $('#lidSel');
+      if (sel) { sel.textContent = ''; opt(sel, '', '— 목록을 불러오지 못했습니다 —'); }
+      useManual(true);
+    }
+
     try {
       const r = await pending;
-      if (r && r.code === 'MAINT') { showMaint(r, false); return; }
+      if (r && r.code === 'MAINT') { showMaint(r, false); settle(); return; }
       if (r && r.ok && r.stores) fill(r.stores);
     } catch (e) { /* 오프라인 등 — 위에서 채운 저장본 목록으로 충분하다 */ }
+    settle();
     /* 여기서 어떤 실패도 위로 던지지 않는 이유는 블록 첫머리 주석과 같다 —
        자동완성이 비는 것과 로그인이 되지 않는 것은 전혀 다른 사고다. */
   })();

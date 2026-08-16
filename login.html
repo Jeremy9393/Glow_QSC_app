@@ -8,17 +8,19 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=38">
+<link rel="stylesheet" href="css/app.css?v=39">
 </head>
 <body>
 <div class="home">
   <div class="homeBrand">GLOW SEOUL</div>
   <div class="homeSub">QSC 평가 시스템</div>
 
-  <!-- form으로 감싸야 모바일 키보드의 '완료'와 Enter로 제출되고,
-       브라우저·아이폰 키체인의 비밀번호 저장 제안이 뜬다.
-       그 제안이 뜨려면 username/current-password autocomplete와 name 속성이 정확해야 한다 —
-       앱은 비밀번호 원문을 어디에도 저장하지 않으므로, 매장이 매번 치지 않게 해 주는 장치는 이것뿐이다. -->
+  <!-- form으로 감싸야 모바일 키보드의 '완료'와 Enter로 제출된다.
+       ★2026-08-16에 아이디 칸의 자동완성을 껐다★ — 종전에는 name="username" +
+       autocomplete="username"으로 두어 비밀번호 관리자의 저장 제안을 받았는데, 그 대가로
+       폰에 저장된 이메일 주소가 매장 화면에 먼저 제시됐다. 아이디는 이제 <select>로 고르므로
+       그 신호가 필요 없다. 비밀번호 칸의 current-password는 그대로 두었다 — 이메일을 흘리지
+       않으면서 저장된 비밀번호는 여전히 받을 수 있다. -->
   <form class="card loginCard" id="loginForm" autocomplete="on">
     <h2 id="cardTitle">로그인</h2>
 
@@ -31,16 +33,30 @@
     <!-- 로그인 칸 -->
     <div id="stepLogin">
       <div class="meta-grid">
+        <!-- 아이디는 ★고르는 것★이지 치는 것이 아니다 (2026-08-16).
+             종전에는 <input list=storeIds> 였는데, 브라우저·비밀번호 관리자가 그 칸을
+             '아이디 칸'으로 알아보고 폰에 저장된 이메일 주소를 먼저 제안했다. 매장이 볼 화면에
+             남의 이메일이 뜨는 것이라 그대로 둘 수 없다. <select>는 자동완성 대상이 아니다.
+             ★목록은 login-app.js의 fillStores가 채운다★ — data/master.json(즉시) →
+               서버 config.stores(최신본으로 덮어쓰기). 서버 목록은 통합시트에서 숨김 행·
+               필터 행·소계 행을 이미 걸러낸 '운영 중인 매장'이다. -->
         <div class="full">
-          <label class="f" for="lid">아이디 <span class="fHint">매장명을 그대로 입력해 주세요</span></label>
-          <!-- list=storeIds : 매장 목록 자동완성. 목록은 login-app.js가 data/master.json(즉시) →
-               서버 config.stores(최신본으로 덮어쓰기) 순으로 채우고, 둘 다 되지 않으면 그냥
-               비워 둔다(직접 입력은 언제나 된다). config.get이 아니라 config.stores인 이유는
-               login-app.js의 fillStores 주석에 적어 두었다. -->
-          <input type="text" id="lid" name="username" autocomplete="username" list="storeIds"
+          <label class="f" for="lidSel">아이디 <span class="fHint">매장을 골라 주세요</span></label>
+          <select id="lidSel">
+            <option value="">— 불러오는 중… —</option>
+          </select>
+        </div>
+        <!-- 직접 입력 칸. 평소에는 접혀 있고 두 경우에만 열린다 —
+             ①드롭다운에서 '직접 입력…'을 고른 경우 ②기억된 아이디가 목록에 없는 경우(관리자 계정,
+             아직 통합시트에 없는 새 매장). ★목록을 못 받았을 때도 열린다★ — 목록이 비었다고
+             로그인 자체가 막히면 안 된다.
+             ★name을 'username'으로 두지 않는다★ — 그 이름이 곧 브라우저에게 "여기에 저장된
+               아이디를 넣어라"는 신호였다. autocomplete=off만으로는 크롬이 무시한다. -->
+        <div class="full" id="lidManual" style="display:none">
+          <label class="f" for="lid">아이디 직접 입력</label>
+          <input type="text" id="lid" name="qsc-store-id" autocomplete="off"
                  autocapitalize="none" autocorrect="off" spellcheck="false"
                  placeholder="예: 청수당 익선">
-          <datalist id="storeIds"></datalist>
         </div>
         <div class="full">
           <label class="f" for="lpw">비밀번호</label>
@@ -113,8 +129,8 @@
   <div class="homeFoot">GLOW SEOUL · QSC</div>
 </div>
 
-<script src="js/auth.js?v=38"></script>
-<script src="js/login-app.js?v=38"></script>
+<script src="js/auth.js?v=39"></script>
+<script src="js/login-app.js?v=39"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
