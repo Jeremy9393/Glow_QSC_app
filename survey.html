@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=34">
+<link rel="stylesheet" href="css/app.css?v=35">
 </head>
 <body>
 <header class="topbar">
@@ -31,13 +31,38 @@
   </div>
   <button class="submit" id="submitBtn">제출</button>
 </div></footer>
-<script src="js/scoring.js?v=34"></script>
-<script src="js/api.js?v=34"></script>
-<script src="js/ui-time.js?v=34"></script>
-<script src="js/ui-photo.js?v=34"></script>
-<script src="js/shopper-core.js?v=34"></script>
+<script src="js/scoring.js?v=35"></script>
+<script src="js/api.js?v=35"></script>
+<script src="js/ui-time.js?v=35"></script>
+<script src="js/ui-photo.js?v=35"></script>
+<script src="js/shopper-core.js?v=35"></script>
 <script>
 initShopperForm({ admin: false });
+
+/* 뒤로가기 — 이 화면만 인라인이다.
+   ★이 화면은 auth.js를 싣지 않는다★ 손님이 QR로 익명 진입하는 화면이라 그것이 설계다.
+     그래서 auth.js의 mountBack()을 쓸 수 없고, 같은 모양(.backBtn)만 여기서 직접 만든다.
+   ★앱 안쪽으로 가는 링크를 절대 만들지 않는다★ index.html 같은 본사 화면 주소를 fallback으로
+     박아두면, 손님이 뒤로가기 한 번으로 본사 앱에 들어온다. 그래서 history.back()만 부른다.
+   ★돌아갈 곳이 확실할 때만 그린다★
+     - history.length <= 1  : 돌아갈 기록이 없다(QR로 새 탭에 열린 대부분의 손님)
+     - referrer가 이 앱     : 돌아가면 본사 화면이다. 안 그리는 편이 안전하다
+     눌러도 아무 일이 없거나 위험한 버튼은 애초에 보이지 않는 것이 맞다. */
+(function () {
+  var ref = '';
+  try { ref = document.referrer || ''; } catch (e) { ref = ''; }
+  if (ref.indexOf(location.origin) === 0) return;   // 앱 안쪽에서 왔다 — 그리지 않는다
+  if (history.length <= 1) return;                  // 돌아갈 기록이 없다
+  var host = document.getElementById('formWrap');
+  if (!host) return;
+  var b = document.createElement('button');
+  b.id = 'backBottom';
+  b.type = 'button';
+  b.className = 'backBtn';
+  b.textContent = '← 뒤로';
+  b.onclick = function () { history.back(); };
+  host.appendChild(b);                              // 제출 완료 시 formWrap과 함께 사라진다
+})();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 </script>
 </body>

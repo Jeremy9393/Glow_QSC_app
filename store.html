@@ -3,17 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>우리 매장 QSC현황 — GLOW SEOUL</title>
+<title>매장 QSC현황 — GLOW SEOUL</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=34">
+<link rel="stylesheet" href="css/app.css?v=35">
 </head>
 <body>
 <header class="topbar">
-  <a class="back" href="dashboard.html">←</a>
-  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">우리 매장 QSC현황</span></div>
+  <!-- href는 '방문 기록이 없을 때만' 쓰는 대비책이다(auth.js mountBack — 평소에는 history.back()).
+       홈으로 둔다: 즐겨찾기로 이 주소를 바로 연 매장이 뒤로를 누를 때, 전 매장 점수가 늘어선
+       대시보드로 떨어지는 것보다 홈으로 가는 편이 자연스럽다. 홈은 누구에게나 열려 있다. -->
+  <a class="back" href="index.html">←</a>
+  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">매장 QSC현황</span></div>
   <!-- 담당 매장이 1곳이면 선택 드롭다운을 그리지 않으므로, 어느 매장을 보고 있는지는 여기에만 남는다 -->
   <span class="sub" id="whoInfo"></span>
 </header>
@@ -62,15 +65,15 @@
 <footer class="bottombar"><div class="in">
   <div class="bb-score">
     <span class="big" id="bbRate">—</span>
-    <span class="prog" id="bbProg">완료 0 / 요청 0</span>
+    <span class="prog" id="bbProg">완료 0 / 개선요청 0</span>
   </div>
   <button class="resetBtn" id="reloadBtn">전체 새로고침</button>
 </div></footer>
 
-<script src="js/auth.js?v=34"></script>
-<script src="js/api.js?v=34"></script>
-<script src="js/ui-photo.js?v=34"></script>
-<script src="js/store-app.js?v=34"></script>
+<script src="js/auth.js?v=35"></script>
+<script src="js/api.js?v=35"></script>
+<script src="js/ui-photo.js?v=35"></script>
+<script src="js/store-app.js?v=35"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

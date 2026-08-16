@@ -20,8 +20,11 @@ var Menu = (function () {
   var REG = [
     { key: 'qsc',       title: 'QSC 점검',            desc: '다문항 위생, 매장관리 점검표',     href: 'qsc.html',       order: 10 },
     { key: 'shopper',   title: '미스터리쇼퍼 평가표', desc: '관리자용 미스터리쇼퍼 평가표',     href: 'shopper.html',   order: 20 },
-    { key: 'dashboard', title: 'QSC 순위표',          desc: '매장별 위생·CS·개선 종합 순위',    href: 'dashboard.html', order: 30 },
-    { key: 'store',     title: '우리 매장 QSC현황',   desc: '지적 사항 확인과 개선 보고',       href: 'store.html',     order: 40 },
+    /* ★dashboard·store 문구는 2026-08-16에 바꿨다★ — '순위표'·'지적 사항'은 이 앱을 매장 사람이
+       본다는 사실과 맞지 않는다. 줄 세우기가 아니라 개선을 돕는 도구로 읽혀야 해서
+       '전체 대시보드'·'개선요청사항'으로 통일했다. index.html의 정적 카드 문구도 같이 바뀌어 있다. */
+    { key: 'dashboard', title: 'QSC 전체 대시보드',   desc: '전 매장 위생·CS·개선 현황',        href: 'dashboard.html', order: 30 },
+    { key: 'store',     title: '매장 QSC현황',        desc: '개선요청사항 확인과 개선 보고',    href: 'store.html',     order: 40 },
     { key: 'codes',     title: '제출 코드 관리',      desc: '고객 설문 QR·제출 코드 발급',      href: 'codes.html',     order: 50 },
     /* 계정 관리는 맨 아래(order 60)다. 매일 쓰는 화면이 아니라 매장에서 "로그인이 안 돼요"
        연락이 왔을 때만 여는 도구이므로, 자주 쓰는 카드를 아래로 밀지 않는다.
@@ -80,7 +83,8 @@ var Menu = (function () {
   }
 
   /* menus = 서버가 준 [{key,read,write}] 배열, nav = 카드가 담긴 컨테이너(기본 '.menu').
-     반환값 = 화면에 남은 카드 수. 0이면 호출부가 "부여된 권한이 없습니다."를 띄운다. */
+     반환값 = 화면에 남은 카드 수. 0이면 호출부(index.html)가 안내 한 줄을 띄운다 —
+     문구는 그쪽이 정본이다("아직 이용할 수 있는 화면이 없습니다. 감사총무팀에 문의해 주세요."). */
   function apply(menus, nav) {
     nav = nav || document.querySelector('.menu');
     if (!nav) return 0;
@@ -145,11 +149,18 @@ var Menu = (function () {
       // 예정일이 지난 건이 섞여 있으면 같은 숫자라도 더 급한 것이다 — 색을 채워 구분한다
       c.className = late ? 'mCount hot' : 'mCount';
       /* 숫자만 넣는다. 앞에 '●' 같은 표식을 붙이면 배지가 12px 넓어지는데,
-         375px 화면에서 '우리 매장 QSC현황' 카드는 딱 그만큼이 모자라 설명 줄이 두 줄로 접힌다
-         (실측: 배지 없음 76px → ● 포함 93px → 숫자만 76px). 빨간 알약 자체가 이미 표식이다. */
+         375px 화면에서 '매장 QSC현황' 카드는 딱 그만큼이 모자라 설명 줄이 두 줄로 접힌다
+         (실측: 배지 없음 76px → ● 포함 93px → 숫자만 76px. 제목이 '우리 매장 QSC현황'이던
+         시절의 측정값이라 지금은 여유가 더 있지만, 규칙을 되돌릴 이유는 없다).
+         빨간 알약 자체가 이미 표식이다. */
       c.textContent = String(todo);
-      // 색만으로 구분하면 흑백·색약 화면에서 사라진다. 눌러 보기 전에 이유를 알 수 있게 남긴다
-      c.title = late ? ('미완료 ' + todo + '건 · 예정일 지남 ' + late + '건') : ('미완료 ' + todo + '건');
+      /* 색만으로 구분하면 흑백·색약 화면에서 사라진다. 눌러 보기 전에 이유를 알 수 있게 남긴다.
+         ★같은 숫자를 부르는 이름을 앱 전체에서 하나로 맞춘다★ — 서버 todo의 정의는 '완료가 아닌 건'
+           인데, 이 배지만 '미완료'라 부르고 매장 화면은 '시작 전/진행/완료', 하단바는 '개선요청'이라
+           불러 세 이름이 같은 수를 가리켰다. 남은 일의 이름은 '개선요청'이다.
+         '지연'이 아니라 '예정일 지남'인 이유도 같다(store-app.js와 같은 규칙) — 늦은 사람을
+           탓하는 말이 아니라 날짜 사실만 알리는 말이어야 한다. */
+      c.title = late ? ('남은 개선요청 ' + todo + '건 · 예정일 지남 ' + late + '건') : ('남은 개선요청 ' + todo + '건');
       box.appendChild(c);
     }
     if (fresh) {

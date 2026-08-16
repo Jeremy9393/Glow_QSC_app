@@ -26,9 +26,12 @@ const Auth = (function () {
 
   const NHIDE = 'qsc-notice-hide';   // 사용자가 ✕로 닫은 공지 id (계약: 문구가 바뀌면 id가 달라져 다시 뜬다)
   const NLAST = 'qsc-notice-last';   // 마지막으로 받은 공지. 다음 진입에서 왕복을 기다리지 않고 바로 그리기 위한 사본
-  /* 공지는 이 두 액션의 응답에만 실려 온다. 다른 액션 응답에 notice가 없다는 이유로
-     배너를 내리면, notify.badge 한 번에 멀쩡한 공지가 사라진다. */
-  const NOTICE_ACTIONS = { 'auth.session': 1, 'config.get': 1 };
+  /* 공지는 이 세 액션의 응답에만 실려 온다. 다른 액션 응답에 notice가 없다는 이유로
+     배너를 내리면, notify.badge 한 번에 멀쩡한 공지가 사라진다.
+     ★config.stores를 함께 적어 둔다★ — 로그인 벽을 켠 뒤 로그인 화면이 매장 목록을 받는
+       경로가 config.get에서 config.stores로 바뀌었다. 여기에 안 적으면 공지가 실려 와도
+       배너가 안 뜨고, 게다가 autoNotice가 같은 요청을 1.5초 뒤에 한 번 더 보낸다. */
+  const NOTICE_ACTIONS = { 'auth.session': 1, 'config.get': 1, 'config.stores': 1 };
 
   // api.js가 없을 때만 쓰는 폴백 주소. 재배포는 '배포 관리 > 수정'으로 — 주소가 바뀌면 안 된다
   const FALLBACK_URL = 'https://script.google.com/macros/s/AKfycbyBwNdYNbvgw6R3d6tiqrYTURJnKrI0Jw-MZtZGlfJDegoUUMnzbOzrsbh-AscHT_xBiw/exec';
@@ -85,8 +88,8 @@ const Auth = (function () {
   /* 이 기기에 실제로 저장할 수 있는가. 사파리 사생활 모드·저장소 차단·용량 초과에서 거짓이 된다.
      ★있어야 하는 이유★ — session()은 예외를 삼키고 null을 돌려주므로, 화면에서는
        '로그아웃 상태'와 '저장소가 막혀서 알 수 없는 상태'가 똑같이 보인다. 그 둘을 같게 다루면 —
-       ① 홈의 로그인 벽(LOGIN_GATE)을 켜는 날, 로그인 화면으로 보내고 → 로그인에 성공해도
-          세션을 남기지 못해 → 다시 로그인 화면으로 돌아오는 무한 왕복이 된다.
+       ① 홈의 로그인 벽(LOGIN_GATE)은 v35에서 켜졌다. 이 판정이 없으면 로그인 화면으로 보내고
+          → 로그인에 성공해도 세션을 남기지 못해 → 다시 로그인 화면으로 돌아오는 무한 왕복이 된다.
        ② qsc.html·shopper.html의 '부드러운 가드'가 제출 버튼을 잠근다. 두 파일의 주석은
           "알 수 없으면 절대 잠그지 않는다"고 약속하지만, token()이 예외를 던지지 않고 ''을
           돌려주기 때문에 실제로는 '로그아웃'으로 판정해 잠근다. 아이폰은 홈 화면에 설치하지
@@ -99,6 +102,27 @@ const Auth = (function () {
       localStorage.setItem('qsc-probe', '1');
       localStorage.removeItem('qsc-probe');
       return true;
+    } catch (e) { return false; }
+  }
+
+  /* 세션이 이 기기에 '실제로 남았는가'. storageOk()와 목적이 다르다 —
+     그쪽은 1바이트 probe라, 저장소가 거의 찬 기기에서는 참을 돌려주면서도
+     정작 세션(수백 바이트)은 용량 초과로 못 쓰는 경우가 있다.
+     ★이 함수가 필요한 이유★ — save()는 저장 실패를 삼키고 메모리 사본으로 계속한다.
+       그 상태로 홈으로 넘어가면 페이지가 새로 로드되며 메모리 사본이 사라지고,
+       세션이 없으니 로그인 벽이 다시 로그인 화면으로 보낸다 — 로그인은 매번 성공하는데
+       화면만 왕복하는, 사용자가 원인을 절대 알 수 없는 상태가 된다.
+       그래서 로그인 직후 '남았는지'를 눈으로 확인하고 안내할 수 있어야 한다.
+     SKEY를 아는 곳을 이 파일 하나로 유지하려고 여기에 둔다(호출부가 키를 베끼지 않게). */
+  function saved() {
+    try {
+      const s = session();
+      if (!s || !s.t) return false;
+      /* 키가 '있는지'가 아니라 '지금 들고 있는 토큰이 실제로 적혔는지'를 본다.
+         용량 초과는 옛 기록을 지우지 않으므로, 키 존재만 보면 죽은 옛 세션을 보고
+         "잘 저장됐다"고 답하게 된다. */
+      const raw = JSON.parse(localStorage.getItem(SKEY) || 'null');
+      return !!(raw && raw.t === s.t);
     } catch (e) { return false; }
   }
 
@@ -310,14 +334,74 @@ const Auth = (function () {
   function loginUrl() {
     return 'login.html?next=' + encodeURIComponent(here());
   }
+  /* 권한이 없는 화면에 들어왔을 때. ★빈 화면으로 두지 않는다★ —
+     주소를 직접 치거나 옛 즐겨찾기로 들어오면 화면 뼈대만 남고 아무것도 안 뜨는데,
+     매장 입장에서는 '앱이 고장났다'로 읽혀 그대로 문의가 온다. 왜 안 보이는지 말해 준다.
+     ★alert()를 쓰지 않는다★ — 확인을 누르기 전까지 화면이 멈춰 있고, 그 뒤로 권한 없는
+       화면의 표·버튼이 그대로 비쳐 보인다. 본문을 안내 한 줄로 갈아 끼우고 홈으로 보낸다.
+     ★문구를 고르는 기준★ — '거부되었습니다' 같은 말을 쓰지 않는다. 잘못한 사람이 없는
+       상황이고, 이 앱은 매장 직원이 보는 화면이다. 사실만 담담하게 적는다.
+     이것은 안내를 앞당기는 장치일 뿐 보안이 아니다 — 진짜 차단은 서버 등록표(ACTIONS)와
+     can()이 한다. 카드를 손으로 되살려도 데이터는 한 톨도 나오지 않는다. */
+  function denyHome(msg) {
+    const text = msg || '이 화면을 볼 수 있는 권한이 없습니다. 홈으로 이동합니다.';
+    whenReady(function () {
+      const host = document.querySelector('.wrap') || document.querySelector('.home') || document.body;
+      host.textContent = '';                 // 뼈대를 지운다(상단바는 .wrap 밖이라 그대로 남는다)
+      const p = document.createElement('p');
+      p.className = 'note denyNote';
+      p.textContent = text;                  // 호출부가 넘긴 문구도 사용자 데이터로 다룬다
+      host.appendChild(p);
+    });
+    /* 읽을 틈을 준다. 즉시 replace하면 안내가 지나간 줄도 모르고 홈으로 튕긴 것처럼 보인다.
+       replace라서 뒤로 가기로 이 화면에 다시 들어올 수도 없다. */
+    setTimeout(function () { location.replace('index.html'); }, 1800);
+    return false;
+  }
+
+  /* 화면 파일명 → 그 화면이 필요로 하는 메뉴 키.
+     ★왜 화면이 아니라 여기서 정하는가★ — codes.html·accounts.html은 Auth.guard()를 인자
+       없이 부르고 있어 '로그인했는가'만 본다. 특히 codes-app.js에는 권한 검사가 한 줄도
+       없어서, 로그인한 매장 계정이 주소만 치면 제출 코드 관리 화면이 그대로 열린다
+       (서버 데이터는 나가지 않지만, '매장 사람이 관리자 화면에 들어올 수 없어야 한다'는
+       요구에는 정면으로 어긋난다). 화면마다 인자를 적어 넣는 것이 정석이지만 —
+       적는 것을 잊는 화면이 반드시 하나 생기고, 그 하나가 이번 같은 구멍이 된다.
+       주소가 곧 화면이므로 표를 여기 한 곳에 두면 새로 만드는 화면도 자동으로 보호된다.
+     ★인자를 명시하면 언제나 그쪽이 이긴다★ — 화면이 자기 사정을 더 잘 안다(쓰기 권한 등).
+     ★index.html·login.html은 일부러 넣지 않는다★ — 홈은 권한이 하나도 없는 계정에게도
+       열려야 "아직 이용할 수 있는 화면이 없습니다" 안내를 볼 자리가 남는다.
+     ★qsc.html·shopper.html도 일부러 넣지 않는다★ — 그 두 화면은 guard()를 아예 부르지
+       않는 것이 설계다(리다이렉트 금지). 표에 적어 두면 언젠가 누가 guard()를 부르는 순간
+       현장에서 작성 중이던 74문항이 통째로 날아간다. 적지 않는 것이 안전장치다. */
+  const MENU_BY_PAGE = {
+    'codes.html': 'codes',
+    'dashboard.html': 'dashboard',
+    'store.html': 'store',
+    'accounts.html': 'accounts',
+  };
+
   /* 리다이렉트형 가드. codes.html·dashboard.html·store.html·accounts.html 전용이다.
      qsc.html·shopper.html에서는 절대 쓰지 말 것 — 현장에서 작성 중인 내용이 날아간다.
      그 두 화면은 auth.js를 싣되(토큰을 붙여야 관리자 본인의 제출이 막히지 않는다)
-     Auth.session()을 직접 보고 제출 버튼만 잠그는 '부드러운 가드'를 쓴다. */
-  async function guard() {
+     Auth.session()을 직접 보고 제출 버튼만 잠그는 '부드러운 가드'를 쓴다.
+
+     menu를 넘기면 로그인 여부에 더해 '그 화면 권한이 있는가'까지 본다.
+     ★인자를 생략하면 위 MENU_BY_PAGE에서 지금 화면의 키를 찾아 같은 검사를 한다★
+       (표에 없는 화면 = 홈·로그인 = 종전과 똑같이 로그인 여부만 본다).
+     act는 '읽기'|'쓰기'이며 생략하면 읽기다. 역할 이름은 여기서도 비교하지 않는다. */
+  async function guard(menu, act) {
     const ok = await ensure();
-    if (!ok) location.replace(loginUrl());
-    return ok;
+    if (!ok) { location.replace(loginUrl()); return false; }
+    /* hasOwnProperty로 감싼다 — 그냥 [ ]로 꺼내면 주소가 /toString·/constructor일 때
+       프로토타입의 함수가 나와 can()에 엉뚱한 값이 들어간다(서버 actionSpec과 같은 규칙). */
+    const page = location.pathname.split('/').pop() || '';
+    const key = menu
+      || (Object.prototype.hasOwnProperty.call(MENU_BY_PAGE, page) ? MENU_BY_PAGE[page] : '');
+    /* ★menus()가 null이면 막지 않는다★ — '권한이 0개'와 '아직 모른다'는 다르다.
+       사본을 못 읽었다는 이유로 담당자를 홈으로 튕기면, 저장소가 비워진 아이폰에서
+       그날 점검이 통째로 막힌다. 모르면 통과시키고 판정은 서버에 맡긴다. */
+    if (key && menus() && !can(key, act)) return denyHome();
+    return true;
   }
   function logout() {
     clear();
@@ -419,9 +503,9 @@ const Auth = (function () {
 
   /* 화면이 열릴 때 자동으로 한 번.
      ① 사본이 있으면 즉시 그린다(왕복 0회).
-     ② 이번 로드에서 auth.session·config.get 응답을 아직 못 봤을 때만 가볍게 한 번 물어본다.
-        홈·로그인·매장현황은 이미 그 두 액션을 부르므로 여기서 왕복이 늘지 않고,
-        나머지 화면(점검·쇼퍼·순위표·계정)만 요청 하나가 는다.
+     ② 이번 로드에서 공지를 실어 오는 액션의 응답을 아직 못 봤을 때만 가볍게 한 번 물어본다.
+        홈·로그인·매장현황은 이미 그런 액션을 부르므로 여기서 왕복이 늘지 않고,
+        나머지 화면(점검·쇼퍼·전체 대시보드·계정)만 요청 하나가 는다.
      실패는 전부 무시한다 — 공지가 안 뜨는 것과 화면이 안 열리는 것은 비교할 일이 아니다. */
   function autoNotice() {
     mountNotice();
@@ -429,8 +513,12 @@ const Auth = (function () {
       if (noticeSeen) return;
       if (navigator.onLine === false) return;   // 오프라인이면 실패할 왕복을 만들지 않는다
       const t = token();
-      // 토큰이 있으면 가벼운 auth.session, 없으면 익명으로 통과하는 config.get
-      post(t ? 'auth.session' : 'config.get', {}, t);
+      /* 토큰이 있으면 가벼운 auth.session, 없으면 익명으로 통과하는 config.stores.
+         ★config.get이 아니다★ — 그쪽은 서버 등록표에서 legacy라 AUTH_ENFORCE='on'이면
+           토큰 없이는 거절된다. 로그인 벽을 켠 지금, 토큰이 없는 화면에서 config.get을
+           부르면 응답에 notice가 실리지 않아 로그인 화면에서 공지가 영영 안 뜬다.
+           config.stores는 anon이라 인증과 무관하게 통과하고 공지를 함께 실어 준다. */
+      post(t ? 'auth.session' : 'config.stores', {}, t);
     }, 1500);
   }
 
@@ -461,31 +549,35 @@ const Auth = (function () {
     bar.appendChild(b);
   }
   /* 뒤로가기.
-     ★상단바의 ←만으로는 부족하다★ — QSC 점검은 74문항, 매장현황은 지적 건수만큼 길어서
+     ★상단바의 ←만으로는 부족하다★ — QSC 점검은 74문항, 매장현황은 개선요청 건수만큼 길어서
        뒤로 가려면 맨 위까지 스크롤해 올라가야 한다. 그래서 본문 맨 아래에도 같은 버튼을 둔다.
-     ★href가 아니라 실제 방문 기록으로 돌아간다★ — 매장현황은 순위표에서도, 홈에서도 들어온다.
-       href를 박아 두면 홈에서 들어온 사람이 순위표로 튕긴다. 온 곳으로 돌려보내는 것이 맞다.
-       단 로그인 화면에서 온 경우는 예외다(돌아가면 다시 홈으로 튕겨 제자리다).
-     ★.back이 없는 화면(홈·로그인)에는 만들지 않는다★ — 돌아갈 곳이 없는 화면이다. */
-  function goBack(fallback) {
+     ★href가 아니라 실제 방문 기록으로 돌아간다★ — 매장현황은 전체 대시보드에서도, 홈에서도
+       들어온다. href를 박아 두면 홈에서 들어온 사람이 대시보드로 튕긴다.
+       온 곳으로 돌려보내는 것이 맞다.
+       단 로그인 화면에서 온 경우는 예외다(돌아가면 다시 홈으로 튕겨 제자리다). */
+
+  /* 실제로 돌아갈 곳이 있는가. 두 조건을 모두 본다 —
+       ① 직전 화면이 같은 출처의 다른 화면일 것(로그인 화면과 지금 이 화면은 제외)
+       ② 기록이 실제로 쌓여 있을 것
+     ★홈·로그인에서 이 판정이 특히 중요하다★ — 그 두 화면에는 돌려보낼 fallback이 없다.
+       홈에서 index.html로 보내면 제자리이고, 로그인에서 홈으로 보내면 벽에 다시 튕긴다.
+       그래서 이 함수가 거짓이면 버튼을 아예 그리지 않는다(눌러도 아무 일 없는 버튼이 최악이다). */
+  function canGoBack() {
     const ref = document.referrer || '';
     const inside = ref.indexOf(location.origin) === 0 && ref.indexOf('login.html') < 0
       && ref.split('#')[0] !== location.href.split('#')[0];
-    if (inside && history.length > 1) history.back();
-    else location.href = fallback;
+    return inside && history.length > 1;
+  }
+  function goBack(fallback) {
+    if (canGoBack()) { history.back(); return; }
+    /* fallback이 없으면(홈·로그인) 아무 데도 보내지 않는다. 버튼을 그린 뒤에 기록이
+       사라지는 경우(bfcache 복원 등)가 있어 이 갈래가 필요하다 — 그때 index.html로
+       보내 버리면 로그인 화면에서 누른 사람이 벽에 튕겨 다시 로그인 화면으로 돌아온다. */
+    if (fallback) location.href = fallback;
   }
 
-  function mountBack() {
-    const top = document.querySelector('.topbar .back');
-    if (!top) return;                       // 홈·로그인·고객설문 — 돌아갈 곳이 없다
-    const fallback = top.getAttribute('href') || 'index.html';
-
-    // 상단: 화살표만 있던 것에 글자를 붙여 누를 곳을 넓힌다 (폰에서 19px 화살표는 너무 작다)
-    if (top.textContent.trim() === '←') top.textContent = '← 뒤로';
-    top.onclick = function (e) { e.preventDefault(); goBack(fallback); };
-
-    // 하단: 본문 맨 끝. 긴 화면에서 위로 올라가지 않아도 되게
-    const host = document.querySelector('.wrap');
+  // 본문 맨 끝(또는 before 앞)에 전폭 '← 뒤로'. 두 번 불러도 하나만 생긴다
+  function backBottom(host, before, fallback) {
     if (!host || document.getElementById('backBottom')) return;
     const b = document.createElement('button');
     b.id = 'backBottom';
@@ -493,7 +585,39 @@ const Auth = (function () {
     b.className = 'backBtn';
     b.textContent = '← 뒤로';
     b.onclick = function () { goBack(fallback); };
-    host.appendChild(b);
+    // insertBefore는 기준 노드가 직계 자식이 아니면 예외를 던진다 — 아니면 그냥 맨 끝에 붙인다
+    if (before && before.parentNode === host) host.insertBefore(b, before);
+    else host.appendChild(b);
+  }
+
+  function mountBack() {
+    const top = document.querySelector('.topbar .back');
+    if (top) {
+      const fallback = top.getAttribute('href') || 'index.html';
+      // 상단: 화살표만 있던 것에 글자를 붙여 누를 곳을 넓힌다 (폰에서 19px 화살표는 너무 작다)
+      if (top.textContent.trim() === '←') top.textContent = '← 뒤로';
+      top.onclick = function (e) { e.preventDefault(); goBack(fallback); };
+      // 하단: 본문 맨 끝. 긴 화면에서 위로 올라가지 않아도 되게
+      backBottom(document.querySelector('.wrap'), null, fallback);
+      return;
+    }
+
+    /* 상단바가 없는 화면 = 홈·로그인(고객설문은 auth.js를 아예 싣지 않는다).
+       여기는 '돌아갈 곳'이 정해져 있지 않으므로 fallback 없이 방문 기록만 쓴다.
+       기록이 없으면 버튼을 그리지 않는다 — 돌아갈 곳이 없는데 버튼만 있으면
+       "눌러도 아무 반응이 없다"는 문의가 된다. */
+    if (!canGoBack()) return;
+    /* 로그인 화면에서 '로그아웃 상태'라면 돌아가 봐야 그 화면이 다시 로그인 벽에 튕겨
+       제자리로 온다 — 사용자 눈에는 "눌렀는데 아무 일도 안 난다"로 보인다.
+       비밀번호 변경(?mode=changepw)으로 들어온 경우는 세션이 있어 정상 동작하고,
+       화면 아래 안내도 "바꾸지 않으시려면 뒤로 가기를 눌러 주세요"라 버튼이 꼭 필요하다. */
+    if ((location.pathname.split('/').pop() || '') === 'login.html' && !session()) return;
+    const home = document.querySelector('.home');
+    if (!home) return;
+    /* .home에는 .wrap이 없다. .homeFoot이 margin-top:auto로 화면 아래에 붙어 있으므로
+       그 앞에 넣어야 버튼이 본문 끝(카드 바로 아래)에 놓인다. 그냥 append하면
+       로그아웃·버전 표시보다 더 아래로 내려가 화면 맨 끝에 떨어진다. */
+    backBottom(home, home.querySelector('.homeFoot'), '');
   }
 
   whenReady(function () { mountLogout(); mountBack(); autoNotice(); });
@@ -501,12 +625,13 @@ const Auth = (function () {
   return {
     NEXT_OK: NEXT_OK,
     normId: normId,
-    session: session, save: save, clear: clear, storageOk: storageOk,
+    session: session, save: save, clear: clear, storageOk: storageOk, saved: saved,
     token: token, user: user, stores: stores,
     can: can, hasMenu: hasMenu, menus: menus,
-    ensure: ensure, relogin: relogin, guard: guard, sync: sync, logout: logout,
+    ensure: ensure, relogin: relogin, guard: guard, denyHome: denyHome, sync: sync, logout: logout,
     login: login, post: post, endpoint: endpoint,
     safeNext: safeNext, loginUrl: loginUrl, mountLogout: mountLogout, mountBack: mountBack,
+    canGoBack: canGoBack, goBack: goBack,
     notice: notice, mountNotice: mountNotice, maint: maint,
   };
 })();

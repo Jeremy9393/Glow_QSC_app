@@ -1,8 +1,13 @@
-/* QSC 대시보드 — 매장 순위표 (조회 전용, 2단계)
+/* QSC 전체 대시보드 — 전 매장 현황 (조회 전용, 2단계)
 
    데이터 출처는 본사 통합시트 [데이터] 탭 1회 읽기다(§10-1). 앱은 계산을 하나도 하지 않는다 —
-   점수·등급·순위·가중치·개선 라벨까지 전부 서버가 정해 준 값을 그대로 그린다. 그래서 10월 산식
+   점수·등급·정렬 순서·가중치·개선 라벨까지 전부 서버가 정해 준 값을 그대로 그린다. 그래서 10월 산식
    개편에도 이 파일은 한 줄도 바뀌지 않는다.
+
+   ★등수를 화면에 찍지 않는다★ — 서버는 rank를 계속 내려주고 정렬에도 쓰지만, '1위·2위' 열은
+     두지 않는다. 이 화면은 점장·직원이 함께 보는 화면이고, 줄 세우기로 읽히는 순간
+     "우리가 몇 등이냐"가 목적이 되어 정작 개선요청사항을 안 보게 된다.
+     같은 이유로 요약 줄에 '최고·최저'를 적지 않는다 — 특정 매장을 지목하는 숫자다.
 
    ★폴링하지 않는다. 월 단위로 갱신되는 데이터인데 26곳이 자동 갱신을 돌리면 시트 읽기 쿼터가
      먼저 죽는다. 갱신은 topbar의 수동 새로고침뿐이다.
@@ -96,11 +101,22 @@
   const me = (Auth.user && Auth.user()) || null;
   if (me && me.name) $('#whoInfo').textContent = me.name;
 
-  if (!Auth.hasMenu('dashboard')) {
-    setNote($('#stateNote'), '순위표 열람 권한이 없습니다. 감사총무팀에 문의해 주세요.');
+  /* 권한이 없는 계정이 주소를 직접 쳐서 들어온 경우.
+     ★빈 화면으로 두지 않는다★ — 이유를 모른 채 뼈대만 보면 "앱이 고장났다"는 문의가 되고,
+       그 사이 다른 주소를 눌러 보게 된다. 이유를 한 줄 보여 준 뒤 홈으로 돌려보낸다.
+     안내 문구와 이동은 auth.js의 denyHome() 한 곳에 모아 두었다(전 화면이 같은 말을 쓰게).
+     구버전 auth.js가 캐시에 남아 그 함수가 없을 때만 이 화면이 직접 적는다.
+     ★menus()가 null이면 막지 않는다★ — '권한이 0개'와 '아직 모른다'는 다르다(auth.js guard와 같은 규칙).
+       사본을 못 읽었다는 이유로 담당자를 홈으로 튕기면 안 된다. 모르면 통과시키고 판정은 서버가 한다.
+     이것은 안내를 앞당기는 장치일 뿐 보안이 아니다 — 진짜 차단은 서버 ACTIONS 등록표와 can()이다. */
+  const menusKnown = (typeof Auth.menus === 'function') ? Auth.menus() : null;
+  if (menusKnown && !Auth.hasMenu('dashboard')) {
+    if (typeof Auth.denyHome === 'function') { Auth.denyHome(); return; }
+    setNote($('#stateNote'), '이 화면을 볼 수 있는 권한이 없습니다. 홈으로 이동합니다.');
+    setTimeout(function () { location.replace('index.html'); }, 1800);
     return;
   }
-  // 매장 화면 권한이 없으면 순위표에서 링크를 걸지 않는다(눌러도 막힐 링크를 보여주지 않는다).
+  // 매장 화면 권한이 없으면 표에서 링크를 걸지 않는다(눌러도 막힐 링크를 보여주지 않는다).
   const canStore = Auth.hasMenu('store');
   /* '미입력 매장 N곳' 배너는 통합시트에 점수를 옮겨 적는 사람에게만 의미가 있다.
      그 사람이 누구인지는 역할 이름이 아니라 대시보드 쓰기 권한이 정한다. */
@@ -135,12 +151,13 @@
     const box = $('#stats');
     box.innerHTML = '';
     const s = data.stats || {};
+    /* ★'최고·최저'는 적지 않는다★ — 표를 보면 누구인지 바로 알 수 있는 숫자라, 요약 줄에 올리는
+       순간 매달 두 매장을 지목하는 게시판이 된다. 서버는 s.top·s.bottom을 계속 주지만 쓰지 않는다.
+       평균만 남긴다 — 우리 매장이 어디쯤인지 가늠하는 데는 평균 하나면 충분하다. */
     const pairs = [
       ['대상', (typeof s.n === 'number') ? String(s.n) : '—'],
       ['점검', (typeof s.scored === 'number') ? String(s.scored) : '—'],
       ['평균', fmt1(s.avgTotal)],
-      ['최고', fmt1(s.top)],
-      ['최저', fmt1(s.bottom)],
     ];
     pairs.forEach(function (p) {
       const sp = document.createElement('span');
@@ -161,7 +178,9 @@
   function renderHead(cols, hasHC) {
     const tr = $('#rankHead');
     tr.innerHTML = '';
-    const heads = [['순위', false], ['매장', false]];
+    /* 첫 열은 '매장'이다. 등수 열을 두지 않는다 —
+       점수 순 정렬만으로도 비교는 되고, 숫자를 찍는 순간 그것이 이 화면의 주제가 된다. */
+    const heads = [['매장', false]];
     if (hasHC) { heads.push(['위생', true]); heads.push(['CS', true]); }
     // 개선 열 머리글은 서버가 준 문자열 그대로. 화면이 의미를 해석하지 않는다.
     heads.push([(cols && cols.improve) || '개선', true]);
@@ -188,8 +207,9 @@
     body.innerHTML = '';
     const ym = (data.period && data.period.type === 'month') ? ymOf(data.period.key) : null;
 
-    /* 서버가 이미 정렬해 주지만 화면에서도 한 번 더 내려 둔다. 미점검 매장이 순위표 중간에
-       0점으로 섞이면 그 매장에 "우리가 꼴찌"라는 잘못된 신호가 간다. */
+    /* 서버가 이미 정렬해 주지만 화면에서도 한 번 더 내려 둔다. 아직 점검하지 않은 매장이 표 중간에
+       0점으로 섞이면, 점검을 안 한 것뿐인데 점수가 낮은 것처럼 보인다.
+       ★r.rank는 정렬에만 쓰고 화면에는 찍지 않는다★ — 서버가 계속 내려주지만 열로 만들지 않는다. */
     const rows = (data.rows || []).slice().sort(function (a, b) {
       const an = (a.status === 'none') ? 1 : 0, bn = (b.status === 'none') ? 1 : 0;
       if (an !== bn) return an - bn;
@@ -206,27 +226,26 @@
       if (none) cls.push('na');
       if (cls.length) tr.className = cls.join(' ');
 
-      // 순위 — 자기 매장은 좌측 ▶로 눈에 띄게
-      const rk = document.createElement('td');
+      /* 매장 — 첫 열이다(등수 열은 없앴다).
+         ★자기 매장 ▶ 표시는 남긴다★ — 26행에서 자기 줄을 찾는 용도이지 등수를 알리는 표시가 아니다.
+           그래서 '내 순위' 같은 문구는 어디에도 쓰지 않고, 표식만 조용히 앞에 붙인다.
+         자기 범위 행만 매장 화면으로 링크한다. 남의 행은 눌리지 않는다.
+         ★textContent로 덮지 않고 노드로 붙인다★ — ▶를 먼저 넣어 두었으므로 덮으면 표식이 지워진다. */
+      const nm = document.createElement('td');
+      nm.className = 'nm';
       if (r.mine) {
         const mk = document.createElement('span');
         mk.className = 'mineMark';
         mk.textContent = '▶';
-        rk.appendChild(mk);
+        nm.appendChild(mk);
       }
-      rk.appendChild(document.createTextNode(typeof r.rank === 'number' ? String(r.rank) : '—'));
-      tr.appendChild(rk);
-
-      // 매장 — 자기 범위 행만 매장 화면으로 링크한다. 남의 행은 눌리지 않는다.
-      const nm = document.createElement('td');
-      nm.className = 'nm';
       if (r.mine && canStore && ym) {
         const a = document.createElement('a');
         a.href = 'store.html?ym=' + encodeURIComponent(ym) + '&store=' + encodeURIComponent(r.store);
-        a.textContent = r.store;
+        a.textContent = r.store;      // 매장명은 서버 문자열 — 반드시 textContent
         nm.appendChild(a);
       } else {
-        nm.textContent = r.store;
+        nm.appendChild(document.createTextNode(r.store));
       }
       tr.appendChild(nm);
 
@@ -355,7 +374,7 @@
     }
 
     /* 3곳 이하면 이름을 다 적는다. 그 이상이면 접는다 —
-       26곳 중 20곳이 미제출인 월초에 카드가 화면을 가득 채우면 정작 순위표가 안 보인다. */
+       26곳 중 20곳이 미제출인 월초에 카드가 화면을 가득 채우면 정작 현황 표가 안 보인다. */
     function names() {
       // 매장명은 서버 문자열이라 반드시 textContent. 가운뎃점은 이름과 헷갈리지 않는 구분자다.
       return '남은 곳: ' + missing.join(' · ');
@@ -391,9 +410,9 @@
     $('#monthCard').style.display = '';
   }
 
-  /* 순위표가 보고 있는 기간을 따라 현황판을 새로 받는다.
-     ★순위표와 같은 요청에 묶지 않는다★ — status.month는 QSC 응답 시트를 따로 읽어 느리고,
-       실패도 잦다. 실패하면 카드만 조용히 사라지고 순위표는 그대로 남는 것이 이 카드의 계약이다. */
+  /* 현황 표가 보고 있는 기간을 따라 현황판을 새로 받는다.
+     ★현황 표와 같은 요청에 묶지 않는다★ — status.month는 QSC 응답 시트를 따로 읽어 느리고,
+       실패도 잦다. 실패하면 카드만 조용히 사라지고 현황 표는 그대로 남는 것이 이 카드의 계약이다. */
   async function loadMonth(period, offline) {
     if (!canMonth) return;                       // 매장 계정에게는 아예 그리지 않는다
     // 연간·분기는 '이번 달 제출 여부'라는 개념 자체가 없다. 숨긴다.
@@ -436,7 +455,7 @@
     renderWarn(data, offline);
     renderTrust(data, offline);
     /* await하지 않는다 — 현황판은 시트를 따로 읽어 1~3초 걸린다.
-       기다리면 그 시간만큼 순위표가 늦게 뜨고, 실패하면 순위표까지 끌고 넘어진다. */
+       기다리면 그 시간만큼 현황 표가 늦게 뜨고, 실패하면 현황 표까지 끌고 넘어진다. */
     loadMonth(data.period, offline);
   }
 

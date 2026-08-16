@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=34">
+<link rel="stylesheet" href="css/app.css?v=35">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼.
@@ -66,11 +66,14 @@
     <details id="auditBox">
       <summary class="foldHead">감사로그 보기</summary>
       <div class="foldBody">
-        <p class="note">로그인·거부·모든 저장 기록입니다. 성공한 조회는 남지 않습니다. 최근 100건만 보여 드립니다.</p>
+        <p class="note">로그인·권한·모든 저장 기록입니다. 성공한 조회는 남지 않습니다. 최근 100건만 보여 드립니다.</p>
         <div class="bcAct auditBar">
+          <!-- 서버 조건(onlyDenied)은 '결과가 성공이 아닌 줄'이다. id·값은 계약이라 그대로 두고
+               ★보이는 문구만★ 순화한다 — '거부'는 감사로그 시트에 실제로 적히는 값이라
+               화면 라벨과 시트 값이 굳이 같을 필요가 없다. -->
           <label class="chkRow" for="onlyDenied">
             <input type="checkbox" id="onlyDenied">
-            <span>거부된 것만 보기</span>
+            <span>막힌 기록만 보기</span>
           </label>
           <button class="miniBtn" id="auditReload" type="button">새로고침</button>
         </div>
@@ -93,11 +96,15 @@
 <!-- auth.js는 항상 가장 먼저. 이 화면은 본사 담당자 전용 도구라 세션이 없으면
      login.html로 보내도 안전하다 (점검 2화면과 달리 현장에서 오프라인으로 쓰지 않는다).
      ★ensure()가 아니라 guard()다 — ensure()는 세션만 확보할 뿐 화면을 옮기지 않아,
-     미로그인 사용자에게는 아무 안내 없는 빈 화면이 남는다. 리다이렉트는 guard()의 몫이다. -->
-<script src="js/auth.js?v=34"></script>
-<script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard();</script>
-<script src="js/api.js?v=34"></script>
-<script src="js/accounts-app.js?v=34"></script>
+     미로그인 사용자에게는 아무 안내 없는 빈 화면이 남는다. 리다이렉트는 guard()의 몫이다.
+     ★메뉴 키를 넘긴다★ (2026-08-16 지시 §4) — 인자 없는 guard()는 '로그인했는가'만 보므로,
+     매장 계정이 이 주소를 직접 치면 accounts-app.js가 다 돈 뒤에야 막혔다. 키를 주면
+     앱 스크립트가 실리기 전에 안내 후 홈으로 간다. 권한 사본이 없을 때(menus()===null)는
+     guard가 막지 않으므로, accounts-app.js 쪽 판정도 그대로 남겨 두 겹으로 둔다. -->
+<script src="js/auth.js?v=35"></script>
+<script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts');</script>
+<script src="js/api.js?v=35"></script>
+<script src="js/accounts-app.js?v=35"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

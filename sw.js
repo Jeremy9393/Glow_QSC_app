@@ -4,15 +4,15 @@
 /* ⚠버전은 여기 한 곳만 고친다. html 쪽 ?v=N 과 숫자를 맞출 것.
    예전엔 아래 목록에도 ?v=30 을 일일이 적어서, VER만 올리고 목록을 안 고쳐
    새 파일이 캐시에 안 담기는 사고가 반복됐다. 이제 v()가 붙여주므로 어긋날 수 없다. */
-const VER = 'v34';
+const VER = 'v35';
 const CACHE = 'qsc-app-' + VER;
-const QS = '?v=' + VER.slice(1); // 'v34' → '?v=34'
+const QS = '?v=' + VER.slice(1); // 'v35' → '?v=35'
 function v(path) { return path + QS; }
 const ASSETS = [
   'index.html', 'login.html', 'qsc.html', 'shopper.html', 'survey.html',
   'codes.html', 'dashboard.html', 'store.html', 'accounts.html', 'manifest.json',
   /* ⚠쿼리 없이 적는다. js/login-app.js·index.html이 fetch('data/master.json', {cache:'no-store'})로
-     부르는데, caches.match는 주소가 한 글자라도 다르면 안 맞는다. 여기에 ?v=34를 붙여두면
+     부르는데, caches.match는 주소가 한 글자라도 다르면 안 맞는다. 여기에 ?v=35를 붙여두면
      설치 직후 오프라인 진입에서 매장 목록이 통째로 빈다. */
   'data/master.json', 'data/qr.json',
   'fonts/NanumSquareL.woff2', 'fonts/NanumSquareR.woff2', 'fonts/NanumSquareB.woff2', 'fonts/NanumSquareEB.woff2',
@@ -61,7 +61,16 @@ self.addEventListener('fetch', function (e) {
     }).catch(function () {
       // 오프라인 — 마지막으로 받아둔 사본으로 실행
       return caches.match(e.request).then(function (m) {
-        return m || caches.match('index.html');
+        if (m) return m;
+        /* ★사본이 없을 때 index.html로 떨어지는 것은 '화면 이동'에만 해당한다★
+           종전에는 모든 요청에 index.html(HTML)을 200으로 돌려줬다. 그래서 v34→v35처럼
+           버전이 바뀌는 날, 새 index.html은 네트워크에서 받았는데 js/auth.js?v=35는 아직
+           캐시에 없는 기기가 스크립트 대신 HTML을 받아 문법 오류를 내고 Auth가 통째로
+           사라졌다 — 하필 로그인 벽을 켜는 그날 가장 잘 나는 사고다.
+           스크립트·스타일은 '없으면 없는 것'이 맞다. 그래야 화면이 구버전 대비 갈래
+           (Auth 미로드 시 종전대로 진행)로 정상 동작한다. */
+        if (e.request.mode === 'navigate') return caches.match('index.html');
+        return Response.error();
       });
     })
   );
