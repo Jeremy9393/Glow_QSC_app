@@ -12,7 +12,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=36">
+<link rel="stylesheet" href="css/app.css?v=37">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼. 조작 버튼은 '수동 새로고침' 하나뿐이다 —
@@ -32,17 +32,9 @@
   <!-- 산식 경계 경고 · 오프라인 안내가 들어간다. 평소에는 숨어 있다. -->
   <p class="note mockNote" id="warnNote" style="display:none"></p>
 
-  <!-- 미제출 현황판. 관리자(계정 관리 권한 보유자)에게만, 그리고 기간이 '월'일 때만 그려진다.
-       기본값이 display:none인 이유: 매장 계정에게는 끝까지 한 번도 보이면 안 되고,
-       불러오기에 실패했을 때도 조용히 사라지는 것이 이 카드의 정상 동작이기 때문이다.
-       ★현황 표(아래 카드)와 완전히 독립이다 — 이 카드가 실패해도 현황 표는 그대로 나와야 한다. -->
-  <section class="card" id="monthCard" style="display:none">
-    <!-- 제목은 고른 기간을 따라간다. 지난달을 보고 있는데 '이번 달 진행'이라고 적혀 있으면
-         남은 매장 명단을 이번 달 것으로 오해해 매장에 잘못 연락하게 된다. -->
-    <h2 id="monthTitle">이번 달 진행</h2>
-    <div id="monthRows"></div>
-    <p class="note" id="monthNote" style="display:none"></p>
-  </section>
+  <!-- '이번 달 진행'(미제출 현황판) 카드가 여기 있었다. 2026-08-16 제거.
+       서버의 status.month 액션과 css/app.css의 .msRow/.msHead/.progressbar/.msMiss/.msMore는
+       지우지 않고 남겨 두었다 — 되살릴 때 이 자리에 카드만 다시 넣으면 된다. -->
 
   <section class="card">
     <div class="meta-grid">
@@ -68,9 +60,9 @@
   </section>
 </div>
 
-<script src="js/auth.js?v=36"></script>
-<script src="js/api.js?v=36"></script>
-<script src="js/dashboard-app.js?v=36"></script>
+<script src="js/auth.js?v=37"></script>
+<script src="js/api.js?v=37"></script>
+<script src="js/dashboard-app.js?v=37"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

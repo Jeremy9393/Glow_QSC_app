@@ -22,13 +22,6 @@
   let loading = false;
   let scrolled = false;   // 자기 매장 자동 스크롤은 진입 시 1회만 (기간을 바꿀 때마다 튀면 거슬린다)
 
-  /* 미제출 현황판 전용 상태.
-     msSeq — 응답 경합 방지용 일련번호. 기간을 빠르게 두 번 바꾸면 먼저 보낸 9월 응답이
-             나중에 도착해 10월 화면을 덮을 수 있다(시트를 읽는 액션이라 1~3초 걸린다).
-     msOpen — '남은 곳 N곳 보기'를 펼쳐 둔 항목. 기간이 바뀌면 초기화한다. */
-  let msSeq = 0;
-  const msOpen = { qsc: false, shopper: false };
-
   // ---------- 작은 도구들 ----------
 
   // 이번 달 기간 키. codes-app.js의 cycle()과 같은 계산이지만 대시보드 기간 키는 'YYYY-MM' 형식이다.
@@ -66,10 +59,6 @@
   function showMaint(msg) {
     setNote($('#maintNote'), msg || '');
     if (!msg) return;
-    /* 점검 중에는 현황판도 접는다. 표를 비우는 이유(숫자를 손보는 중일 수 있다)가
-       제출 건수에도 똑같이 해당하고, 떠 있던 요청이 늦게 도착해 되살리지 못하도록 순번도 올린다. */
-    msSeq++;
-    hideMonth();
     $('#rankBody').innerHTML = '';
     $('#rankHead').innerHTML = '';
     $('#stats').innerHTML = '';
@@ -309,141 +298,6 @@
     $('#freshInfo').textContent = offline ? '오프라인' : when;
   }
 
-  // ---------- 미제출 현황판 (관리자 전용) ----------
-
-  /* 이 카드를 볼 사람인가. 역할 이름을 비교하지 않는다 —
-     '남은 매장에 연락해서 받아내는 사람' = 계정 관리 화면을 쓰는 사람이므로 그 권한으로 판정한다.
-     매장 계정은 hasMenu('accounts')가 거짓이라 아래 함수들이 아예 돌지 않는다. */
-  const canMonth = Auth.hasMenu('accounts');
-
-  function hideMonth() {
-    $('#monthCard').style.display = 'none';
-    $('#monthRows').innerHTML = '';
-    setNote($('#monthNote'), '');
-  }
-
-  /* 한 줄(QSC 점검 / 미스터리쇼퍼)을 그린다.
-     seg = { done, missing }. total은 통합시트 표시 매장 수(서버가 준 값)를 그대로 쓴다. */
-  function monthRow(key, label, seg, total) {
-    const done = (seg && typeof seg.done === 'number') ? seg.done : null;
-    /* ★배열일 때만 명단으로 인정한다★ — seg가 통째로 없거나 missing이 배열이 아니면
-       '아직 모른다'이지 '남은 곳이 없다'가 아니다. 빈 배열로 뭉뚱그리면 카운트는 '— / 26'인데
-       아래 문구만 "모든 매장이 제출했습니다"가 되어, 하필 가장 위험한 방향
-       (독촉을 통째로 건너뛰는 쪽)으로 조용히 틀린다. */
-    const missing = (seg && Array.isArray(seg.missing)) ? seg.missing : null;
-
-    const row = document.createElement('div');
-    row.className = 'msRow';
-
-    const head = document.createElement('div');
-    head.className = 'msHead';
-    const nm = document.createElement('span');
-    nm.className = 'nm';
-    nm.textContent = label;
-    head.appendChild(nm);
-    const cnt = document.createElement('b');
-    // 전 매장이 끝났을 때만 초록. 숫자를 세지 않고 색만 보고도 "다 받았다"를 알 수 있게 한다.
-    if (done != null && total > 0 && done >= total) cnt.className = 'done';
-    cnt.textContent = (done == null ? '—' : String(done)) + ' / ' + (total > 0 ? String(total) : '—');
-    head.appendChild(cnt);
-    row.appendChild(head);
-
-    const bar = document.createElement('div');
-    bar.className = 'progressbar';
-    const fill = document.createElement('div');
-    fill.className = 'fill';
-    if (done != null && total > 0) {
-      const pct = Math.max(0, Math.min(100, Math.round(done * 100 / total)));
-      fill.style.width = pct + '%';
-    }
-    bar.appendChild(fill);
-    row.appendChild(bar);
-
-    const miss = document.createElement('div');
-    miss.className = 'msMiss';
-    // 명단을 못 받았거나 건수를 못 센 응답. '모두 제출'로 읽히지 않게 못 셌다고 적는다.
-    if (!missing || done == null) {
-      miss.textContent = '제출 현황을 세지 못했습니다.';
-      row.appendChild(miss);
-      return row;
-    }
-    if (!missing.length) {
-      miss.textContent = '모든 매장이 제출했습니다.';
-      row.appendChild(miss);
-      return row;
-    }
-
-    /* 3곳 이하면 이름을 다 적는다. 그 이상이면 접는다 —
-       26곳 중 20곳이 미제출인 월초에 카드가 화면을 가득 채우면 정작 현황 표가 안 보인다. */
-    function names() {
-      // 매장명은 서버 문자열이라 반드시 textContent. 가운뎃점은 이름과 헷갈리지 않는 구분자다.
-      return '남은 곳: ' + missing.join(' · ');
-    }
-    if (missing.length <= 3) {
-      miss.textContent = names();
-      row.appendChild(miss);
-      return row;
-    }
-
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'msMore';
-    function paint() {
-      miss.textContent = msOpen[key] ? names() : '';
-      miss.style.display = msOpen[key] ? '' : 'none';
-      btn.textContent = msOpen[key] ? '접기 ▴' : ('남은 곳 ' + missing.length + '곳 보기 ▾');
-    }
-    btn.onclick = function () { msOpen[key] = !msOpen[key]; paint(); };
-    paint();
-    row.appendChild(btn);
-    row.appendChild(miss);
-    return row;
-  }
-
-  function renderMonth(res) {
-    const box = $('#monthRows');
-    box.innerHTML = '';
-    const total = (typeof res.total === 'number') ? res.total : 0;
-    box.appendChild(monthRow('qsc', 'QSC 점검', res.qsc, total));
-    box.appendChild(monthRow('shopper', '미스터리쇼퍼', res.shopper, total));
-    setNote($('#monthNote'), '');
-    $('#monthCard').style.display = '';
-  }
-
-  /* 현황 표가 보고 있는 기간을 따라 현황판을 새로 받는다.
-     ★현황 표와 같은 요청에 묶지 않는다★ — status.month는 QSC 응답 시트를 따로 읽어 느리고,
-       실패도 잦다. 실패하면 카드만 조용히 사라지고 현황 표는 그대로 남는 것이 이 카드의 계약이다. */
-  async function loadMonth(period, offline) {
-    if (!canMonth) return;                       // 매장 계정에게는 아예 그리지 않는다
-    // 연간·분기는 '이번 달 제출 여부'라는 개념 자체가 없다. 숨긴다.
-    const ym = (period && period.type === 'month') ? ymOf(period.key) : null;
-    if (!ym) { hideMonth(); return; }
-    // 오프라인 스냅샷을 그리는 중이면 부르지 않는다 — 어차피 실패하고, 저장해 둘 값도 아니다.
-    if (offline) { hideMonth(); return; }
-
-    const seq = ++msSeq;
-    msOpen.qsc = false; msOpen.shopper = false;   // 기간이 바뀌었으니 펼침 상태도 초기화
-
-    // 제목은 기간을 따라간다. 이번 달일 때만 '이번 달'이라고 쓴다.
-    const isNow = (period.key === curPeriod());
-    $('#monthTitle').textContent = isNow ? '이번 달 진행' : ((period.label || period.key) + ' 진행');
-
-    // 불러오는 동안 지난 기간의 숫자를 남겨 두지 않는다. 남은 매장 명단은 틀리면 바로 오연락이 된다.
-    $('#monthRows').innerHTML = '';
-    setNote($('#monthNote'), '제출 현황을 불러오는 중입니다…');
-    $('#monthCard').style.display = '';
-
-    let res = null;
-    try { res = await Api.call('status.month', { ym: ym }); }
-    catch (e) { res = null; }                     // Api 자체가 없는 경우 — 카드만 접는다
-
-    if (seq !== msSeq) return;                    // 더 최근 요청이 이미 떠났다. 이 응답은 버린다
-    /* 서버가 다른 달을 돌려주면 그리지 않는다. 늦게 온 응답을 순번으로 거르지만,
-       순번이 같아도 달이 어긋나면 그건 그릴 수 없는 값이다. */
-    if (!res || !res.ok || (res.ym && String(res.ym) !== ym)) { hideMonth(); return; }
-    renderMonth(res);
-  }
-
   function render(data, offline) {
     // period는 필수 필드지만, 옛 스냅샷을 그릴 때 없을 수 있어 화면이 통째로 죽지 않도록 채워 둔다.
     if (!data.period) data.period = { key: $('#period').value || curPeriod(), label: '', type: 'month' };
@@ -454,9 +308,6 @@
     renderRows(data, hasHC);
     renderWarn(data, offline);
     renderTrust(data, offline);
-    /* await하지 않는다 — 현황판은 시트를 따로 읽어 1~3초 걸린다.
-       기다리면 그 시간만큼 현황 표가 늦게 뜨고, 실패하면 현황 표까지 끌고 넘어진다. */
-    loadMonth(data.period, offline);
   }
 
   // ---------- 불러오기 ----------
