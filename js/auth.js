@@ -576,48 +576,37 @@ const Auth = (function () {
     if (fallback) location.href = fallback;
   }
 
-  // 본문 맨 끝(또는 before 앞)에 전폭 '← 뒤로'. 두 번 불러도 하나만 생긴다
-  function backBottom(host, before, fallback) {
-    if (!host || document.getElementById('backBottom')) return;
+  /* 상단바가 없는 화면(홈·로그인)에 왼쪽 위 화살표만 얹는다.
+     ★큰 버튼을 따로 만들지 않는다★ — 사용자가 원한 것은 '왼쪽 상단의 작은 화살표'다.
+       본문에 전폭 버튼을 넣으면 화면마다 덩어리가 하나씩 늘고, 눌러야 할 것이 많아 보인다. */
+  function floatBack() {
+    if (document.getElementById('backFloat')) return;
     const b = document.createElement('button');
-    b.id = 'backBottom';
+    b.id = 'backFloat';
     b.type = 'button';
-    b.className = 'backBtn';
-    b.textContent = '← 뒤로';
-    b.onclick = function () { goBack(fallback); };
-    // insertBefore는 기준 노드가 직계 자식이 아니면 예외를 던진다 — 아니면 그냥 맨 끝에 붙인다
-    if (before && before.parentNode === host) host.insertBefore(b, before);
-    else host.appendChild(b);
+    b.className = 'backFloat';
+    b.textContent = '←';
+    b.setAttribute('aria-label', '뒤로');
+    b.onclick = function () { goBack(''); };
+    document.body.appendChild(b);
   }
 
+  /* 뒤로가기는 왼쪽 위 화살표 하나로 끝낸다.
+     상단바가 있는 화면은 이미 그 자리에 ←가 있으므로 동작만 바꿔 주고(주소 대신 방문 기록),
+     상단바가 없는 화면(홈·로그인)에는 같은 자리에 떠 있는 화살표를 얹는다. */
   function mountBack() {
     const top = document.querySelector('.topbar .back');
     if (top) {
       const fallback = top.getAttribute('href') || 'index.html';
-      // 상단: 화살표만 있던 것에 글자를 붙여 누를 곳을 넓힌다 (폰에서 19px 화살표는 너무 작다)
-      if (top.textContent.trim() === '←') top.textContent = '← 뒤로';
       top.onclick = function (e) { e.preventDefault(); goBack(fallback); };
-      // 하단: 본문 맨 끝. 긴 화면에서 위로 올라가지 않아도 되게
-      backBottom(document.querySelector('.wrap'), null, fallback);
       return;
     }
-
-    /* 상단바가 없는 화면 = 홈·로그인(고객설문은 auth.js를 아예 싣지 않는다).
-       여기는 '돌아갈 곳'이 정해져 있지 않으므로 fallback 없이 방문 기록만 쓴다.
-       기록이 없으면 버튼을 그리지 않는다 — 돌아갈 곳이 없는데 버튼만 있으면
-       "눌러도 아무 반응이 없다"는 문의가 된다. */
+    /* 홈·로그인은 '돌아갈 곳'이 정해져 있지 않으므로 방문 기록만 쓴다.
+       기록이 없으면 그리지 않는다 — 눌러도 아무 일이 없는 화살표는 없는 편이 낫다. */
     if (!canGoBack()) return;
-    /* 로그인 화면에서 '로그아웃 상태'라면 돌아가 봐야 그 화면이 다시 로그인 벽에 튕겨
-       제자리로 온다 — 사용자 눈에는 "눌렀는데 아무 일도 안 난다"로 보인다.
-       비밀번호 변경(?mode=changepw)으로 들어온 경우는 세션이 있어 정상 동작하고,
-       화면 아래 안내도 "바꾸지 않으시려면 뒤로 가기를 눌러 주세요"라 버튼이 꼭 필요하다. */
+    /* 로그아웃 상태의 로그인 화면에서는 돌아가 봐야 로그인 벽에 다시 튕겨 제자리다. */
     if ((location.pathname.split('/').pop() || '') === 'login.html' && !session()) return;
-    const home = document.querySelector('.home');
-    if (!home) return;
-    /* .home에는 .wrap이 없다. .homeFoot이 margin-top:auto로 화면 아래에 붙어 있으므로
-       그 앞에 넣어야 버튼이 본문 끝(카드 바로 아래)에 놓인다. 그냥 append하면
-       로그아웃·버전 표시보다 더 아래로 내려가 화면 맨 끝에 떨어진다. */
-    backBottom(home, home.querySelector('.homeFoot'), '');
+    floatBack();
   }
 
   whenReady(function () { mountLogout(); mountBack(); autoNotice(); });

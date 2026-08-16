@@ -414,16 +414,13 @@ details[open] > .foldHead::before { content: '▾ '; }
 .msHead b.done { color: var(--ok); }                         /* 미제출 현황 — 전 매장 완료 */
 
 /* ---------- v33: 뒤로가기 ---------- */
-/* 상단바 ← 는 19px 화살표뿐이라 폰에서 누를 곳이 너무 좁았다.
-   글자를 붙이고 최소 44px(손가락 기준)을 확보한다. */
-.topbar .back {
-  display: inline-flex; align-items: center; min-height: 40px;
-  padding: 0 10px 0 4px; font-size: 13.5px; white-space: nowrap;
+/* 왼쪽 위 화살표 하나로 끝낸다. 본문에 큰 버튼을 따로 두지 않는다.
+   화살표 자체는 작게 두되, 눌리는 영역만 40px로 넓혀 폰에서 빗나가지 않게 한다. */
+.topbar .back { display: inline-flex; align-items: center; min-height: 40px; padding: 0 10px 0 2px; }
+/* 상단바가 없는 화면(홈·로그인·고객설문)에서 같은 자리에 뜨는 화살표 */
+.backFloat {
+  position: fixed; top: calc(8px + env(safe-area-inset-top)); left: 8px; z-index: 40;
+  width: 40px; height: 40px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--ink); font-size: 19px; line-height: 1;
 }
-/* 본문 맨 아래. 긴 화면(QSC 74문항·매장현황)에서 위로 올라가지 않아도 되게. */
-.backBtn {
-  display: block; width: 100%; height: 46px; margin: 14px 0 4px;
-  border: 1px solid #3a3a3a; border-radius: 9px;
-  background: var(--card); color: #cfcfcf; font-size: 14px;
-}
-.backBtn:active { background: #222; }
+.backFloat:active { background: #222; }
