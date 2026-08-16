@@ -3143,9 +3143,14 @@ function readStoreTab(ss, sh, store, ym) {
   const lm = labelMap(sh);
   const warn = [];
 
+  /* ★'라벨을 못 찾았다'와 '라벨은 찾았는데 값 칸이 비었다'를 둘 다 알린다★
+     종전에는 앞쪽만 경고했다. 그래서 값을 못 읽은 두 번째 경우가 화면에 '—' 로만 나타났고,
+     매장은 그것을 "이 달은 점검을 안 했나 보다"로 읽었다. 조용히 비는 것이 가장 나쁘다. */
   function pick(names, label) {
     const r = labelValue(lm, names);
-    if (!r.found && label) warn.push("'" + label + "' 라벨을 찾지 못했습니다 — 값을 표시하지 않습니다");
+    if (!label) return r;
+    if (!r.found) warn.push("'" + label + "' 라벨을 찾지 못했습니다 — 값을 표시하지 않습니다");
+    else if (r.v == null || r.v === '') warn.push("'" + label + "' 옆 값 칸이 비어 있습니다 — 값을 표시하지 않습니다");
     return r;
   }
   const vDate = pick(['방문일', '방문일자', '점검일', '점검일자'], '방문일');
@@ -3155,9 +3160,13 @@ function readStoreTab(ss, sh, store, ym) {
   const vHygG = labelValue(lm, ['위생등급']);
   const vCsG = labelValue(lm, ['CS등급']);
   const vTotG = labelValue(lm, ['종합등급', '등급']);
-  const vReq = labelValue(lm, ['개선요청', '요청', '요청건수', '개선요청건수']);
-  const vProg = labelValue(lm, ['진행', '개선진행', '진행중', '개선예정']);
-  const vDone = labelValue(lm, ['완료', '조치완료', '개선완료']);
+  /* ★별칭 목록에 시트 실물 라벨을 반드시 넣어 둔다★ — labelMap은 완전일치로 찾는다.
+     실물 월 탭의 라벨은 '개선요청사항'·'개선예정/진행'인데 종전 목록에는 둘 다 없었다.
+     그래서 요약 건수를 시트에서 읽지 못하고 늘 표를 다시 세는 폴백으로 넘어갔고,
+     "'개선예정/진행' 라벨을 찾지 못했습니다" 경고가 모든 매장·모든 달에 상시 떴다. */
+  const vReq = labelValue(lm, ['개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수']);
+  const vProg = labelValue(lm, ['개선예정/진행', '개선예정', '개선진행', '진행중', '진행']);
+  const vDone = labelValue(lm, ['개선완료', '조치완료', '완료']);
   const vTodo = labelValue(lm, ['미조치', '미이행']);
 
   // 개선요청 표: B~O를 값과 수식 둘 다 읽는다 (=IMAGE() 셀은 getValues()가 ''를 준다)
@@ -3385,24 +3394,59 @@ function labelMap(sh) {
       if (!at[t]) at[t] = { row: r + 1, col: c + 1 };
     }
   }
-  return { vals: vals, at: at, sh: sh };
+  /* ★병합 정보를 여기서 한 번에 받아 둔다★ — 실물 월 탭은 라벨이 D5:G5처럼 병합돼 있고
+     값은 병합이 끝난 다음 칸(H5)에 있다. 종전에는 '라벨에서 오른쪽으로 3칸'을 훑었는데
+     D→H는 4칸이라 영영 닿지 못했다(§9-7이 경고한 그 항목). 칸 수를 세어 맞추는 대신
+     병합 범위를 물어보면 어떤 폭이든 정확히 넘어간다. getMergedRanges는 A1:J10 한 번뿐이다. */
+  const mergeEnd = {};
+  try {
+    const mrs = rng ? rng.getMergedRanges() : [];
+    for (let i = 0; i < mrs.length; i++) {
+      const r0 = mrs[i].getRow(), c0 = mrs[i].getColumn();
+      mergeEnd[r0 + ',' + c0] = c0 + mrs[i].getNumColumns() - 1;
+    }
+  } catch (e) { /* 병합을 못 읽어도 아래 폴백(라벨 바로 오른쪽)으로 동작한다 */ }
+  return { vals: vals, at: at, sh: sh, mergeEnd: mergeEnd };
 }
 
-/* 라벨 오른쪽 칸의 값. 라벨 셀이 병합(G5:H5 등)이면 오른쪽 1칸이 ''이므로 최대 3칸까지 훑되,
-   다른 라벨을 만나면 '값 없음'으로 본다 — 엉뚱한 칸을 값으로 읽는 것이 가장 위험하다. */
+/* 라벨 오른쪽 칸의 값. 병합된 라벨은 병합이 끝난 다음 칸부터 훑고,
+   다른 라벨을 만나면 '값 없음'으로 본다 — 엉뚱한 칸을 값으로 읽는 것이 가장 위험하다.
+
+   ★2026-08-16에 두 가지를 고쳤다. 둘 다 '값이 있는데 없다고 하는' 사고였다★
+
+   (가) 종전 `if (lm.at[t] && lm.at[t].row === p.row) break;` 는 ★방금 읽은 값 자기 자신★에
+        걸렸다. labelMap이 A1:J10의 빈 칸이 아닌 모든 셀을 색인하므로(라벨만 거르지 않는다)
+        위생점수 0.8을 읽는 순간 at['0.8']이 바로 그 셀을 가리키고, 같은 행이니 무조건 break가
+        났다. 라벨과 값이 같은 행에 있는 한 이 함수는 값을 절대 돌려주지 못했다.
+        → ①숫자·날짜·불리언은 라벨일 수 없으므로 그대로 값으로 받고 ②글자 칸일 때만
+          '다른 라벨인가'를 묻되 자기 자신(col 일치)은 제외한다.
+
+   (나) 훑는 폭이 3칸이라 라벨 D5:G5 + 값 H5(4칸)에 닿지 못했다.
+        → labelMap이 미리 받아 둔 병합 범위로 시작 지점을 잡는다. 폭을 세지 않는다.
+
+   증상은 '오류'가 아니라 화면의 '—' 였다. 매장은 "이 달은 점검을 안 했나 보다"로 읽는다. */
 function labelValue(lm, names) {
+  const mergeEnd = lm.mergeEnd || {};
   for (let i = 0; i < names.length; i++) {
     const key = names[i].replace(/\s+/g, '');
     const p = lm.at[key];
     if (!p) continue;
-    for (let c = p.col; c < p.col + 3 && c < lm.vals[p.row - 1].length; c++) {
+    // 병합이면 그 끝 다음 칸부터. 아니면 라벨 바로 오른쪽부터 (둘 다 0-based 시작 인덱스)
+    const start = mergeEnd[p.row + ',' + p.col] || p.col;
+    for (let c = start; c < start + 3 && c < lm.vals[p.row - 1].length; c++) {
       const raw = lm.vals[p.row - 1][c];
-      const t = String(raw == null ? '' : raw).replace(/\s+/g, '').trim();
+      if (raw === '' || raw == null) continue;
+      // 숫자·날짜·불리언은 라벨일 수 없다 — 곧바로 값이다
+      if (typeof raw === 'number' || typeof raw === 'boolean' || raw instanceof Date) {
+        return { found: true, v: raw, row: p.row, col: c + 1 };
+      }
+      const t = String(raw).replace(/\s+/g, '').trim();
       if (t === '') continue;
-      if (lm.at[t] && lm.at[t].row === p.row) break;   // 다음 라벨을 만났다
+      // 글자 칸이다. 그것이 ★다른★ 라벨의 자리면 값이 없는 것으로 본다 (자기 자신은 제외)
+      if (lm.at[t] && lm.at[t].row === p.row && lm.at[t].col !== c + 1) break;
       return { found: true, v: raw, row: p.row, col: c + 1 };
     }
-    return { found: true, v: null, row: p.row, col: p.col + 1 };  // 라벨은 있고 값이 빈 칸
+    return { found: true, v: null, row: p.row, col: start + 1 };  // 라벨은 있고 값이 빈 칸
   }
   return { found: false, v: null };
 }
@@ -4270,9 +4314,9 @@ function makeMonthTabIn(ss, ym) {
      수식이면 아래 getFormula 검사가 어차피 건너뛴다. */
   ['방문일', '방문일자', '점검일', '방문시간', '위생점수', 'CS점수', '종합점수',
     '위생등급', 'CS등급', '종합등급',
-    '개선요청', '요청', '요청건수', '개선요청건수',
-    '진행', '개선진행', '진행중', '개선예정',
-    '완료', '조치완료', '개선완료', '미조치', '미이행'].forEach(function (label) {
+    '개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수',
+    '개선예정/진행', '개선예정', '개선진행', '진행중', '진행',
+    '개선완료', '조치완료', '완료', '미조치', '미이행'].forEach(function (label) {
       const p = labelValue(lm, [label]);
       if (!p.found || !p.row) return;
       const c = grid(sh, p.row, p.col, 1, 1);
