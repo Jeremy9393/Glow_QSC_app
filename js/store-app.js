@@ -1,11 +1,16 @@
-/* 우리 매장 QSC현황 — 명세 §11(서버 로직) · §12-5(store.html) · §9(시트 결합 안전 규칙)
+/* 매장 QSC현황 — 명세 §11(서버 로직) · §12-5(store.html) · §9(시트 결합 안전 규칙)
    쓰는 사람은 매장 점장·매니저이고 도구는 폰이다. 시트를 어려워해서 앱을 만드는 것이므로,
    화면에서 고칠 수 있는 것은 '매장이 채워야 하는 칸'뿐이어야 한다.
+
+   ★ 말투가 기능이다 ★ — 이 화면은 감사 결과를 매장 사람에게 직접 보여 준다.
+     같은 내용도 '지적/적발/미조치'로 적으면 사람을 깎는 문서가 되고, '개선요청사항/시작 전'으로
+     적으면 할 일 목록이 된다. 목적은 개선이지 서열이 아니므로 화면 문구는 전부 후자로 쓴다.
+     시트에 쓰는 값과 서버가 주는 값은 그대로 두고(남의 시트다), 표시할 때만 바꿔 적는다.
 
    ★ 본사 영역(NO·구분·본사 사진·개선요청 본문)은 disabled input이 아니라 아예 입력 요소가 아니다.
      서버가 K열 미만을 쓰지 않는 것(§8-3 방어④)과 짝을 이루는 화면 쪽 장치다.
      disabled input은 개발자도구로 한 번 푸는 것으로 '고칠 수 있는 것처럼' 보이게 되고,
-     그 순간 매장은 본사 지적 본문을 고치려고 시도한다.
+     그 순간 매장은 본사가 적은 개선요청 본문을 고치려고 시도한다.
    ★ 제출 버튼이 없다. 점장과 부점장이 같은 화면을 동시에 여는 일이 실제로 있어(아이디 공용)
      전체 저장은 서로의 입력을 지운다. 저장 단위는 항목 1건이고 충돌은 rev로 잡는다.
    ★ 임시저장에 사진 base64를 절대 넣지 않는다 — localStorage 용량(대개 5MB)을 한 장으로 태운다. */
@@ -78,12 +83,48 @@
     modes = [];                           // 카드를 지웠으므로 죽은 applyMode를 남기지 않는다
     $('#listNote').textContent = '';
     $('#bbRate').textContent = '—';
-    $('#bbProg').textContent = '완료 0 / 요청 0';
+    $('#bbProg').textContent = '완료 0 / 개선요청 0';   // store.html의 초기값과 같은 문구여야 한다
   }
   /* ?next= 화이트리스트는 auth.js 한 곳이 정본이다(§5-1). 여기서 주소를 직접 조립하면
      화이트리스트가 바뀔 때 이 파일만 옛 주소로 남는다. */
   function goLogin() {
     location.replace((Auth.loginUrl && Auth.loginUrl()) || 'login.html?next=store.html');
+  }
+
+  /* 권한이 없는 사람이 이 주소를 직접 열었을 때.
+     ★빈 화면으로 두지 않는다★ — 안내문 한 줄만 남은 회색 화면은 '앱이 고장 났다'로 읽히고,
+       그러면 매장은 시트를 직접 열어 보려 한다(§9의 결합 안전 규칙이 거기서 무너진다).
+     ★즉시 튕기지도 않는다★ — 화면이 순식간에 바뀌면 왜 못 들어갔는지 읽을 새가 없어
+       "눌렀는데 홈으로 돌아가요"라는 문의만 남는다. 이유를 읽을 시간을 준 뒤 홈으로 옮긴다.
+     자동 이동이 막히는 경우(구형 웹뷰·타이머 정지)를 대비해 누를 수 있는 버튼도 함께 둔다. */
+  let denied = false;
+  function denyHome(msg) {
+    if (denied) return;                   // 응답이 여러 번 와도 안내와 타이머는 한 번만
+    denied = true;
+    clearBody();
+    /* 문구는 auth.js의 denyHome(:326)이 정본이고 여기서는 한 글자까지 같은 말을 쓴다 —
+       같은 상황에 화면마다 다른 문장이 뜨면 매장은 '다른 문제'로 받아들여 따로 문의한다.
+       그 문구도 '홈으로 이동합니다'로 끝나 예고 조건('곧 화면이 바뀐다')을 이미 만족한다.
+       ★Auth.denyHome()을 그대로 부르지 않는 이유★ — 그 함수는 .wrap만 갈아 끼우는데
+         이 화면은 개선율 하단바가 .wrap 밖에 있어, 볼 수 없는 매장의 '완료 0 / 개선요청 0'이
+         그대로 남는다. 이 화면 가구까지 치우는 아래 코드가 필요하다. */
+    showState(msg || '이 화면을 볼 수 있는 권한이 없습니다. 홈으로 이동합니다.');
+    $('#pickCard').style.display = 'none';
+    const foot = document.querySelector('.bottombar');
+    if (foot) foot.style.display = 'none';   // 저장할 것이 없는 화면에 개선율 하단바를 남기지 않는다
+
+    const host = document.querySelector('.wrap');
+    if (host && !document.getElementById('denyHome')) {
+      const b = document.createElement('button');
+      b.id = 'denyHome';
+      b.type = 'button';
+      b.className = 'backBtn';            // auth.js가 붙이는 하단 '← 뒤로'와 같은 모양
+      b.textContent = '홈으로 가기';
+      b.onclick = function () { location.replace('index.html'); };
+      host.appendChild(b);
+    }
+    // replace다 — 뒤로가기로 이 화면에 다시 갇히지 않게
+    setTimeout(function () { location.replace('index.html'); }, 3000);
   }
 
   // ---------- 세션 ----------
@@ -115,8 +156,7 @@
   if (!sessionOk && (online() || !scope.list.length)) { goLogin(); return; }
 
   if (!Auth.hasMenu('store')) {
-    showState('이 화면을 볼 권한이 없습니다. 감사총무팀에 문의해 주세요.');
-    $('#pickCard').style.display = 'none';
+    denyHome();                           // 문구는 denyHome 기본값 한 곳에서만 관리한다
     return;
   }
 
@@ -197,6 +237,19 @@
       goLogin();
       return;
     }
+
+    /* 불러오기 단계의 FORBIDDEN은 '이 계정에 이 화면 권한이 없다'는 뜻이다(서버 액션 등록표 판정).
+       화면 쪽 hasMenu 검사를 통과했는데 여기까지 왔다면 세션 사본이 낡았다는 뜻이므로,
+       화면 사본을 믿지 말고 서버 판정대로 안내한 뒤 홈으로 보낸다.
+       ★저장 단계의 FORBIDDEN은 여기로 오지 않는다★ — 그쪽은 '조회 전용 기간'이라는
+         전혀 다른 뜻이고(§ 서버 store.saveImprove), 홈으로 보내면 적어 둔 내용이 날아간다. */
+    if (code === 'FORBIDDEN') {
+      denyHome();                         // 위와 같은 문구여야 한다 — 인자를 주지 않는 것이 그 방법이다
+      return;
+    }
+    /* SCOPE_DENIED는 '담당하지 않는 매장을 골랐다'는 뜻이다 — 화면 권한 자체는 있으므로
+       홈으로 보내지 않는다. 담당 매장이 여럿인 사람은 드롭다운에서 다른 곳을 고르면 된다. */
+
     showState(str(res && res.error) || '불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
     clearBody();
   }
@@ -313,14 +366,16 @@
     const req = cnt(sum.req), done = cnt(sum.done);
     const fin = $('#sumFinal');
     fin.innerHTML = '';
-    /* 서버가 진행·미조치 건수까지 내려주는데 완료만 보여주면, 매장은 '남은 게 몇 건인지'를
+    /* 서버가 진행·시작 전 건수까지 내려주는데 완료만 보여주면, 매장은 '남은 게 몇 건인지'를
        카드를 세어 봐야 안다. 다만 서버가 그 칸을 못 읽었을 때(숫자가 아닐 때) 0으로 단정하면
-       "미조치 0건"이라는 거짓말이 되므로, 숫자로 온 것만 골라 적는다. */
+       "시작 전 0건"이라는 거짓말이 되므로, 숫자로 온 것만 골라 적는다.
+       ★sum.todo는 시트 라벨 '미조치'에서 온 값이다. 값은 그대로 쓰고 화면에만 '시작 전'으로 적는다 —
+         아직 손대지 않았다는 사실은 같은데, 앞의 말은 잘못을 세는 말이고 뒤의 말은 순서를 세는 말이다. */
     const seg = [];
     if (typeof sum.prog === 'number') seg.push('진행 ' + sum.prog);
     seg.push('완료 ' + done);
-    if (typeof sum.todo === 'number') seg.push('미조치 ' + sum.todo);
-    fin.appendChild(document.createTextNode('개선요청 ' + req + '건 (' + seg.join(' · ') + ') · '));
+    if (typeof sum.todo === 'number') seg.push('시작 전 ' + sum.todo);
+    fin.appendChild(document.createTextNode('개선요청사항 ' + req + '건 (' + seg.join(' · ') + ') · '));
     const b = document.createElement('b');
     b.textContent = '개선율 ' + ratePct(sum.rate);
     fin.appendChild(b);
@@ -335,30 +390,32 @@
     if (ws) { warn.style.display = ''; warn.textContent = ws.join(' / '); }
     else { warn.style.display = 'none'; warn.textContent = ''; }
 
-    /* 지연 건수는 서버가 항목마다 내려준 overdue를 세기만 한다 — 화면에서 예정일을 다시
-       계산하지 않는다(§5 주의). 0건이면 아예 적지 않는다: '지연 0건'이 매달 붙어 있으면
-       글자가 배경이 되어, 정작 1건이 생긴 달에 눈에 걸리지 않는다. */
+    /* 예정일이 지난 건수는 서버가 항목마다 내려준 overdue를 세기만 한다 — 화면에서 예정일을
+       다시 계산하지 않는다(§5 주의). 0건이면 아예 적지 않는다: 늘 붙어 있는 글자는 배경이 되어,
+       정작 1건이 생긴 달에 눈에 걸리지 않는다.
+       ★'지연'이 아니라 '예정일 지남'으로 적는다★ — 같은 사실인데 앞의 말은 사람을 탓하고
+         뒤의 말은 날짜를 말한다. 매장이 스스로 정한 예정일이라 더욱 그렇다. 색은 그대로 둔다. */
     const late = lateCount();
     if (late > 0) {
       const lc = document.createElement('span');
       lc.className = 'lateCount';
-      lc.textContent = ' · 지연 ' + late + '건';
+      lc.textContent = ' · 예정일 지남 ' + late + '건';
       fin.appendChild(lc);
     }
 
     $('#bbRate').textContent = '개선율 ' + ratePct(sum.rate);
     const bp = $('#bbProg');
-    // 하단바는 스크롤과 무관하게 늘 보이는 자리다. 지연이 있을 때만 한 조각을 빨갛게 덧붙인다.
-    bp.textContent = '완료 ' + done + ' / 요청 ' + req;
+    // 하단바는 스크롤과 무관하게 늘 보이는 자리다. 해당 건이 있을 때만 한 조각을 빨갛게 덧붙인다.
+    bp.textContent = '완료 ' + done + ' / 개선요청 ' + req;
     if (late > 0) {
       const s = document.createElement('span');
       s.className = 'lateCount';
-      s.textContent = ' · 지연 ' + late + '건';
+      s.textContent = ' · 예정일 지남 ' + late + '건';
       bp.appendChild(s);
     }
   }
 
-  /* 요약·하단바가 함께 쓰는 지연 건수. data.items 하나를 정본으로 삼아야
+  /* 요약·하단바가 함께 쓰는 '예정일 지난 건수'. data.items 하나를 정본으로 삼아야
      두 자리에 다른 숫자가 뜨는 일이 없다. */
   function lateCount() {
     const arr = (data && data.items) || [];
@@ -370,14 +427,14 @@
   function has(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
 
   /* 저장·충돌 응답으로 받은 최신 항목을 카드와 원본 배열(data.items) 양쪽에 반영한다.
-     반영하지 않으면 방금 완료 처리한 항목이 data.items에는 지연인 채로 남아
-     요약의 '지연 n건'이 실제 카드와 어긋난다.
+     반영하지 않으면 방금 완료 처리한 항목이 data.items에는 예정일이 지난 채로 남아
+     요약의 '예정일 지남 n건'이 실제 카드와 어긋난다.
 
      ★통째로 갈아끼우지 않고 '서버가 보낸 칸만' 덮어쓴다.
        store.saveImprove 응답의 항목에는 store.get이 주던 칸이 일부 없다
-       (구분·본문·본사 사진·예정일·지연·NEW). 그대로 대입하면 방금 저장한 그 항목만
-       그 칸들을 잃어, ①아직 기한이 지난 항목인데 '지연 ⚠'과 빨간 선이 사라지고
-       ②요약·하단바의 '지연 n건'이 실제보다 적게 나오며 ③나중에 목록을 다시 그리는 코드가
+       (구분·본문·본사 사진·예정일·overdue·NEW). 그대로 대입하면 방금 저장한 그 항목만
+       그 칸들을 잃어, ①아직 기한이 지난 항목인데 '예정일 지남'과 빨간 선이 사라지고
+       ②요약·하단바의 '예정일 지남 n건'이 실제보다 적게 나오며 ③나중에 목록을 다시 그리는 코드가
        생기는 순간 본문이 통째로 비어 보인다.
        빠진 칸은 '바뀌지 않았다'는 뜻이므로 직전 값을 그대로 두는 편이 맞다. */
   function mergeItem(next) {
@@ -390,10 +447,10 @@
     Object.keys(prev || {}).forEach(function (k) { out[k] = prev[k]; });
     Object.keys(next || {}).forEach(function (k) { out[k] = next[k]; });
 
-    /* 지연은 '예정일이 지났는데 완료일이 비었다'는 뜻이다. 서버가 이 응답에 overdue를
-       안 실어 준 경우, 방금 완료로 바뀐 항목까지 직전 값(지연)을 물려받으면
-       이미 처리한 항목에 빨강이 남는다 — 확실히 내릴 수 있는 이 한 경우만 손으로 내린다.
-       반대로 '완료가 아닌' 항목의 지연을 화면에서 새로 판정하지는 않는다(§5 주의). */
+    /* overdue는 '예정일이 지났는데 완료일이 비었다'는 뜻이다. 서버가 이 응답에 overdue를
+       안 실어 준 경우, 방금 완료로 바뀐 항목까지 직전 값(참)을 물려받으면
+       이미 마무리한 항목에 빨강이 남는다 — 확실히 내릴 수 있는 이 한 경우만 손으로 내린다.
+       반대로 '완료가 아닌' 항목을 화면에서 새로 판정하지는 않는다(§5 주의). */
     if (!has(next, 'overdue') && String(out.state) === '완료') out.overdue = false;
 
     if (at >= 0) arr[at] = out;
@@ -402,21 +459,28 @@
 
   const STATE_CLASS = { '완료': 'done', '진행': 'prog', '미조치': 'todo' };
 
+  /* 시트 값 → 화면에 적을 말.
+     ★키는 시트·서버가 쓰는 값 그대로다★ — 남의 시트라 바꿀 수 없고, 바꿔서도 안 된다.
+       (STATE_CLASS의 키·저장 요청 본문·집계도 전부 이 원래 값을 쓴다.)
+     여기 없는 값은 받은 그대로 적는다 — 시트에 새 상태 라벨이 생겨도 화면이 빈칸이 되지 않는다. */
+  const STATE_LABEL = { '미조치': '시작 전', '미이행': '시작 전' };   // 시트가 두 라벨을 같은 뜻으로 쓴다
+  function stateLabel(v) { return STATE_LABEL[v] || v; }
+
   function renderItems(items) {
     const box = $('#items');
     box.innerHTML = '';
     modes = [];                           // 카드를 다시 그리므로 옛 applyMode 참조를 버린다
     if (!items.length) {
-      $('#listNote').textContent = '이 달에는 개선요청 항목이 없습니다.';
+      $('#listNote').textContent = '이 달에는 개선요청사항이 없습니다.';
       return;
     }
     $('#listNote').textContent = '';
 
-    /* 지연 → NEW → 나머지 순으로 올린다.
+    /* 예정일 지남 → NEW → 나머지 순으로 올린다.
        왜 서버가 준 NO. 순서를 흐트러뜨리면서까지 이렇게 하냐면, 이 화면을 보는 도구가 폰이고
        한 화면에 카드가 두세 개밖에 안 들어가기 때문이다. 매장이 위에서부터 읽다가 스크롤을 멈추면
        정작 기한이 지난 항목을 못 본 채 앱을 닫는다. 급한 순서를 화면 순서로 만들어 둔다.
-       같은 순위 안에서는 원래 순서(=시트 NO. 순)를 그대로 지킨다 —
+       같은 묶음 안에서는 원래 순서(=시트 NO. 순)를 그대로 지킨다 —
        Array.prototype.sort가 안정 정렬이 아닌 브라우저가 아직 있어 원래 위치를 tie-breaker로 넣었다. */
     function rank(it) { return (it && it.overdue) ? 0 : ((it && it.isNew) ? 1 : 2); }
     const ordered = items.map(function (it, i) { return { it: it, i: i }; });
@@ -436,7 +500,7 @@
     // 정적 뼈대만 innerHTML로 만든다. 매장명·본문·담당자명은 아래에서 전부 textContent로 넣는다.
     el.innerHTML =
       '<div class="itemTop"><span class="no"></span><span class="stTag"></span>' +
-        '<span class="flagTag late" style="display:none">지연 ⚠</span>' +
+        '<span class="flagTag late" style="display:none">예정일 지남</span>' +
         '<span class="flagTag new" style="display:none">NEW</span></div>' +
       '<p class="hqBody"></p>' +
       '<p class="lateNote" style="display:none"></p>' +
@@ -446,9 +510,9 @@
         '<div><label class="f">담당부서</label><select class="dept"></select></div>' +
         '<div><label class="f">담당자</label><input type="text" class="owner" placeholder="이름"></div>' +
         '<div class="full"><label class="f">진행 내용</label>' +
-          '<textarea class="plan" rows="2" placeholder="어떻게 조치할지 적어 주세요"></textarea></div>' +
+          '<textarea class="plan" rows="2" placeholder="어떻게 개선할지 적어 주세요"></textarea></div>' +
         '<div class="full"><label class="f">완료 내용</label>' +
-          '<textarea class="doneNote" rows="2" placeholder="완료한 내용을 적어 주세요"></textarea></div>' +
+          '<textarea class="doneNote" rows="2" placeholder="개선한 내용을 적어 주세요"></textarea></div>' +
         '<div class="full"><div class="savedPhoto" style="display:none"></div><div class="pickBox"></div></div>' +
       '</div>' +
       '<div class="itemFoot"><span class="itemNote"></span>' +
@@ -472,7 +536,7 @@
       const a = document.createElement('a');
       a.href = url; a.target = '_blank'; a.rel = 'noopener';
       const im = document.createElement('img');
-      im.src = url; im.alt = '본사 지적 사진'; im.title = '누르면 크게 보입니다';
+      im.src = url; im.alt = '개선요청사항 사진'; im.title = '누르면 크게 보입니다';
       a.appendChild(im);
       thumbs.appendChild(a);
     });
@@ -505,6 +569,7 @@
           if (!confirm('개선 후 사진을 삭제할까요?\n저장을 눌러야 실제로 지워집니다.')) return;
           pendingClear = true;
           paintPhoto();
+          noteEl.className = 'itemNote';   // 직전 저장의 초록(ok)·빨강(err)을 그대로 물려받지 않게
           noteEl.textContent = '저장을 누르면 사진이 삭제됩니다.';
         };
       } else {
@@ -513,14 +578,16 @@
       }
     }
 
-    /* ----- 지연 · NEW 표시 -----
+    /* ----- 예정일 지남 · NEW 표시 -----
        판정은 전부 서버가 한 것(it.overdue·it.isNew)을 그대로 옮기기만 한다.
        ★화면에서 M열(예정일+진행 내용)을 다시 파싱해 추측하지 않는다. 한 번이라도 멀쩡한 항목에
          빨강이 붙으면 매장은 그다음부터 빨강 전체를 무시한다 — 없는 빨강이 틀린 빨강보다 낫다.
        서버가 필드를 안 보내면 undefined → 거짓으로 떨어져 뱃지가 안 붙는다(같은 이유로 이게 맞다). */
     function paintFlags() {
       const late = !!it.overdue;
-      el.className = 'item storeItem' + (late ? ' lateItem' : '');
+      /* 클래스 이름은 'late'다 — css/app.css의 선택자가 `.storeItem.late`라서,
+         여기서 'lateItem'을 붙이면 왼쪽 빨간 선이 영영 안 그려진다(그동안 그랬다). */
+      el.className = 'item storeItem' + (late ? ' late' : '');
       lateTag.style.display = late ? '' : 'none';
       newTag.style.display = it.isNew ? '' : 'none';
 
@@ -537,8 +604,8 @@
     function fill(next) {
       it = next;
       pendingClear = false;
-      const st = str(it.state) || '미조치';
-      stEl.textContent = st;
+      const st = str(it.state) || '미조치';   // 시트 값 그대로 (색 판정·비교에 쓴다)
+      stEl.textContent = stateLabel(st);      // 화면에 적을 때만 바꿔 적는다
       stEl.className = 'stTag ' + (STATE_CLASS[st] || 'todo');
       fillDept(str(it.dept));
       ownerIn.value = str(it.owner);
@@ -616,10 +683,12 @@
       saveBtn.textContent = label;
       saveBtn.disabled = false;
 
+      /* 클래스가 'bad'가 아니라 'err'다 — css/app.css에 있는 것은 .itemNote.err(빨강)·
+         .itemNote.ok(초록)뿐이라, 그동안 오류 문구가 안내 문구와 똑같은 회색으로 떴다. */
       if (!res || res.code === 'NETWORK') {
-        noteEl.className = 'itemNote bad';
+        noteEl.className = 'itemNote err';
         // 입력값은 임시저장에 남아 있으므로 다시 눌러도 처음부터 적을 필요가 없다
-        noteEl.textContent = '저장하지 못했습니다. 연결을 확인하고 다시 눌러 주세요.';
+        noteEl.textContent = '저장되지 않았습니다. 연결을 확인하고 다시 눌러 주세요.';
         return;
       }
 
@@ -635,9 +704,10 @@
           data.summary = merged;
           renderSummary(merged);
         } else if (res.item) {
-          // summary가 안 왔어도 지연 건수는 방금 바뀌었을 수 있다 — 요약을 같은 값으로 다시 그린다
+          // summary가 안 왔어도 '예정일 지남' 건수는 방금 바뀌었을 수 있다 — 요약을 같은 값으로 다시 그린다
           renderSummary(data.summary || {});
         }
+        noteEl.className = 'itemNote ok';
         noteEl.textContent = '저장되었습니다.';
         return;
       }
@@ -646,8 +716,8 @@
            화면 전체를 새로 그리면 다른 카드에 쓰던 내용이 함께 날아간다. */
         draftDel(it.no);
         fill(mergeItem(res.item));
-        renderSummary(data.summary || {});   // 남이 고친 결과로 지연 건수가 달라질 수 있다
-        noteEl.className = 'itemNote bad';
+        renderSummary(data.summary || {});   // 남이 고친 결과로 건수가 달라질 수 있다
+        noteEl.className = 'itemNote err';
         noteEl.textContent = str(res.error) || '다른 분이 방금 이 항목을 수정했습니다. 최신 내용을 확인해 주세요.';
         return;
       }
@@ -656,8 +726,8 @@
          상단에 문구를 띄우고 모든 카드의 저장 버튼만 잠근다. */
       if (res.code === 'MAINT') {
         showMaint(str(res.error) || '지금은 점검 중입니다. 잠시 후 다시 시도해 주세요.');
-        noteEl.className = 'itemNote bad';
-        noteEl.textContent = '점검 중이라 저장하지 못했습니다. 적으신 내용은 남아 있습니다.';
+        noteEl.className = 'itemNote err';
+        noteEl.textContent = '점검 중이라 저장되지 않았습니다. 적으신 내용은 남아 있습니다.';
         return;
       }
       if (res.code === 'AUTH_REQUIRED' || res.code === 'AUTH_EXPIRED' || res.code === 'AUTH_INVALID') {
@@ -665,8 +735,12 @@
         goLogin();
         return;
       }
-      noteEl.className = 'itemNote bad';
-      noteEl.textContent = str(res.error) || '저장하지 못했습니다.';
+      /* 남은 거절 사유는 서버 문구를 그대로 보여준다(FORBIDDEN='권한이 없습니다.',
+         SCOPE_DENIED='담당하지 않는 매장입니다.' 등 — 이미 사람 말로 되어 있다).
+         ★여기서 홈으로 보내지 않는다★ — 저장 단계의 FORBIDDEN은 '조회 전용 기간'이라는 뜻일 수 있고,
+           화면을 갈아 끼우면 방금 적은 내용이 눈앞에서 사라진다. 적은 것은 임시저장에 남겨 둔다. */
+      noteEl.className = 'itemNote err';
+      noteEl.textContent = str(res.error) || '저장되지 않았습니다. 잠시 후 다시 시도해 주세요.';
     };
 
     return el;

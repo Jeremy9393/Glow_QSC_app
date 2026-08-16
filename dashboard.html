@@ -3,21 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- 화면 이름은 '순위표'로 통일한다 (명세 §16 화면 목록 · index.html 카드 문구와 동일).
-     누른 카드 이름과 들어간 화면 제목이 다르면 "다른 화면에 왔다"는 문의가 생긴다. -->
-<title>QSC 순위표 — GLOW SEOUL</title>
+<!-- 화면 이름은 'QSC 전체 대시보드'로 통일한다 (index.html 카드 문구 · js/menu.js REG와 한 글자까지 같다).
+     누른 카드 이름과 들어간 화면 제목이 다르면 "다른 화면에 왔다"는 문의가 생긴다.
+     ★'순위표'라는 이름을 쓰지 않는다★ — 이 화면은 매장을 줄 세우려고 만든 것이 아니라
+       전 매장 현황을 함께 보고 개선점을 찾으라고 만든 것이다. 이름이 목적을 배신하면 안 된다. -->
+<title>QSC 전체 대시보드 — GLOW SEOUL</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=34">
+<link rel="stylesheet" href="css/app.css?v=35">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼. 조작 버튼은 '수동 새로고침' 하나뿐이다 —
      월 단위 데이터이고 시트 읽기 쿼터가 걸려 있어 자동 폴링을 하지 않는다. -->
 <header class="topbar">
   <a class="back" href="index.html">←</a>
-  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">QSC 순위표 <span class="sub" id="whoInfo"></span></span></div>
+  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">QSC 전체 대시보드 <span class="sub" id="whoInfo"></span></span></div>
   <span class="sub" id="freshInfo"></span>
   <button id="reloadBtn" class="resetBtn">새로고침</button>
 </header>
@@ -33,7 +35,7 @@
   <!-- 미제출 현황판. 관리자(계정 관리 권한 보유자)에게만, 그리고 기간이 '월'일 때만 그려진다.
        기본값이 display:none인 이유: 매장 계정에게는 끝까지 한 번도 보이면 안 되고,
        불러오기에 실패했을 때도 조용히 사라지는 것이 이 카드의 정상 동작이기 때문이다.
-       ★순위표(아래 카드)와 완전히 독립이다 — 이 카드가 실패해도 순위표는 그대로 나와야 한다. -->
+       ★현황 표(아래 카드)와 완전히 독립이다 — 이 카드가 실패해도 현황 표는 그대로 나와야 한다. -->
   <section class="card" id="monthCard" style="display:none">
     <!-- 제목은 고른 기간을 따라간다. 지난달을 보고 있는데 '이번 달 진행'이라고 적혀 있으면
          남은 매장 명단을 이번 달 것으로 오해해 매장에 잘못 연락하게 된다. -->
@@ -50,7 +52,9 @@
   </section>
 
   <section class="card">
-    <h2>매장 순위</h2>
+    <!-- 등수를 찍지 않는다. 점수 순으로 정렬만 하고 'N위' 열은 두지 않는다 —
+         비교로 개선 동기를 만들되 서열을 못 박지 않는 것이 이 표의 목적이다. -->
+    <h2>전 매장 현황</h2>
     <p class="note" id="stateNote">불러오는 중입니다…</p>
     <div class="tableScroll">
       <table class="sumTable" id="rankTable">
@@ -64,9 +68,9 @@
   </section>
 </div>
 
-<script src="js/auth.js?v=34"></script>
-<script src="js/api.js?v=34"></script>
-<script src="js/dashboard-app.js?v=34"></script>
+<script src="js/auth.js?v=35"></script>
+<script src="js/api.js?v=35"></script>
+<script src="js/dashboard-app.js?v=35"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

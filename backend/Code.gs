@@ -2,7 +2,7 @@
    제출 1번에 3곳 기록:
    ① 응답 원본 시트 (QSC_회차·QSC_상세·쇼퍼_응답) — 추적용 원장
    ② 통합시트 [데이터] — 해당 매장 행 x 해당 월 블록에 점수 기입 (QSC=위생 칸, 쇼퍼=CS 칸)
-   ③ 매장별 QSC현황 파일 — 월 탭(YYMM)에 방문일·점수 + 적발 문항을 개선요청 표에 자동 행 추가
+   ③ 매장별 QSC현황 파일 — 월 탭(YYMM)에 방문일·점수 + 개선 필요 문항을 개선요청 표에 자동 행 추가
 
    v33부터 여기에 인증·권한·조회 계층이 얹혀 있다 (구현명세 v33 §4~§11·§14).
      · 모든 요청은 단일 POST + 본문 안의 토큰. doGet은 ?action=ping 하나뿐이다
@@ -431,8 +431,13 @@ function doPost(e) {
       if (vr.ok) {
         ctx = vr.ctx;
       } else if (legacyType && enforceOn()) {
-        /* 옛 봉투인데 인증을 켠 뒤 = 구버전 앱. 사용자가 할 일은 앱을 새로 고치는 것뿐이다 */
-        return json(err('APP_OUTDATED', '앱을 새로 고쳐 주세요 (앱 종료 후 다시 실행).'));
+        /* 옛 봉투인데 인증을 켠 뒤 = 토큰 없이 제출한 요청(구버전 앱, 또는 세션이 끊긴 새 앱).
+           ★"앱 종료 후 다시 실행"이라고 적으면 안 된다★ — 이 문구가 뜨는 자리는 십중팔구
+           74문항을 다 채운 qsc.html의 제출 순간이고, 임시저장에는 사진이 담기지 않는다
+           (js/qsc-app.js saveDraft). 시키는 대로 앱을 끄면 그날 찍은 사진이 전부 사라진다.
+           할 일은 '이 화면을 살려 둔 채 다른 탭에서 로그인하고 다시 누르는 것'이다. */
+        return json(err('APP_OUTDATED',
+          '로그인이 필요합니다. 이 화면을 닫지 마시고, 새 탭에서 로그인하신 뒤 다시 제출해 주세요.'));
       } else if (!enforceOn() && spec.legacy && !body.token) {
         /* ★`!body.token` — 토큰을 제시했는데 거부당한 요청은 off여도 항상 거부한다★
            종전에는 이 조건이 없어서, '중지'된 계정의 죽은 토큰으로 qsc.submit을 보내면
@@ -602,11 +607,12 @@ function ensureAuthSheets() {
     sh.appendRow(['역할', '메뉴', '읽기', '쓰기', '설명']);
     sh.appendRow(['관리자', '*', '○', '○', '감사총무팀 QSC 담당. 전 메뉴']);
     sh.appendRow(['관리자', 'debug', '○', '', '오류 상세 열람']);
-    /* accounts 행을 명시적으로 적는다. '*' 행이 있으니 없어도 통과하지만, 이 행 하나가
-       "계정 관리는 누구에게 열려 있는가"를 시트에서 눈으로 볼 수 있게 해 준다.
-       점검 모드(MAINT) 통과 예외도 이 권한으로 판정하므로 표에 드러나 있어야 한다. */
+    /* accounts 행을 명시적으로 적는다. 이 행 하나가 "계정 관리는 누구에게 열려 있는가"를
+       시트에서 눈으로 볼 수 있게 해 준다. 점검 모드(MAINT) 통과 예외도 이 권한으로 판정한다.
+       ★2026-08-16부터 이 행은 장식이 아니라 자물쇠다★ — 표에 accounts 행이 하나라도 있으면
+       can()이 그때부터 `*` 폴백을 받지 않는다(can() 주석). 즉 이 줄을 지우면 자물쇠가 풀린다. */
     sh.appendRow(['관리자', ADMIN_MENU, '○', '○', '계정 관리 · 미제출 현황판 · 감사로그 열람']);
-    sh.appendRow(['매장담당자', 'dashboard', '○', '', '순위표는 전 매장 열람']);
+    sh.appendRow(['매장담당자', 'dashboard', '○', '', '전체 대시보드는 전 매장 열람']);
     /* store 읽기 하나가 '매장현황 조회'와 '홈 알림 배지(notify.badge)' 둘을 함께 연다 —
        배지의 재료가 개선요청 표이므로 권한 어휘를 새로 만들 이유가 없다. */
     sh.appendRow(['매장담당자', 'store', '○', '○', '자기 매장 개선보고 · 홈 알림 배지 (범위는 계정 D열이 정함)']);
@@ -653,10 +659,12 @@ function ensureAuthSheets() {
         '편집기 [프로젝트 설정] > [시간대]를 「(GMT+09:00) 서울」로 맞추십시오.');
     }
   } catch (e) { }
-  /* ★`*` 행은 계정 관리까지 함께 연다★ — can()은 (역할, 메뉴) 정확 일치가 없으면 `*` 행으로
+  /* ★`*` 행은 다른 메뉴까지 함께 연다★ — can()은 (역할, 메뉴) 정확 일치가 없으면 `*` 행으로
      넘어가므로, 누가 `매장담당자 | * | ○` 를 한 줄 복사해 넣으면 그 순간 26개 매장 계정이
-     계정 관리·감사로그·미제출 현황판을 전부 읽게 된다. 코드에서 `*`를 막지는 않는다 —
-     막으면 `관리자 | accounts` 행이 없는 기존 시트에서 담당자 본인이 잠긴다. 대신 알린다. */
+     점검표 제출(qsc·shopper)과 제출코드까지 열게 된다.
+     계정 관리(accounts)와 debug만은 can()이 폴백을 막는다(2026-08-16, can() 주석 참조) —
+     즉 이 경고는 "관리자 화면이 열렸다"가 아니라 "열지 말아야 할 것이 열렸다"를 알리는 자리다.
+     운영 중에도 같은 검사를 한다(warnStarRoles) — 이 함수는 담당자가 손으로 실행할 때만 돈다. */
   try {
     const starRoles = [];
     const rr = getRoles();
@@ -681,7 +689,13 @@ function ensureAuthSheets() {
     '\n\n★배포 당일만★ 스크립트 속성 HASH_BUDGET 을 1000 으로 올려 두고, 다음 날 300 으로' +
     '\n   되돌리십시오. 26곳 비밀번호 설정(26회) + 그날 저녁 26곳 첫 로그인(26회) + 오타' +
     '\n   재시도가 하루에 몰리는데, 한도에 닿으면 나머지 매장에는 "방금 받은 비밀번호로' +
-    '\n   안 들어가진다"로만 보이고 화면 어디에도 원인이 안 뜹니다.');
+    '\n   안 들어가진다"로만 보이고 화면 어디에도 원인이 안 뜹니다.' +
+    '\n\n★비밀번호 공지는 3개 조로 나눠 10분 간격으로★ 보내십시오. 26곳이 같은 1분에 로그인하면' +
+    '\n   분당 상한(20)에 닿아 나머지 매장에 "요청이 많습니다"가 뜹니다. 한꺼번에 보내야 한다면' +
+    '\n   그날만 스크립트 속성 ANON_MIN_AUTH 를 60 으로 두었다가 다음 날 지우십시오.' +
+    '\n\n★AUTH_ENFORCE = on★ 은 사람이 켭니다. 이것을 켜기 전까지는 토큰 없이 보낸 옛 봉투' +
+    '\n   (qsc.submit·shopper.submit·config.get)가 그대로 통과합니다 — 앱 코드로는 닫히지 않습니다.' +
+    '\n   켜는 날 26곳이 모두 한 번은 로그인해 두어야 현장에서 제출이 막히지 않습니다.');
   return { ok: true, made: made, warn: warn };
 }
 
@@ -871,8 +885,40 @@ function getRoles() {
   /* ★실패는 캐시하지 않는다★ — 인증 시트가 잠깐 열리지 않으면 빈 배열이 60초 동안 굳어
      전원 FORBIDDEN이 되고, 거부마다 감사로그 appendRow가 붙어 시트 쓰기가 폭주한다.
      fail-closed 방향이라 유출은 없지만, 장애를 60초 길이로 늘릴 이유는 없다. */
-  if (read) cache.put(key, JSON.stringify(rows), 60);
+  if (read) {
+    cache.put(key, JSON.stringify(rows), 60);
+    warnStarRoles(rows, cache);   // ★캐시에 넣은 뒤 부른다★ (아래 함수 주석의 재진입 참조)
+  }
   return rows;
+}
+
+/* `역할` 탭에 메뉴 `*` 행을 가진 역할이 둘 이상이면 감사로그에 남긴다 (2026-08-16 지시 §4).
+   can()이 계정 관리·debug의 `*` 폴백을 막았지만, `매장담당자 | * | ○` 한 줄은 여전히
+   qsc·shopper·codes 쓰기를 26개 매장 계정에 열어 준다. 종전 경고는 담당자가 편집기에서
+   ensureAuthSheets()를 손으로 실행할 때만 나왔다 — 실제로 그 줄이 들어가는 날에는 아무도
+   그 함수를 실행하지 않는다. 운영 중에 스스로 알리는 자리가 하나는 있어야 한다.
+
+   ★비용을 두 겹으로 막는다★
+     ① 시트를 실제로 읽은 순간(캐시 미스, 60초에 한 번)에만 검사한다 — 배열 한 번 훑기.
+     ② 감사로그 쓰기는 한 시간에 한 줄. 잘못된 표는 고칠 때까지 남아 있으므로, 이 검사가
+        매번 appendRow를 하면 하루 1,440줄이 쌓여 표가 못 쓰게 된다.
+   ★재진입★ — auditLog는 `감사로그` 탭이 없으면 ensureAuthSheets()를 부르고 그 안에서
+   다시 getRoles()가 불린다. 부르는 쪽이 cache.put을 마친 뒤 이 함수에 들어오고, 여기서도
+   시간 키를 먼저 put한 뒤 기록하므로 두 번째 진입은 캐시에서 즉시 되돌아온다. */
+function warnStarRoles(rows, cache) {
+  try {
+    const roles = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].menu === '*' && roles.indexOf(rows[i].role) < 0) roles.push(rows[i].role);
+    }
+    if (roles.length < 2) return;                    // 시드 상태(관리자 하나)는 정상이다
+    const k = 'starwarn:' + Math.floor(Date.now() / 3600000);
+    if (cache.get(k)) return;
+    cache.put(k, '1', 3700);
+    auditLog({ id: '(시스템)', role: '' }, 'role.table', '', '경고', 'ROLE_STAR_MULTI',
+      '`역할` 탭에 메뉴 `*` 행을 가진 역할이 ' + roles.length + '개입니다: ' + roles.join(', ') +
+      ' — 의도한 것이 아니면 해당 행의 메뉴를 구체적인 키로 바꾸십시오.');
+  } catch (e) { /* 경고가 업무를 멈추면 안 된다 */ }
 }
 
 /* C·D열은 ○ O Y TRUE 만 참. 빈칸·오타·✗는 전부 거짓이다 (fail-closed).
@@ -1315,11 +1361,20 @@ const ANON_LIMIT = {
 };
 function anonThrottle(kind) {
   const c = ANON_LIMIT[kind] || ANON_LIMIT.anon;
+  /* ★분당 상한만 스크립트 속성으로 뺀다 (ANON_MIN_AUTH / ANON_MIN_ANON)★
+     26곳에 카톡으로 비밀번호를 일괄 공지하면 같은 1분 안에 로그인이 몰린다. auth 버킷은
+     분당 20이라 21번째부터 "요청이 많습니다"가 뜨는데, 매장 눈에는 그것이 "방금 받은
+     비밀번호가 안 된다"로만 보인다. 평소 값은 그대로 두고(기본값 = 종전 상수), 배포 당일에만
+     속성 화면에서 잠깐 올렸다가 되돌릴 수 있게 한다 — 재배포가 필요 없어야 저녁에 쓸 수 있다.
+     ※시간당 상한(c.hour)은 빼지 않는다. 하루치 실수를 흡수하는 것이 그쪽의 역할이고,
+       분당만 열어도 "공지가 한꺼번에 나갔다"는 상황은 전부 넘어간다.
+     ※그래도 공지를 3개 조로 10분 간격에 나눠 보내는 편이 먼저다. 이것은 그게 안 됐을 때의 손잡이다. */
+  const perMin = propN(kind === 'auth' ? 'ANON_MIN_AUTH' : 'ANON_MIN_ANON', c.min);
   const k = c.mk + Math.floor(Date.now() / 60000);
   const cache = CacheService.getScriptCache();
   const n = Number(cache.get(k) || 0) + 1;
   cache.put(k, String(n), 120);
-  if (n > c.min) return err('RATE_LIMITED', '요청이 많습니다. 잠시 후 다시 시도해 주세요.');
+  if (n > perMin) return err('RATE_LIMITED', '요청이 많습니다. 잠시 후 다시 시도해 주세요.');
   if (hourlyCount(c.hk) >= c.hour) return err('RATE_LIMITED', '요청이 많습니다. 잠시 후 다시 시도해 주세요.');
   bumpHourly(c.hk);
   return { ok: true };
@@ -1360,22 +1415,40 @@ function legacyThrottle() {
 
    ★`*` 폴백의 유일한 위험★: 누가 `매장담당자 | * | ○` 를 한 줄 복사해 넣으면 그 순간 26개
    매장 계정이 계정 관리(ADMIN_MENU)·감사로그·미제출 현황판까지 전부 읽게 된다.
-   그렇다고 코드에서 "ADMIN_MENU는 `*` 폴백 금지"로 막지는 않았다 — `관리자 | accounts` 행이
-   아직 없는(옛 시드로 만들어진) 시트에서는 그 한 줄이 담당자 본인을 잠그고, 복구는 편집기에서
-   시트를 직접 고치는 것뿐이라 저녁 9시에 비개발자가 할 수 있는 일이 아니다.
-   대신 ensureAuthSheets()가 "`*` 행을 가진 역할이 둘 이상"이면 경고한다. */
+
+   ★2026-08-16 — 그 한 줄을 조건부로 막는다 (지시 §4 "매장 사람이 관리자 화면에 절대 못 들어오게")★
+   종전에는 막지 않았다. 이유는 "`관리자 | accounts` 행이 아직 없는(옛 시드로 만들어진) 시트에서는
+   폴백 금지가 담당자 본인을 잠그고, 복구는 편집기에서 시트를 직접 고치는 것뿐"이라는 것이었다.
+   그 우려는 **조건을 붙이면 사라진다** — 표 안에 (누구든) `accounts` 정확일치 행이 하나라도
+   있으면 "계정 관리는 이 역할에 준다"를 사람이 이미 적어 둔 것이므로, 그때부터는 `*` 폴백을
+   받지 않는다. 행이 하나도 없는 옛 시트에서는 종전 그대로 폴백해 담당자가 잠기지 않는다.
+   지금 시드는 `관리자 | accounts` 행을 명시적으로 넣으므로(아래 ensureAuthSheets) 새 시트는
+   전부 보호되고, 옛 시트도 그 한 줄을 손으로 추가하는 순간 보호된다.
+   같은 규칙을 'debug'(오류 원문 열람)에도 적용한다 — 시트 오타 하나로 파일 ID·시트명이
+   실린 예외 문자열이 매장 화면까지 흘러가는 경로를 함께 닫는다.
+
+   ★그래서 앞으로 새 역할에 계정 관리를 주려면 `*` 한 줄로는 안 된다★
+   `새역할 | accounts | ○ | ○` 처럼 메뉴 키를 적어야 한다. 이 규칙은 항상 '덜 주는' 쪽으로만
+   틀리므로(주려던 것을 못 주는 일은 시트 한 줄로 즉시 고쳐지고, 주지 말아야 할 것을 주는 일은
+   26개 매장이 관리자 화면을 얻은 뒤에야 발견된다) 이 방향을 택했다.
+   ※이것은 오타 방어이지 권한 설계가 아니다. 정본은 여전히 `역할` 탭이다. */
+function noStarMenu(menu) { return menu === ADMIN_MENU || menu === 'debug'; }
+
 function can(role, menu, act) {
   if (!role || !menu) return { allow: false };
   const rows = getRoles();
   const exact = [];
   const star = [];
+  let declared = false;   // 표 어딘가에 (어느 역할이든) 이 메뉴의 정확일치 행이 있는가
   for (let i = 0; i < rows.length; i++) {
+    if (rows[i].menu === menu) declared = true;   // ★역할 필터보다 먼저★ — 다른 역할의 행도 센다
     if (rows[i].role !== role) continue;
     if (rows[i].menu === menu) exact.push(rows[i]);
     else if (rows[i].menu === '*') star.push(rows[i]);
   }
   let use = exact;
-  if (!use.length) use = star;
+  /* 정확일치가 없을 때만 `*`로 넘어간다. 단 위 ★의 두 메뉴는 '표에 이미 적혀 있으면' 넘어가지 않는다. */
+  if (!use.length && !(noStarMenu(menu) && declared)) use = star;
   if (!use.length) return { allow: false };
   if (exact.length > 1) {
     auditLog({ id: '(시스템)', role: role }, 'role.table', '', '경고', 'ROLE_TABLE_DUP',
@@ -2040,7 +2113,7 @@ function fnNotifyBadge(ctx) {
      10곳을 적으면 매장 파일 10개를 순회하는데, 명세 §9-9-7이 "파일당 3~6초라 반드시 10곳씩"이라
      못박은 그 순회다. 26곳을 적으면 6분 한도에 닿고 그동안 배지는 어차피 안 뜬다.
      배지는 '없어도 되는 편의'이므로, 20초를 기다리게 하느니 숫자를 안 그리는 편이 낫다.
-     (담당 매장이 많은 계정은 순위표·매장현황에서 같은 정보를 본다.) */
+     (담당 매장이 많은 계정은 전체 대시보드·매장현황에서 같은 정보를 본다.) */
   if (list.length > BADGE_MAX_STORES) return { ok: true, ym: ym };
 
   const ck = 'badge:v' + epoch() + ':' + ctx.id + ':' + ym;
@@ -2128,7 +2201,7 @@ function submittedStores(sh, tz, wantYm, nCols, dateCol, storeCol, routeCol) {
   /* ★끝에서부터 읽는다★ (audit.list와 같은 이유)
      `쇼퍼_응답`은 survey.submit(anon:true)이 먹이는 ★공개 엔드포인트★다. 고객 설문 QR을 돌린
      달에 3,000건이 들어오면, 종전 코드는 매번 3,000행 전체를 읽고 그중 '관리자 입력'인 26행만
-     썼다. 그리고 이 함수는 관리자가 순위표를 열 때마다 호출된다.
+     썼다. 그리고 이 함수는 관리자가 전체 대시보드를 열 때마다 호출된다.
      두 시트 모두 시간순 append이므로 최근 SCAN_MAX행이면 이번 달은 반드시 포함된다. */
   const SCAN_MAX = 3000;
   const last = sh.getLastRow();
@@ -2330,7 +2403,7 @@ function readDashboardRows() {
   const vals = rng.getValues();
   /* ★짧게 읽은 사실을 반드시 남긴다★ — 클램프는 예외를 피하려고 넣은 것이지 침묵하라는 뜻이
      아니었다. 누가 뒤 빈 열을 정리해 96열이 되면 v[96]이 undefined가 되어 연간 전 매장이
-     status:'none'이 되고, 예외도 경고도 없이 순위표가 통째로 빈다. */
+     status:'none'이 되고, 예외도 경고도 없이 전체 대시보드가 통째로 빈다. */
   if (vals.length && vals[0].length < 99) {
     Logger.log('★통합시트 [데이터] 열이 ' + vals[0].length + '개뿐입니다 — 연간(97~99) 열이 없습니다');
   }
@@ -2448,7 +2521,7 @@ function saveQsc(ss, p, ctx) {
     out.photosSkipped = photoMap.__skipped;
     /* 조용히 사라지면 아무도 모른다 — 담당자가 볼 수 있는 곳에 남긴다 */
     auditLog(ctx || anonCtx(), 'qsc.submit', p.store, '경고', 'PHOTO_SKIPPED',
-      '용량·형식 위반으로 저장하지 않은 사진 ' + photoMap.__skipped + '장');
+      '용량·형식이 맞지 않아 저장하지 않은 사진 ' + photoMap.__skipped + '장');
   }
   return out;
 }
@@ -2564,7 +2637,7 @@ function fnDashboard(ctx, payload, target) {
   const key = periodKey(payload && payload.period);
   if (!key) return err('BAD_REQUEST', '기간이 올바르지 않습니다.');
   const raw = dashRaw(key);
-  if (!raw) return err('SERVER_ERROR', '순위표를 불러오지 못했습니다.');
+  if (!raw) return err('SERVER_ERROR', '전체 대시보드를 불러오지 못했습니다.');
 
   /* 캐시에는 투영 전 원본을 담고, 투영은 응답 직전에 한다. 역할별로 캐시 키를 나누지 않는다 —
      키 설계 실수 하나가 곧 타 매장 유출이다. mine은 오직 ctx.stores로 판정한다. */
@@ -2610,7 +2683,7 @@ function curYm() {
   return Utilities.formatDate(new Date(), tz, 'yyyy-MM');
 }
 
-/* 순위표 원본 생성 — 300초 캐시 + 락 후 재확인(double-check).
+/* 전체 대시보드 원본 생성 — 300초 캐시 + 락 후 재확인(double-check).
    아침에 26명이 동시 접속하면 1명만 통합시트를 읽고 25명은 히트한다.
    동시 실행 한도 30이 실질 병목이라 이 락이 없으면 아침마다 실패 응답이 섞인다. */
 function dashRaw(key) {
@@ -2675,7 +2748,10 @@ function buildDash(key) {
     rows.push(row);
   }
 
-  // 순위 — 미점검 매장은 rank:null 로 맨 아래. 0점으로 정렬에 섞으면 "우리가 꼴찌"라는 잘못된 신호가 간다.
+  /* rank — 정렬 순서를 정하는 내부 값이다. ★화면에 등수로 찍지 않는다★(2026-08-16 지시 §1:
+     줄세우기로 읽히면 안 된다). dashboard-app.js가 점수 순 정렬에만 쓰고 열로는 그리지 않으므로
+     서버는 계속 담아 보낸다. 미점검 매장은 rank:null 로 맨 아래 — 0점으로 정렬에 섞으면
+     점검을 안 했을 뿐인데 점수가 바닥인 것처럼 보인다. */
   const scored = rows.filter(function (r) { return r.status === 'done' && typeof r.total === 'number'; });
   scored.sort(function (a, b) { return b.total - a.total; });
   for (let i = 0; i < scored.length; i++) scored[i].rank = i + 1;
@@ -2750,7 +2826,7 @@ function readPeriodCols(key) {
 /* 오프셋별 타입 테이블을 지킨다:
      점수 열 = 숫자(fraction) → ×100 · 등급 열 = 문자열(★×100 하지 말 것★)
    개선(+4)열이 가장 위험하다. 8월 실측(개선요청 5건 = 정수 5, % 서식일 뿐)이라
-   블록 7열에 ×100을 일괄 적용하면 순위표에 500이 뜬다. */
+   블록 7열에 ×100을 일괄 적용하면 전체 대시보드에 500이 뜬다. */
 function fillPeriod(row, v, cols, key, isYear) {
   if (!cols) return;
   const improveIsRate = isYear || (key >= '2026-10');
@@ -2776,7 +2852,7 @@ function fillPeriod(row, v, cols, key, isYear) {
   row.total = pct(t);
   row.grade = str(v[cols.grade - 1]);
   /* status: 0을 미점검으로 잡아야 한다. typeof!=='number'는 빈 셀과 '#DIV/0!'는 잡지만 0은 못 잡는다.
-     종합 열이 =IFERROR(…,0)이면 그 매장이 정상 랭킹에 들어가 26위가 된다. */
+     종합 열이 =IFERROR(…,0)이면 그 매장이 점수 순 정렬의 맨 아래에 섞여 들어간다. */
   const hasQ = (typeof q === 'number');
   const hasC = (typeof c === 'number');
   if (!hasQ && !hasC) row.status = 'none';
@@ -2873,7 +2949,7 @@ function storeMonthBody(store, ym) {
 
 /* 개선요청 표에는 '언제 등록됐는지'가 적히는 칸이 없다. 그래서 등록 시각은 응답 원본
    (QSC_회차 제출시각)에서 가져오고, 표의 어느 행이 어느 회차의 것인지는 ★행 순서★로 잇는다 —
-   writeStoreQsc가 회차마다 표 맨 아래에 이어 붙이기만 하므로, 마지막 회차의 지적이
+   writeStoreQsc가 회차마다 표 맨 아래에 이어 붙이기만 하므로, 마지막 회차의 개선요청이
    표의 마지막 N행이다.
 
    ★셈이 조금이라도 맞지 않으면 NEW를 하나도 붙이지 않는다★. 경계가 한 칸만 밀려도
@@ -2955,7 +3031,7 @@ function qscRounds(store, ym) {
   return out;
 }
 
-/* 회차별 '개선요청 표에 실린 지적' 건수. writeStoreQsc가 표에 쓰는 조건과 같은 조건
+/* 회차별 '개선요청 표에 실린 개선요청' 건수. writeStoreQsc가 표에 쓰는 조건과 같은 조건
    (개선필요건수 ≥ 1)으로 QSC_상세를 센다. 회차 구분은 (점검일자 · 방문시간).
    셀 수 없는 상황이면 null — 부르는 쪽이 NEW를 포기한다. */
 function roundTicketCounts(store, ym, rounds) {
@@ -2997,7 +3073,7 @@ function roundTicketCountsRaw(store, ym, rounds) {
     const seen = {};
     for (let r = 0; r < rounds.length; r++) {
       const k = rounds[r].date + '|' + rounds[r].time;
-      /* 같은 날 같은 시각에 회차가 둘이면 어느 지적이 어느 회차의 것인지 가릴 수 없다 */
+      /* 같은 날 같은 시각에 회차가 둘이면 어느 개선요청이 어느 회차의 것인지 가릴 수 없다 */
       if (seen[k]) return null;
       seen[k] = true;
       if (!Object.prototype.hasOwnProperty.call(tally, k)) return null;
@@ -3628,7 +3704,7 @@ function writeStoreQsc(p, photoMap) {
   let no = used;
 
   /* 표가 모자라면 예외로 죽는 대신 쓸 수 있는 만큼만 쓴다 —
-     한 회차 지적이 남은 빈 행보다 많을 수 있다(사람이 만든 탭은 행 수가 제각각). */
+     한 회차 개선요청이 남은 빈 행보다 많을 수 있다(사람이 만든 탭은 행 수가 제각각). */
   const room = sh.getMaxRows() - row + 1;
   const list = found.slice(0, Math.max(0, room));
   if (!list.length) return { ok: false, error: '개선요청 표에 빈 행이 없음: ' + tab, warn: warn };
@@ -3660,7 +3736,7 @@ function writeStoreQsc(p, photoMap) {
   const jR = grid(sh, row, 10, j.length, 1);
   if (bcR && bcR.getNumColumns() === 2) bcR.setValues(bc); else warn.push('B:C(번호·구분) 칸이 없어 기록하지 못했습니다');
   if (dR) dR.setValues(d); else warn.push('D(사진) 칸이 없어 기록하지 못했습니다');
-  if (jR) jR.setValues(j); else warn.push('J(지적 내용) 칸이 없어 기록하지 못했습니다');
+  if (jR) jR.setValues(j); else warn.push('J(개선요청 내용) 칸이 없어 기록하지 못했습니다');
   return { ok: !!jR, tickets: jR ? list.length : 0, tab: tab, skipped: found.length - list.length, warn: warn };
 }
 
@@ -3787,7 +3863,7 @@ function saveReceipts(p, ctx, isSurvey) {
     /* 예외 원문에는 드라이브 파일 ID·폴더명이 실린다. 시트와 응답 양쪽에 그대로 남기던 것을
        고정 문구로 바꾸고 원문은 실행 로그로만 보낸다 (응답 자체는 저장되어야 한다). */
     Logger.log('saveReceipts 실패: ' + String(err));
-    return ['사진 저장 실패 (실행 로그 확인)'];
+    return ['사진이 저장되지 않았습니다 (실행 로그 확인)'];
   }
 }
 
@@ -4206,7 +4282,7 @@ function makeMonthTabs(stores, ym, page) {
         const pr = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE)
           .concat(sh.getProtections(SpreadsheetApp.ProtectionType.SHEET));
         const bad = pr.filter(function (x) { return !x.canEdit(); });
-        if (bad.length) { mark = '✗'; note = '  ★보호 ' + bad.length + '건 — 이 매장은 저장이 실패합니다★'; }
+        if (bad.length) { mark = '✗'; note = '  ★보호 ' + bad.length + '건 — 이 매장은 저장되지 않습니다★'; }
       } catch (e2) { note = '  (보호 확인 실패)'; }
       out.push(mark + ' ' + store + ' : ' + tabs[0] + ' → ' + ym + note);
     } catch (e) {
@@ -4277,9 +4353,11 @@ function safeRow(arr) { return arr.map(safe); }
    잘 막아 두었는데, 기능층이 성공 응답 안에 담으면 그 게이트를 우회한다. 그리고 1단계에는
    토큰이 없어 그 응답이 무인증 익명 호출자에게 그대로 간다. 앱스 스크립트 예외 원문에는
    스프레드시트 파일 ID·문서명·행 번호가 실린다. 원문은 실행 로그에만 남긴다. */
+/* ★문구는 '되지 않았습니다'로 적는다★ — 이 문자열은 점검자 화면에 그대로 뜬다.
+   조사(이/가)가 what에 따라 갈리므로 '단계가'를 고정으로 끼워 넣는다 ('기록 단계가 …'). */
 function opErr(what, err) {
-  Logger.log(what + ' 실패: ' + String(err));
-  return what + '에 실패했습니다. 담당자에게 문의해 주세요.';
+  Logger.log(what + ' 되지 않음: ' + String(err));
+  return what + ' 단계가 완료되지 않았습니다. 담당자에게 문의해 주세요.';
 }
 
 /* 요청한 크기가 시트 그리드를 넘으면 Apps Script는 잘라주지 않고 예외를 던진다.
@@ -4319,7 +4397,7 @@ function imageFormula(fileId) {
 
 /* =IMAGE() 셀은 getValues()가 ''를 준다 — 이미지는 셀 값이 아니라 렌더 객체다.
    파일 ID는 수식 문자열에서 뽑아야 한다. PHOTO_EMBED=false면 셀에 URL 문자열이 들어 있으므로
-   두 경로 모두 본다. 이걸 빠뜨리면 본사 지적 사진이 한 장도 안 뜨고, 매장이 올린 사진은
+   두 경로 모두 본다. 이걸 빠뜨리면 본사 개선요청 사진이 한 장도 안 뜨고, 매장이 올린 사진은
    새로고침할 때마다 사라진 것처럼 보여 드라이브에 중복 파일이 쌓인다. */
 function photoIdsOf(valueStr, formulaStr) {
   const src = String(formulaStr || '') + ' ' + String(valueStr || '');

@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=34">
+<link rel="stylesheet" href="css/app.css?v=35">
 </head>
 <body>
 <div class="home">
@@ -23,7 +23,7 @@
     <h2 id="cardTitle">로그인</h2>
 
     <!-- 점검 모드 안내. 서버 스크립트 속성 MAINT에 적힌 문구를 그대로 보여준다.
-         ★.mockNote(점선 앰버)를 쓴다 — 홈·순위표·매장현황의 점검 안내와 같은 클래스다.
+         ★.mockNote(점선 앰버)를 쓴다 — 홈·전체 대시보드·매장현황의 점검 안내와 같은 클래스다.
            화면마다 다른 클래스를 쓰면 같은 상태가 화면마다 다르게 보이고, css/app.css에
            정의를 하나 더 얹어야 한다. 점검 안내의 모양은 앱 전체에서 한 벌이어야 한다. -->
     <p class="note mockNote" id="maint" style="display:none"></p>
@@ -33,8 +33,10 @@
       <div class="meta-grid">
         <div class="full">
           <label class="f" for="lid">아이디 <span class="fHint">매장명을 그대로 입력해 주세요</span></label>
-          <!-- list=storeIds : 매장 목록 자동완성. 목록은 login-app.js가 서버(config.get) →
-               data/master.json 순으로 채우고, 둘 다 실패하면 그냥 비워 둔다(직접 입력은 항상 된다). -->
+          <!-- list=storeIds : 매장 목록 자동완성. 목록은 login-app.js가 data/master.json(즉시) →
+               서버 config.stores(최신본으로 덮어쓰기) 순으로 채우고, 둘 다 되지 않으면 그냥
+               비워 둔다(직접 입력은 언제나 된다). config.get이 아니라 config.stores인 이유는
+               login-app.js의 fillStores 주석에 적어 두었다. -->
           <input type="text" id="lid" name="username" autocomplete="username" list="storeIds"
                  autocapitalize="none" autocorrect="off" spellcheck="false"
                  placeholder="예: 청수당 익선">
@@ -111,8 +113,8 @@
   <div class="homeFoot">GLOW SEOUL · QSC</div>
 </div>
 
-<script src="js/auth.js?v=34"></script>
-<script src="js/login-app.js?v=34"></script>
+<script src="js/auth.js?v=35"></script>
+<script src="js/login-app.js?v=35"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

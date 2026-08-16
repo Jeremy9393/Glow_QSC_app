@@ -32,8 +32,8 @@
     'qsc.submit': 'QSC 점검 제출',
     'shopper.submit': '미스터리쇼퍼 제출',
     'survey.submit': '고객 설문 제출',
-    'dashboard.get': '순위표 조회',
-    'store.get': '매장 현황 조회',
+    'dashboard.get': '전체 대시보드 조회',
+    'store.get': '매장 QSC현황 조회',
     'store.saveImprove': '개선보고 저장',
     'account.list': '계정 목록 조회',
     'account.setPassword': '비밀번호 설정',
@@ -46,9 +46,10 @@
     'role.table': '역할표 점검',
     'resolveTarget': '대상 매장 판정',
   };
-  /* 사유 코드도 같은 원칙이다. 거부 사유가 'FORBIDDEN'으로만 보이면 담당자가 판단을 못 한다. */
+  /* 사유 코드도 같은 원칙이다. 사유가 'FORBIDDEN'으로만 보이면 담당자가 판단을 못 한다.
+     ★코드(키)는 서버 계약이라 그대로 두고 라벨만 순화한다★ */
   const REASON_LABEL = {
-    'FORBIDDEN': '권한없음',
+    'FORBIDDEN': '권한 없음',
     'SCOPE_DENIED': '담당 매장 아님',
     'BAD_PASSWORD': '비밀번호 틀림',
     'NO_ACCOUNT': '없는 아이디',
@@ -65,10 +66,22 @@
     'SERVER_ERROR': '서버 오류',
     'NOT_FOUND': '대상 없음',
     'HASH_BUDGET': '로그인 시도 과다',
-    'GLOBAL_THROTTLE': '전체 실패 과다',
+    'GLOBAL_THROTTLE': '전체 로그인 시도 과다',
     'ROLE_TABLE_DUP': '역할표 중복',
+    'ROLE_STAR_MULTI': '역할표 `*` 행 확인 필요',
     'SET_PW': '비밀번호 최초 설정',
     'PHOTO_SKIPPED': '사진 저장 안 됨',
+  };
+  /* 결과 칸도 같다. 시트에 적히는 값(`성공`·`실패`·`거부`…)은 계약이라 그대로 두고
+     ★보이는 문구만★ 순화한다 — 이 표는 사람이 무엇을 잘못했는지 따지는 표가 아니라
+     "무엇이 어디서 멈췄나"를 찾는 표다. 표에 없는 값은 다른 매핑표와 같이 원문 그대로 나간다.
+     ★`성공`은 바꾸지 않는다★ — 부정적인 말이 아니고, 아래 bad 판정과 눈으로 짝이 맞아야 한다. */
+  const RESULT_LABEL = {
+    '실패': '되지 않음',
+    '거부': '막힘',
+    '차단': '멈춤',
+    '경보': '주의',
+    '통과(무인증)': '통과(로그인 없음)',
   };
 
   let rows = [];        // 서버가 준 계정 목록 (표시 순서 = 시트 순서)
@@ -199,18 +212,43 @@
   try { signedIn = await Auth.ensure(); } catch (e) { signedIn = false; }
   if (!signedIn) { goLogin(); return; }
 
-  if (!Auth.hasMenu('accounts')) {
-    setNote($('#stateNote'), '계정 관리 권한이 없습니다. 감사총무팀에 문의해 주세요.');
-    $('#syncBtn').style.display = 'none';
-    $('#q').style.display = 'none';
-    /* 감사로그도 함께 감춘다. 서버가 어차피 거부하지만, 누를 수 있게 두면
+  /* ★매장 사용자가 주소를 직접 쳐서 들어온 경우★ (2026-08-16 지시 §4).
+     서버는 menu:'accounts' 게이트가 이미 막고 있고, 여기서 막는 것은 '화면'이다 —
+     안내 없이 빈 목록만 남겨 두면 "고장 났다"로 읽힌다. 문구를 먼저 보여 주고 홈으로 옮긴다.
+
+     ★문구를 여기서 짓지 않는다★ — Auth.denyHome()이 앱 전체의 같은 상황을 한 문구로 맡는다.
+       화면마다 조금씩 다른 말("…볼 권한이 없습니다" / "…잠시 후 홈으로")을 쓰면 같은 일을
+       겪은 두 사람이 서로 다른 말을 전해 오고, 그때 담당자가 원인을 못 맞춘다.
+     ★아래 폴백은 auth.js가 옛 캐시(v34)로 남았을 때만 쓴다★ — 그때 denyHome은 없다.
+     ★DOM을 하나씩 확인하고 만진다★ — accounts.html의 guard('accounts')가 먼저 돌면
+       .wrap을 안내 한 줄로 갈아 끼운 뒤라 #stateNote·#syncBtn이 이미 없다. */
+  function deny() {
+    if (typeof Auth.denyHome === 'function') return Auth.denyHome();
+    const n = $('#stateNote');
+    if (n) setNote(n, '이 화면을 볼 수 있는 권한이 없습니다. 홈으로 이동합니다.');
+    /* 감사로그·조작 버튼도 함께 감춘다. 서버가 어차피 열어 주지 않지만, 누를 수 있게 두면
        "권한이 없습니다"를 두 번 읽히는 화면이 된다. */
-    $('#auditCard').style.display = 'none';
-    return;
+    ['#syncBtn', '#q', '#auditCard'].forEach(function (s) {
+      const el = $(s); if (el) el.style.display = 'none';
+    });
+    /* replace다 — push로 남기면 홈에서 뒤로가기를 누를 때 이 화면으로 다시 떨어진다 */
+    setTimeout(function () { location.replace('index.html'); }, 1800);
+    return false;
   }
-  // 읽기만 있는 역할이 생기더라도 화면이 깨지지 않게 조작 버튼만 감춘다(역할 이름은 묻지 않는다)
+
+  /* ★역할 이름을 묻지 않는다★ — Auth.hasMenu()만 본다(서버 `역할` 탭이 정본).
+     ★menus()가 null이면 막지 않는다★ — '권한이 0개'와 '아직 모른다'는 다르다(auth.js guard와
+     같은 규칙). 종전에는 hasMenu() 단독이라, 저장소가 비워져 권한 사본을 못 읽은 담당자까지
+     "권한이 없습니다"를 보고 홈으로 튕겼다. 모를 때는 통과시키고 서버에 판정을 맡긴다 —
+     그 판정(FORBIDDEN)은 아래 load()가 받아 같은 자리로 데려간다. 매장 계정이 이 갈래로
+     들어와도 목록은 한 줄도 내려오지 않는다. */
+  const knownMenus = (typeof Auth.menus === 'function') ? Auth.menus() : null;
+  if (knownMenus && !Auth.hasMenu('accounts')) { deny(); return; }
+  /* 읽기만 있는 역할이 생기더라도 화면이 깨지지 않게 조작 버튼만 감춘다(역할 이름은 묻지 않는다).
+     ★null 확인★ — 읽기 없이 쓰기만 켜진 표를 만나면 accounts.html의 guard('accounts')가
+     먼저 본문을 갈아 끼우고 지나간 뒤라 이 버튼이 없다. 그때 여기서 터지면 안내가 지워진다. */
   const canWrite = Auth.can('accounts', '쓰기');
-  if (!canWrite) $('#syncBtn').style.display = 'none';
+  if (!canWrite) { const sb = $('#syncBtn'); if (sb) sb.style.display = 'none'; }
   const meId = ((Auth.user && Auth.user()) || {}).id || '';
 
   // ---------- 오류 처리 ----------
@@ -235,7 +273,10 @@
        이 화면에서만 점검 문구가 앰버 배너로 안 뜨고 회색 안내로 밀려나 있었다.
        다른 화면(login·dashboard·store)은 모두 'MAINT'로 맞춰져 있다. */
     if (code === 'MAINT') { maint(msg); return msg; }
-    if (code === 'APP_OUTDATED') return '앱을 새로 고쳐 주세요 (앱 종료 후 다시 실행)';
+    /* APP_OUTDATED는 옛 봉투(type)로 온 제출에만 붙는다 — 이 화면의 account.* 는 그 경로가
+       아니라 사실상 닿지 않는다. 그래서 문구를 여기서 다시 짓지 않고 서버 문구를 그대로 쓴다.
+       ★종전 문구('앱 종료 후 다시 실행')를 지운 이유★ — 같은 코드가 점검표 화면에서는
+       74문항의 사진을 날리는 안내가 된다. 문구는 서버 한 곳(Code.gs doPost)에서만 관리한다. */
     return msg;
   }
 
@@ -588,6 +629,14 @@
       render();
       return;
     }
+    /* ★서버가 이 화면을 열어 주지 않았다★ (2026-08-16 지시 §4).
+       위 가드는 권한 사본(menus)이 있을 때만 판정한다 — 사본이 비어 통과한 매장 계정은
+       여기까지 온다. 서버는 목록을 한 줄도 주지 않았으니, 오류 문구만 남기고 화면에 세워 두는
+       대신 위 가드와 같은 자리(안내 → 홈)로 데려간다.
+       ★저장 계열(setPassword·setStatus·sync)에는 이 처리를 붙이지 않는다★ — 그쪽 FORBIDDEN은
+       "지금 이 조작만 안 된다"이고, 화면을 통째로 걷어내면 방금 설정한 비밀번호를 복사할 자리가
+       사라진다. 화면을 여는 조회(account.list)의 거절만 홈 이동 신호로 쓴다. */
+    if (res && res.code === 'FORBIDDEN') { deny(); return; }
     const msg = failMsg(res);
     /* 점검 문구는 위 maint()가 앰버 배너에 이미 띄웠다 — 여기서 또 적으면 같은 말이 두 줄 된다.
        (dashboard-app.js와 같은 관례다) */
@@ -625,8 +674,9 @@
 
     const rs = document.createElement('span');
     rs.className = 'lr';
-    // 결과와 사유는 한 칸에 붙여 둔다 — '거부'만으로는 무엇을 고쳐야 할지 알 수 없다
-    rs.textContent = [result, r.reason ? label(REASON_LABEL, r.reason) : '']
+    /* 결과와 사유는 한 칸에 붙여 둔다 — '막힘'만으로는 무엇을 고쳐야 할지 알 수 없다.
+       ★여기서만 라벨로 바꾼다★ — 위 bad 판정은 원문(result)으로 이미 끝났다. */
+    rs.textContent = [label(RESULT_LABEL, result), r.reason ? label(REASON_LABEL, r.reason) : '']
       .filter(function (v) { return !!v; }).join(' ');
 
     row.appendChild(t);
@@ -681,7 +731,7 @@
     renderAudit(list);
     setNote($('#auditNote'), list.length
       ? ''
-      : (onlyDenied ? '거부·실패 기록이 없습니다.' : '기록이 없습니다.'));
+      : (onlyDenied ? '막힌 기록이 없습니다.' : '기록이 없습니다.'));
   }
 
   /* 펼칠 때 한 번만. ontoggle은 닫을 때도 오므로 open을 본다.
