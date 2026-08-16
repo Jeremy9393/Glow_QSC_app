@@ -3139,7 +3139,7 @@ function stampOf(v, tz) {
 }
 
 function readStoreTab(ss, sh, store, ym) {
-  const tz = ss.getSpreadsheetTimeZone();
+  const tz = fileTz(ss);
   const lm = labelMap(sh);
   const warn = [];
 
@@ -3440,7 +3440,7 @@ function fnStoreSave(ctx, payload, target) {
     const ss = SpreadsheetApp.openById(id);
     const sh = ss.getSheetByName(ym);
     if (!sh) return err('NOT_FOUND', ym + ' 탭이 아직 만들어지지 않았습니다.');
-    const tz = ss.getSpreadsheetTimeZone();
+    const tz = fileTz(ss);
 
     // B열 NO 재탐색 — 클라이언트에 행 번호를 내려주지 않는 이유가 이것이다
     const noRng = grid(sh, 12, 2, 200, 1);
@@ -4468,6 +4468,22 @@ function ssTz() {
   if (_ssTzMemo) return _ssTzMemo;
   _ssTzMemo = tzMemo('sstz', SPREADSHEET_ID);
   return _ssTzMemo;
+}
+
+/* 매장 파일 26개의 타임존. ★getSpreadsheetTimeZone()이 문자열을 안 줄 수 있다★
+   2026-08-16 실제 사고: 금종제과 파일에 '이름 있는 시간대'(Asia/Seoul)가 지정돼 있지 않아
+   이 값이 문자열로 오지 않았고, 그대로 Utilities.formatDate에 넘어가
+   "잘못된 인수(timeZone)입니다. String 형식이어야 합니다."로 죽었다. 그 예외는 doPost의
+   catch에 잡혀 매장 화면에는 "처리 중 문제가 생겼습니다"로만 보였다 — 매장현황이 한 번도
+   열리지 않았는데 원인을 화면에서는 알 방법이 없었다.
+   ★ssTz·authTz는 처음부터 같은 폴백을 갖고 있었다★ — 26개 매장 파일만 맨몸이었고,
+   하필 그 파일들만 본사가 만든 것이 아니라 수년간 사람 손으로 복제돼 온 것들이다.
+   시트 쪽에서 시간대를 지정해도 되지만, 새로 늘어나는 파일마다 다시 챙겨야 하므로
+   받는 쪽에서 막는다. */
+function fileTz(ss) {
+  let tz = null;
+  try { tz = ss.getSpreadsheetTimeZone(); } catch (e) { }
+  return (typeof tz === 'string' && tz) ? tz : Session.getScriptTimeZone();
 }
 
 function tzMemo(name, fileId) {
