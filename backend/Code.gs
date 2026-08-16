@@ -2796,7 +2796,10 @@ function buildDash(key) {
     /* 가중치는 서버가 정하고 화면은 표시만 한다. legacy는 =AVERAGE(위생,CS)-개선건수 였으므로 5:5. */
     weights: (f === 'v2') ? { qsc: 0.6, shopper: 0.3, improve: 0.1 } : { qsc: 0.5, shopper: 0.5, improve: 0 },
     cols: {
-      improve: (f === 'v2') ? '개선율' : '개선요청(건)',
+      /* ★라벨은 formulaOf가 아니라 fillPeriod의 improveIsRate와 같은 조건으로 정해야 한다★
+         연간(CU열)은 처음부터 개선율인데 formulaOf('2026')는 'legacy'를 돌려주므로,
+         종전에는 연간을 열어도 '개선요청(건)'이라 적힌 칸에 94.1(퍼센트)이 찍혔다. */
+      improve: (isYear || key >= '2026-10') ? '개선율(%)' : '개선요청(건)',
       hasHygieneCs: !isYear   // 연간 구역에는 97·98·99 3열밖에 없어 위생·CS 열이 존재하지 않는다
     },
     stats: stats,
@@ -2825,8 +2828,16 @@ function readPeriodCols(key) {
 
 /* 오프셋별 타입 테이블을 지킨다:
      점수 열 = 숫자(fraction) → ×100 · 등급 열 = 문자열(★×100 하지 말 것★)
-   개선(+4)열이 가장 위험하다. 8월 실측(개선요청 5건 = 정수 5, % 서식일 뿐)이라
-   블록 7열에 ×100을 일괄 적용하면 전체 대시보드에 500이 뜬다. */
+
+   개선(+4)열이 가장 헷갈린다. 화면에는 '5%'로 보이지만 셀이 담고 있는 값은 0.05다
+   (백분율 서식은 보여주는 방식일 뿐 값을 바꾸지 않는다. getValues()는 0.05를 준다).
+   그런데 이 칸의 뜻은 백분율이 아니라 **개선요청 건수 5건**이다. 즉 건수 = 값 × 100이다.
+   ★종전에는 셀에 정수 5가 들어 있다고 보고 값을 그대로 내려보냈다★ — 그래서 대시보드
+     개선요청 열이 26개 매장 전부 0.0으로 찍혔다(0.05를 소수점 1자리로 반올림한 결과다).
+
+   2026-10부터는 같은 칸의 뜻이 '개선율'로 바뀐다(종합 = QSC 60 + 쇼퍼 30 + 개선현황 10).
+   그때는 값이 진짜 비율이므로 ×100이 곧 퍼센트다. 연간(CU열)도 처음부터 개선율이다.
+   결국 세 경우 모두 ×100이지만 **단위가 다르다** — 건수냐 퍼센트냐. 라벨을 그에 맞춘다. */
 function fillPeriod(row, v, cols, key, isYear) {
   if (!cols) return;
   const improveIsRate = isYear || (key >= '2026-10');
@@ -2835,7 +2846,7 @@ function fillPeriod(row, v, cols, key, isYear) {
     const t = v[cols.total - 1];
     row.total = pct(t);
     row.grade = str(v[cols.grade - 1]);
-    row.improve = improveIsRate ? pct(rawImprove) : num(rawImprove);
+    row.improve = improveIsRate ? pct(rawImprove) : cnt(rawImprove);
     /* 연간: 97이 숫자가 아니거나, 97===0이고 개선율도 비었으면 미점검 */
     row.status = (typeof t !== 'number' || (t === 0 && row.improve === null)) ? 'none' : 'done';
     if (row.status === 'none') { row.total = null; row.grade = null; row.improve = null; }
@@ -2848,7 +2859,7 @@ function fillPeriod(row, v, cols, key, isYear) {
   row.qscGrade = str(v[cols.qscGrade - 1]);
   row.cs = pct(c);
   row.csGrade = str(v[cols.csGrade - 1]);
-  row.improve = improveIsRate ? pct(rawImprove) : num(rawImprove);
+  row.improve = improveIsRate ? pct(rawImprove) : cnt(rawImprove);
   row.total = pct(t);
   row.grade = str(v[cols.grade - 1]);
   /* status: 0을 미점검으로 잡아야 한다. typeof!=='number'는 빈 셀과 '#DIV/0!'는 잡지만 0은 못 잡는다.
@@ -2867,6 +2878,9 @@ function fillPeriod(row, v, cols, key, isYear) {
 }
 
 function pct(v) { return (typeof v === 'number') ? round1(v * 100) : null; }
+/* 개선요청 '건수'. 셀은 5건을 0.05로 담고 백분율 서식으로 5%처럼 보여 준다 —
+   값을 그대로 쓰면 화면에 0.0이 찍힌다. 건수는 정수이므로 반올림해서 내려보낸다. */
+function cnt(v) { return (typeof v === 'number') ? Math.round(v * 100) : null; }
 function num(v) { return (typeof v === 'number') ? v : null; }
 function str(v) {
   const s = String(v == null ? '' : v).trim();
