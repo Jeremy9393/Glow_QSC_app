@@ -266,10 +266,31 @@ const Auth = (function () {
 
   /* 시트에서 역할을 고치면 여기서 반영된다. 화면 진입 시 1회 부른다.
      실패해도 기존 세션을 버리지 않는다 — 오프라인에서 화면이 비는 편이 더 나쁘다
-     (점검 모드 MAINT 응답도 여기서는 그냥 false다. 계정이 죽은 것이 아니다). */
-  async function sync() {
+     (점검 모드 MAINT 응답도 여기서는 그냥 false다. 계정이 죽은 것이 아니다).
+
+     ★maxAgeSec을 주면 그만큼 안에 받은 사본은 그냥 쓴다 (2026-08-16)★
+     앱스 스크립트는 왕복 1회가 약 2초다 — 서버가 아무 일도 안 해도 1.5초다(실측).
+     그런데 매장 사람이 홈에서 매장현황으로 넘어가는 30초 안에 이 값을 세 번 받는다:
+     ①로그인 응답이 이미 세션 본문이고 ②홈이 한 번 ③매장현황이 또 한 번.
+     ★사본이 낡아도 위험하지 않은 근거는 서버에 있다★ — 역할·범위 판정은 매 요청마다
+       토큰으로 다시 하고(getAccount → acctToCtx → scopeOf), 담당 매장이 1곳인 계정은
+       resolveTarget이 payload.store를 아예 읽지 않으며, 범위 밖 요청은 SCOPE_DENIED로 끊긴다.
+       즉 이 사본은 '화면을 그리는 재료'일 뿐 권한의 근거가 아니다.
+     인자를 안 주면 종전 그대로 매번 물어본다 — 부르는 쪽이 명시할 때만 건너뛴다. */
+  async function sync(maxAgeSec) {
     const s = session();
     if (!s) return false;
+    if (maxAgeSec) {
+      const age = Math.floor(Date.now() / 1000) - (s.savedAt || 0);
+      if (age >= 0 && age < maxAgeSec) {
+        /* ★건너뛸 때 noticeSeen을 함께 세운다★ — 안 세우면 autoNotice가 1.5초 뒤에
+           똑같은 auth.session을 한 번 더 보낸다(요청 수가 하나도 안 준다). 게다가 종전에는
+           순차이던 두 요청이 동시 요청이 되어 아침 26곳 러시 때 동시 실행 한도만 갉아먹는다.
+           공지는 mountNotice가 사본으로 이미 그리고, 홈은 인자 없이 sync하므로 늘 최신이다. */
+        noticeSeen = true;
+        return true;
+      }
+    }
     const r = await post('auth.session', null, s.t);
     if (!r || !r.ok) return false;
     s.user = r.user || s.user;
