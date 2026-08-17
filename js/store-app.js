@@ -146,7 +146,12 @@
   /* 시트에서 역할·담당 매장을 고치면 여기서 반영된다(§7-3 auth.session).
      store.get보다 앞에 두는 이유: 매장 선택 드롭다운을 옛 목록으로 그려 두면
      방금 담당에서 빠진 매장을 골라 SCOPE_DENIED를 맞는다. */
-  if (sessionOk && online()) { try { await Auth.sync(); } catch (e) { /* 실패해도 기존 세션으로 진행 */ } }
+  /* ★10분 안에 받은 사본이면 서버에 다시 묻지 않는다 (2026-08-16)★
+     이 줄과 아래 load()의 store.get이 완전 순차라, 여기서 왕복 하나를 아끼면 화면이 그만큼
+     빨리 뜬다(왕복 1회 ≈ 2초). 홈에서 카드를 눌러 들어오는 흔한 동선에서는 방금 홈이
+     받아 둔 값이라 거의 항상 건너뛴다. 근거와 안전성은 auth.js의 sync() 주석에 적어 두었다.
+     ★인자를 지우면 종전 동작으로 돌아간다★ — 되돌리기가 이 한 숫자다. */
+  if (sessionOk && online()) { try { await Auth.sync(600); } catch (e) { /* 실패해도 기존 세션으로 진행 */ } }
   scope = (Auth.stores && Auth.stores()) || { all: false, list: [] };
   scope.list = scope.list || [];
 
