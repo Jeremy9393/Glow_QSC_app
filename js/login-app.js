@@ -106,7 +106,7 @@
   if (signedIn && !wantChg) { go(); return; }
 
   // 세 칸(로그인·설정·변경)이 모두 마크업에 있으므로 한 번만 걸어 두면 된다
-  bindMask();
+  bindEye();
 
   if (signedIn) toChangePw();
   else initLogin();
@@ -166,25 +166,55 @@
     } catch (e) { /* 사생활 모드 등 — 기억하지 못할 뿐 로그인은 끝났다 */ }
   }
 
-  /* 비밀번호 가리기 토글.
-     체크(기본) = type을 password로 두어 ●●●로 가리고, 체크를 풀면 text로 바꿔 글자를 그대로 보인다.
+  /* 비밀번호 칸 안의 눈 버튼.
+     기본은 ●●●로 가려 두고, 눈을 누르면 그 칸만 글자가 보인다.
      ★기본을 '가림'으로 둔다★ — 매장은 홀에서 폰을 열고, 어깨너머로 보이는 것이 기본값이면 안 된다.
      ★그래도 푸는 길을 남기는 이유★ — 받아 적은 비밀번호를 처음 칠 때 오타를 눈으로 확인할 수
        없으면 "받은 비밀번호로 안 들어가진다"는 문의가 그대로 관리자에게 간다.
-     ★상태를 기억하지 않는다★ — 다음에 열 때는 항상 가려진 상태로 시작한다. */
-  function bindMask() {
-    const boxes = document.querySelectorAll('input[data-mask]');
-    for (let i = 0; i < boxes.length; i++) {
-      const box = boxes[i];
-      const ids = box.getAttribute('data-mask').split(' ');
-      const apply = function () {
-        for (let k = 0; k < ids.length; k++) {
-          const el = document.getElementById(ids[k]);
-          if (el) el.type = box.checked ? 'password' : 'text';
-        }
+     ★상태를 기억하지 않는다★ — 다음에 열 때는 항상 가려진 상태로 시작한다.
+
+     2026-08-16에 화면 아래 '비밀번호 가리기' 체크박스를 대체했다. 체크박스는 가리는 칸에서
+     떨어져 있어 무엇을 켜고 끄는 스위치인지 한 번 더 생각해야 했고, 칸이 5개인데 스위치는
+     3개라 어느 칸에 걸린 것인지도 분명하지 않았다.
+
+     ★버튼을 여기서 만든다★ — 마크업에 다섯 번 적으면 한 곳만 고쳐지는 날이 온다.
+     ★type="button"을 반드시 준다★ — form 안의 button은 기본이 submit이라,
+       빠뜨리면 눈을 누를 때마다 로그인이 시도된다. */
+  function bindEye() {
+    /* ★아이콘 문자열을 이 함수 안에 둔다★ — bindEye()는 파일 위쪽(109행)에서 불린다.
+       함수 선언은 끌어올려지지만 바깥의 const는 아직 초기화 전이라, 밖에 두면
+       "Cannot access 'EYE_ON' before initialization"으로 죽는다.
+       그러면 눈 버튼만 안 생기는 것이 아니라 그 뒤 초기화가 통째로 멈춘다. */
+    const EYE_ON = '<svg class="eyeOn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + '<path d="M1.8 12S5.4 5.2 12 5.2 22.2 12 22.2 12 18.6 18.8 12 18.8 1.8 12 1.8 12Z"/><circle cx="12" cy="12" r="3.1"/></svg>';
+    const EYE_OFF = '<svg class="eyeOff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + '<path d="M9.9 5.5A9.6 9.6 0 0 1 12 5.2c6.6 0 10.2 6.8 10.2 6.8a18.9 18.9 0 0 1-3.3 4.2M6.4 6.5A18.7 18.7 0 0 0 1.8 12S5.4 18.8 12 18.8c1.7 0 3.2-.4 4.5-1.1"/>'
+      + '<path d="M9.9 9.9a3.1 3.1 0 0 0 4.3 4.3"/><path d="M3.4 3.4l17.2 17.2"/></svg>';
+
+    const pws = document.querySelectorAll('#loginForm input[type=password]');
+    for (let i = 0; i < pws.length; i++) {
+      const input = pws[i];
+      if (input.parentNode && input.parentNode.classList.contains('pwWrap')) continue;  // 두 번 걸지 않는다
+      const wrap = document.createElement('div');
+      wrap.className = 'pwWrap';
+      input.parentNode.insertBefore(wrap, input);
+      wrap.appendChild(input);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pwEye';
+      btn.setAttribute('aria-pressed', 'false');
+      btn.setAttribute('aria-label', '비밀번호 표시');
+      btn.innerHTML = EYE_ON + EYE_OFF;
+      btn.onclick = function () {
+        const show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+        btn.setAttribute('aria-label', show ? '비밀번호 숨기기' : '비밀번호 표시');
+        /* 커서를 칸 안에 되돌려 준다 — 누르고 나서 이어 치는 것이 자연스러운 동작이다 */
+        try { input.focus(); const n = input.value.length; input.setSelectionRange(n, n); } catch (e) { }
       };
-      box.onchange = apply;
-      apply();
+      wrap.appendChild(btn);
     }
   }
 
