@@ -17,7 +17,20 @@
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
 
-  const SNAP = 'qsc-dash-snap-v1';   // 오프라인일 때 그려 줄 마지막 성공 응답
+  /* 오프라인일 때 그려 줄 마지막 성공 응답.
+     ★키에 계정을 붙인다 (2026-08-16)★ — 응답에는 mine(우리 매장) 표식이 들어 있다.
+     계정 없이 한 칸에 담아 두면, 공용 PC에서 A계정으로 보고 B계정으로 로그인한 뒤
+     오프라인이 되는 순간 ★A의 매장★에 '▶ 우리 매장' 표시와 강조가 붙고 store.html 링크까지
+     걸린 채 그 행으로 자동 스크롤된다. 서버는 멀쩡한데 화면이 남의 담당을 알려주는 셈이다. */
+  const SNAP_BASE = 'qsc-dash-snap-v1';
+  function snapWho() {
+    try {
+      const u = (Auth.user && Auth.user()) || null;
+      const id = u ? (typeof u === 'string' ? u : (u.id || u.name || '')) : '';
+      return String(id || '').trim() || '-';
+    } catch (e) { return '-'; }
+  }
+  function snapName() { return SNAP_BASE + '|' + snapWho(); }
 
   let loading = false;
   let scrolled = false;   // 자기 매장 자동 스크롤은 진입 시 1회만 (기간을 바꿀 때마다 튀면 거슬린다)
@@ -313,11 +326,15 @@
   // ---------- 불러오기 ----------
 
   function snapRead() {
-    try { return JSON.parse(localStorage.getItem(SNAP) || 'null'); } catch (e) { return null; }
+    try { return JSON.parse(localStorage.getItem(snapName()) || 'null'); } catch (e) { return null; }
   }
   function snapWrite(data) {
-    try { localStorage.setItem(SNAP, JSON.stringify(data)); }
-    catch (e) { /* 용량 초과 등 — 스냅샷은 편의 기능이라 실패해도 화면은 정상 */ }
+    try {
+      localStorage.setItem(snapName(), JSON.stringify(data));
+      /* 계정 없이 저장하던 시절의 한 칸을 치운다 — 남겨 두면 그 안의 mine 표식이
+         계속 기기에 남는다(읽지는 않지만 지울 이유가 있는 값이다). */
+      localStorage.removeItem(SNAP_BASE);
+    } catch (e) { /* 용량 초과 등 — 스냅샷은 편의 기능이라 실패해도 화면은 정상 */ }
   }
 
   function showSnapshot(reason) {
