@@ -3199,12 +3199,12 @@ function readStoreTab(ss, sh, store, ym) {
       no: (typeof v[0] === 'number' && v[0] >= 1) ? no : null,
       cat: String(v[1] == null ? '' : v[1]).trim(),
       text: bodyText,
-      beforePhotos: photoIdsOf(v[2], f[2]).map(photoUrl),
+      beforePhotos: photoUrlsOf(v[2], f[2]),
       dept: String(v[9] == null ? '' : v[9]).trim(),
       owner: String(v[10] == null ? '' : v[10]).trim(),
       plan: String(cell(v[11], tz) == null ? '' : cell(v[11], tz)).trim(),
       doneNote: String(cell(v[12], tz) == null ? '' : cell(v[12], tz)).trim(),
-      afterPhoto: (function () { const ids = photoIdsOf(v[13], f[13]); return ids.length ? photoUrl(ids[0]) : null; })(),
+      afterPhoto: (function () { const u = photoUrlsOf(v[13], f[13]); return u.length ? u[0] : null; })(),
       state: state,
       due: due || null,       // 화면이 '10/15까지'를 그릴 수 있게. 못 읽었으면 null
       overdue: overdue,
@@ -3546,7 +3546,10 @@ function fnStoreSave(ctx, payload, target) {
     if (wantPhoto) {
       const saved = saveImprovePhoto(store, ym, no, payload.photo, ctx);
       if (!saved.ok) return err('BAD_REQUEST', saved.error);
-      photoCell = PHOTO_EMBED ? imageFormula(saved.id) : saved.url;
+      /* ★셀 내 이미지로 넣는다★ — 종전에는 =IMAGE() 수식이었다. 매장이 시트를 직접 열어
+         쓰는 일이 있는데, 수식은 실수로 지워지거나 앞에 글자가 붙으면 그대로 깨진다.
+         셀 값이면 그런 일이 없고 모바일 시트 앱에서도 그대로 보인다. */
+      photoCell = PHOTO_EMBED ? cellImageOf(saved.id, '개선 후 사진') : saved.url;
     } else if (payload.clearPhoto) {
       photoCell = '';
     }
@@ -3604,7 +3607,7 @@ function itemOf(no, v /* J~O */, f, tz, ym) {
     owner: String(v[2] == null ? '' : v[2]).trim(),
     plan: String(cell(v[3], tz) == null ? '' : cell(v[3], tz)).trim(),
     doneNote: doneNote,
-    afterPhoto: (function () { const ids = photoIdsOf(v[5], f[5]); return ids.length ? photoUrl(ids[0]) : null; })(),
+    afterPhoto: (function () { const u = photoUrlsOf(v[5], f[5]); return u.length ? u[0] : null; })(),
     state: stateOf(v[3], v[4]),
     due: due || null,
     overdue: overdue,
@@ -3796,7 +3799,7 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   const list = found.slice(0, Math.max(0, room));
   if (!list.length) return { ok: false, error: '개선요청 표에 빈 행이 없음: ' + tab, warn: warn };
 
-  const bc = [], d = [], j = [];
+  const bc = [], d = [], j = [], imgCells = [];   // imgCells[i] = 그 행에 넣을 사진 파일 ID ('' = 없음)
   list.forEach(function (it) {
     no += 1;
     const photos = photoMap[it.no] || [];
@@ -3807,7 +3810,11 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
       (photos.length > 1 ? '\n· 사진 ' + photos.length + '장: ' +
         photos.map(function (x) { return x.url; }).join(' ') : '');
     bc.push([no, safe(it.group || '')]);
-    d.push([photos.length ? (PHOTO_EMBED ? imageFormula(photos[0].id) : photos[0].url) : '']);
+    /* ★사진 칸은 여기서 비워 두고 아래에서 따로 넣는다★ — 셀 내 이미지는 setValue로만
+       넣는 것이 문서화된 경로다. setValues(2차원 배열)에 객체를 섞는 것은 보장되지 않는다.
+       PHOTO_EMBED=false(링크만)이면 종전대로 여기서 문자열로 채운다. */
+    d.push([(photos.length && !PHOTO_EMBED) ? photos[0].url : '']);
+    imgCells.push(photos.length && PHOTO_EMBED ? photos[0].id : '');
     j.push([safe(sev + (it.code ? it.code + ' ' : '') + it.text + cnt + tail)]);
   });
 
@@ -3823,6 +3830,18 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   const jR = grid(sh, row, 10, j.length, 1);
   if (bcR && bcR.getNumColumns() === 2) bcR.setValues(bc); else warn.push('B:C(번호·구분) 칸이 없어 기록하지 못했습니다');
   if (dR) dR.setValues(d); else warn.push('D(사진) 칸이 없어 기록하지 못했습니다');
+  /* 사진은 빈 칸으로 한 번 쓴 뒤 한 칸씩 셀 내 이미지로 채운다(cellImageOf 주석 참조).
+     한 장이 실패해도 나머지 기록은 남아야 하므로 행마다 따로 감싼다 — 사진은 부가 정보이고
+     개선요청 본문이 기록되는 것이 이 함수의 본래 일이다. */
+  if (dR) {
+    for (let i = 0; i < imgCells.length; i++) {
+      if (!imgCells[i]) continue;
+      try {
+        const img = cellImageOf(imgCells[i], '개선 전 사진');
+        if (img) grid(sh, row + i, 4, 1, 1).setValue(img);
+      } catch (e) { warn.push((row + i) + '행 사진을 넣지 못했습니다'); }
+    }
+  }
   if (jR) jR.setValues(j); else warn.push('J(개선요청 내용) 칸이 없어 기록하지 못했습니다');
   return { ok: !!jR, tickets: jR ? list.length : 0, tab: tab, skipped: found.length - list.length, warn: warn };
 }
@@ -4489,12 +4508,58 @@ function imageFormula(fileId) {
   return '=IMAGE("' + photoUrl(fileId) + '")';
 }
 
+/* ★셀 내 이미지로 넣는다 (2026-08-17)★ — '삽입 → 이미지 → 셀에 이미지 삽입'과 같은 형태다.
+   =IMAGE() 수식과 달리 셀의 '값'이라 매장이 실수로 수식을 건드려 깨뜨릴 일이 없고,
+   구글 시트 모바일 앱에서도 그대로 보인다. 매장이 앱으로 올리는 사진을 이 방식으로 통일한다.
+   ★반드시 setValue로 넣어야 한다★ — setValues(2차원 배열)에 섞어 넣는 것은 문서화된 경로가
+     아니다. 부르는 쪽이 빈 칸으로 한 번 쓴 뒤 사진 칸만 따로 setValue 한다.
+   런타임이 newCellImage를 모르면 종전 =IMAGE() 수식으로 돌아간다 — 사진이 안 들어가는 것보다 낫다. */
+function cellImageOf(fileId, alt) {
+  if (!/^[a-zA-Z0-9_-]{20,}$/.test(String(fileId))) return '';
+  try {
+    return SpreadsheetApp.newCellImage()
+      .setSourceUrl(photoUrl(fileId))
+      .setAltTextTitle(String(alt || 'QSC 사진'))
+      .build();
+  } catch (e) {
+    return imageFormula(fileId);
+  }
+}
+
+/* 셀 내 이미지의 주소. ★getValues()는 이 셀을 글자가 아니라 객체로 준다★ — 그래서 문자열만
+   훑던 photoIdsOf는 아무것도 못 찾았고, 매장이 시트에 '셀에 이미지 삽입'으로 넣은 사진은
+   앱 화면에 한 장도 뜨지 않았다(2026-08-17 확인).
+     ① 앱이 넣은 것(setSourceUrl) → getUrl()이 그 주소를 그대로 돌려준다. 파일 ID가 들어 있다
+     ② 사람이 기기에서 올린 것 → getUrl()은 없고 getContentUrl()만 있다(구글이 열어 주는 주소)
+   ★셀 위에 '떠 있는' 이미지는 여기서 잡히지 않는다★ — 그것은 셀의 값이 아니라 시트에 얹힌
+     별개 객체(getImages())라서 이 경로로는 영영 보이지 않는다. */
+function cellImageUrl(v) {
+  if (!v || typeof v !== 'object') return '';
+  try { if (typeof v.getUrl === 'function') { const u = v.getUrl(); if (u) return String(u); } } catch (e) { }
+  try { if (typeof v.getContentUrl === 'function') { const u = v.getContentUrl(); if (u) return String(u); } } catch (e) { }
+  return '';
+}
+
+/* 사진 칸 하나 → 화면에 보여줄 주소 목록. 세 가지 방식을 모두 받는다 —
+   ①=IMAGE("…") 수식 ②셀에 적힌 URL 글자 ③셀 내 이미지(CellImage).
+   파일 ID를 뽑을 수 있으면 photoUrl()로 표준 주소를 만들고(안정적),
+   못 뽑으면(사람이 올린 셀 내 이미지) 구글이 준 주소를 그대로 쓴다. */
+function photoUrlsOf(value, formulaStr) {
+  const ids = photoIdsOf(value, formulaStr);
+  if (ids.length) return ids.map(photoUrl);
+  const u = cellImageUrl(value);
+  return u ? [u] : [];
+}
+
 /* =IMAGE() 셀은 getValues()가 ''를 준다 — 이미지는 셀 값이 아니라 렌더 객체다.
    파일 ID는 수식 문자열에서 뽑아야 한다. PHOTO_EMBED=false면 셀에 URL 문자열이 들어 있으므로
    두 경로 모두 본다. 이걸 빠뜨리면 본사 개선요청 사진이 한 장도 안 뜨고, 매장이 올린 사진은
    새로고침할 때마다 사라진 것처럼 보여 드라이브에 중복 파일이 쌓인다. */
 function photoIdsOf(valueStr, formulaStr) {
-  const src = String(formulaStr || '') + ' ' + String(valueStr || '');
+  /* 셀 내 이미지는 valueStr이 객체다. String()으로 찍으면 아무것도 안 나오므로
+     그 주소를 먼저 꺼내 함께 훑는다 — 앱이 넣은 사진은 여기서 파일 ID가 잡힌다. */
+  const src = String(formulaStr || '') + ' ' + cellImageUrl(valueStr) + ' ' +
+    ((valueStr && typeof valueStr === 'object') ? '' : String(valueStr || ''));
   const out = [];
   const re = /(?:\/d\/|id=)([a-zA-Z0-9_-]{20,})/g;
   let m;
