@@ -5004,6 +5004,81 @@ function protectStoreTabs(stores, page) {
   return msg;
 }
 
+/* ── 보호 되돌리기 (2026-08-18) ──────────────────────────────
+   ★거는 함수를 만들면서 푸는 함수를 같이 만들지 않으면 되돌릴 수 없는 변경이 된다.★
+   점장이 "못 쓰겠다"고 연락해 왔을 때 26곳 × 9~10탭을 손으로 푸는 것은 현실적이지 않다.
+
+   ★SHEET·RANGE 두 종류를 모두 지운다★ — 거는 쪽은 SHEET만 다루지만 푸는 쪽까지 좁게
+     만들면, 사람 손으로 걸린 옛 보호가 남아 "풀었다는데 여전히 안 써진다"가 된다.
+   ★지운 보호의 설명을 로그에 남긴다★ — 원래 있던 보호를 지웠다면 그 사실이 어딘가에
+     남아야 나중에 되살릴 수 있다. */
+
+function unprotectMonthTabsIn(ss) {
+  const out = [];
+  const tabs = monthTabs(ss);
+  const TYPES = [SpreadsheetApp.ProtectionType.SHEET, SpreadsheetApp.ProtectionType.RANGE];
+  for (let i = 0; i < tabs.length; i++) {
+    const sh = ss.getSheetByName(tabs[i]);
+    if (!sh) continue;
+    let gone = 0, left = 0;
+    const desc = [];
+    TYPES.forEach(function (t) {
+      let list = [];
+      try { list = sh.getProtections(t); } catch (e) { return; }
+      list.forEach(function (x) {
+        let d = '';
+        try { d = String(x.getDescription() || '').trim(); } catch (e) { }
+        try { x.remove(); gone++; if (d) desc.push(d); } catch (e) { left++; }
+      });
+    });
+    out.push((left ? '✗ ' : '✓ ') + tabs[i] + ' : 푼 보호 ' + gone + '건' +
+      (desc.length ? ' [' + desc.join(' / ') + ']' : '') +
+      (left ? ' · ★못 푼 것 ' + left + '건 — 이 탭은 시트에서 직접 풀어야 합니다★' : ''));
+  }
+  return out;
+}
+
+/* 사본에만. 인자 없이 실행한다. */
+function testStoreUnprotect() {
+  const id = prop('TEST_STORE_ID', '');
+  if (!id) { const m = '★중단★ TEST_STORE_ID가 없습니다.'; Logger.log(m); return m; }
+  const ss = SpreadsheetApp.openById(id);
+  if (ss.getName().indexOf('_연동테스트') < 0) {
+    const m = '★중단★ 대상 파일 이름에 _연동테스트가 없습니다: ' + ss.getName();
+    Logger.log(m); return m;
+  }
+  const out = ['=== 사본 월 탭 보호 풀기 ===', '대상: ' + ss.getName()];
+  out.push.apply(out, unprotectMonthTabsIn(ss));
+  const msg = out.join('\n'); Logger.log(msg); return msg;
+}
+
+/* 실전. ★한 곳만 풀려면 unprotectStoreTabs(['금종제과 익산'])★
+   전부 풀려면 인자 없이 → (null, 1) → (null, 2) 순으로 세 번. */
+function unprotectStoreTabs(stores, page) {
+  const sel = pickPage(stores, page);
+  const out = ['=== 매장 월 탭 보호 풀기 ' + (sel.page + 1) + '쪽 · ' +
+    sel.list.length + '곳 (전체 ' + sel.total + '곳) ==='];
+  const bad = [];
+  sel.list.forEach(function (store) {
+    out.push('', '── ' + store + ' ──');
+    try {
+      const id = storeFileId(store);
+      if (!id) { out.push('✗ 파일 ID 없음'); bad.push(store); return; }
+      const lines = unprotectMonthTabsIn(SpreadsheetApp.openById(id));
+      out.push.apply(out, lines);
+      if (lines.some(function (l) { return l.charAt(0) === '✗'; })) bad.push(store);
+    } catch (e) { out.push('✗ ' + String(e).slice(0, 90)); bad.push(store); }
+  });
+  out.push('');
+  out.push(bad.length ? '★손이 더 필요한 매장 ' + bad.length + '곳 — ' + bad.join(', ')
+                      : '✓ 이 쪽은 전부 풀렸습니다.');
+  if (sel.left) out.push('★ ' + sel.left + '곳 남음 — 다음: unprotectStoreTabs(null, ' + (sel.page + 1) + ')');
+  const msg = out.join('\n');
+  Logger.log(msg);
+  return msg;
+}
+
+
 function testStoreCopy(srcId, ym) {
   const SRC = srcId || '1mUSyz0ItpTa5HsUKVHWqxhD3wTobdP9xJO4NdNQ0InE'; // 금종제과_익산 (원본 — 읽기만)
   ym = ym || '2610';
@@ -5063,8 +5138,13 @@ function testStoreCopy(srcId, ym) {
 
   // ── 4. 수식이 남아 계산되는가 ───────────────────────────
   const lm = labelMap(sh);
-  ['개선요청', '개선완료', '미조치', '개선율'].forEach(function (lab) {
-    const p = labelValue(lm, [lab]);
+  /* ★별칭 목록으로 찾는다★ — 종전에는 '개선요청' 한 낱말만 찾아서 실물 라벨('개선요청사항')을
+     못 만나 로그에 '라벨 못 찾음'이 찍혔다. 실제 앱(readStoreTab)은 REQ_LABELS로 잘 찾는데
+     ★검증 도구만 고장난 것처럼 보였다★. 거짓 경보를 내는 검사는 진짜 문제를 못 믿게 만든다. */
+  [['개선요청', REQ_LABELS], ['개선완료', ['개선완료', '조치완료', '완료']],
+   ['미조치', ['미조치', '미이행']], ['개선율', ['개선율']]].forEach(function (pair) {
+    const lab = pair[0];
+    const p = labelValue(lm, pair[1]);
     if (!p.found || !p.row) { out.push('   ' + lab + ' : 라벨 못 찾음'); return; }
     const c = sh.getRange(p.row, p.col);
     const f = String(c.getFormula() || '');
