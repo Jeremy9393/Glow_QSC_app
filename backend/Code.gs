@@ -4499,8 +4499,11 @@ function makeMonthTabIn(ss, ym) {
       const cR = labelValue(lmF, ['개선율']);
       if (cH.found && cC.found && cT.found && cR.found) {
         const a1 = function (pv) { return grid(sh, pv.row, pv.col, 1, 1).getA1Notation(); };
+        /* ★개선율이 비면 1(100%)로 본다★ — 개선율은 완료÷요청이라 ★요청이 0건이면 빈칸★이다.
+           그때 0으로 치면 지적이 하나도 없는 매장이 10%를 통째로 못 받아 오히려 손해를 본다.
+           개선할 것이 없었다는 뜻이므로 만점이 맞다. (통합시트 CA열 수식도 같은 규칙이다) */
         const f = '=IF(COUNT(' + a1(cH) + ',' + a1(cC) + ')=0,"",' +
-          a1(cH) + '*0.6+' + a1(cC) + '*0.3+IFERROR(' + a1(cR) + ',0)*0.1)';
+          a1(cH) + '*0.6+' + a1(cC) + '*0.3+IF(' + a1(cR) + '="",1,' + a1(cR) + ')*0.1)';
         grid(sh, cT.row, cT.col, 1, 1).setFormula(f);
       }
     } catch (e) { /* 못 바꿔도 탭 생성 자체는 성공시킨다 — 수식은 눈으로 고칠 수 있다 */ }
@@ -4903,6 +4906,104 @@ function setupAll_once() { return setupAuthSheet_once(); }
      4) 본사 기록이 B·C·D·J만 쓰고 매장 몫 K~O를 건드리지 않는가
      5) 보호 설정이 복제돼 매장이 저장하지 못하게 되지는 않는가
    ══════════════════════════════════════════════════════════════ */
+/* ---------- 매장 월 탭 보호 (2026-08-18) ----------
+
+   ★목표★ 점장이 시트를 직접 열어도 '개선요청에 대한 답변'만 쓸 수 있게 한다.
+     매장 몫 = K~P (담당부서·담당자·예정일/진행·완료일/완료·개선 후 사진·비고), 12행부터
+     본사 몫 = 그 밖 전부 — 2~9행 요약(점수·등급·개선율) · 11행 머리글 · B·C·D·J · 차기 월 목표
+
+   ★반드시 스크립트 계정을 편집자로 남긴다★ — 빠뜨리면 10/1에 STORE_FILE_WRITE를 켰을 때
+     게이트·락·검증을 다 통과한 뒤 마지막 setValues 한 줄에서 죽는다. 화면에는 원인 불명의
+     오류로만 보인다. auditStoreFiles의 ⑧ 항목이 이것을 확인하는 자리다.
+
+   ★11행을 보호에 포함한다★ (사용자 요청) — 머리글이 바뀌면 writeStoreQscInto가 'NO.'를 못 찾아
+     그 매장만 기록이 통째로 멈춘다.
+
+   보호는 '시트 전체 보호 + K12:P 예외' 방식이다. 열 단위로 하나씩 거는 것보다 빠지는 칸이 없다. */
+
+function protectMonthTabsIn(ss) {
+  const me = (function () { try { return Session.getEffectiveUser().getEmail(); } catch (e) { return ''; } })();
+  const out = [];
+  const tabs = monthTabs(ss);
+  for (let i = 0; i < tabs.length; i++) {
+    const sh = ss.getSheetByName(tabs[i]);
+    if (!sh) continue;
+    try {
+      /* 이미 걸린 보호는 지우고 다시 건다 — 예외 범위가 옛 기준(K~O 등)일 수 있고,
+         두 번 돌려도 같은 결과가 나와야 한다(월 탭이 늘어날 때마다 다시 돌릴 함수다). */
+      sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (x) {
+        try { x.remove(); } catch (e) { }
+      });
+
+      const endRow = tableEndRow(sh) || sh.getMaxRows();
+      const lastCol = sh.getMaxColumns();
+      if (lastCol < 16) { out.push('✗ ' + tabs[i] + ' : P열이 없음(열 ' + lastCol + '개) — 건너뜀'); continue; }
+      const rows = Math.max(1, endRow - 11);
+
+      const pr = sh.protect().setDescription('QSC — 매장은 K~P(답변)만 편집');
+      pr.setUnprotectedRanges([sh.getRange(12, 11, rows, 6)]);   // K12:P{endRow}
+      try { pr.setWarningOnly(false); } catch (e) { }
+      try { pr.setDomainEdit(false); } catch (e) { /* 도메인 공유 파일이 아닐 때 던진다 */ }
+
+      /* 편집자를 스크립트 계정만 남긴다 — 그래야 링크로 들어온 사람이 보호 범위를 못 고친다.
+         소유자는 애초에 제거되지 않는다(구글이 막는다). */
+      if (me) { try { pr.addEditor(me); } catch (e) { } }
+      try {
+        const others = pr.getEditors().map(function (u) { return u.getEmail(); })
+          .filter(function (e) { return e && e !== me; });
+        if (others.length) pr.removeEditors(others);
+      } catch (e) { /* 소유자 제거 시도 등 — 무시 */ }
+
+      out.push('✓ ' + tabs[i] + ' : 보호함 · 예외 K12:P' + endRow +
+        ' · 스크립트 편집가능=' + pr.canEdit());
+    } catch (e) {
+      out.push('✗ ' + tabs[i] + ' : ' + String(e).slice(0, 90));
+    }
+  }
+  return out;
+}
+
+/* ★사본에만 건다★ — 인자 없이 실행할 수 있게 만든 검증용. 편집기에서 이것부터 돌릴 것.
+   이름에 _연동테스트가 없으면 즉시 중단한다(원본 보호). */
+function testStoreProtect() {
+  const id = prop('TEST_STORE_ID', '');
+  if (!id) { const m = '★중단★ TEST_STORE_ID가 없습니다. 먼저 testStoreCopy()를 실행하십시오.'; Logger.log(m); return m; }
+  const ss = SpreadsheetApp.openById(id);
+  if (ss.getName().indexOf('_연동테스트') < 0) {
+    const m = '★중단★ 대상 파일 이름에 _연동테스트가 없습니다: ' + ss.getName();
+    Logger.log(m); return m;
+  }
+  const out = ['=== 사본 월 탭 보호 ===', '대상: ' + ss.getName()];
+  out.push.apply(out, protectMonthTabsIn(ss));
+  out.push('');
+  out.push('▶ 이제 점장 입장에서 확인하십시오 —');
+  out.push('   ① K~P(담당부서~비고)에 글자가 써져야 한다');
+  out.push('   ② J열(개선요청사항)·11행 머리글·2~9행 요약은 막혀야 한다');
+  const msg = out.join('\n');
+  Logger.log(msg);
+  return msg;
+}
+
+/* 실전 26곳. ★사본으로 먼저 확인한 뒤에 돌릴 것★. 10곳씩 끊어 돈다(auditStoreFiles와 같은 방식). */
+function protectStoreTabs(stores, page) {
+  const sel = pickPage(stores, page);
+  const out = ['=== 매장 월 탭 보호 ' + (sel.page + 1) + '쪽 · ' + sel.list.length + '곳 (전체 ' + sel.total + '곳) ==='];
+  sel.list.forEach(function (store) {
+    out.push('', '── ' + store + ' ──');
+    try {
+      const id = storeFileId(store);
+      if (!id) { out.push('✗ 파일 ID 없음'); return; }
+      const ss = SpreadsheetApp.openById(id);
+      out.push.apply(out, protectMonthTabsIn(ss));
+    } catch (e) { out.push('✗ ' + String(e).slice(0, 90)); }
+  });
+  out.push(sel.left ? '\n★ ' + sel.left + '곳 남음 — 다음: protectStoreTabs(null, ' + (sel.page + 1) + ')'
+                    : '\n✓ 전부 끝났습니다.');
+  const msg = out.join('\n');
+  Logger.log(msg);
+  return msg;
+}
+
 function testStoreCopy(srcId, ym) {
   const SRC = srcId || '1mUSyz0ItpTa5HsUKVHWqxhD3wTobdP9xJO4NdNQ0InE'; // 금종제과_익산 (원본 — 읽기만)
   ym = ym || '2610';
