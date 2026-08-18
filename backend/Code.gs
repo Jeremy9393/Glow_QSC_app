@@ -2516,6 +2516,7 @@ function saveQsc(ss, p, ctx) {
     }
   }
   dropDashCache(p.date);
+  dropStoreCache(p.store, yymm(p.date));   // 방금 쓴 매장·달의 조회 캐시도 함께 비운다
   const out = { ok: true, saved: rows.length, photos: photoN, dashboard: extra.dashboard, storeFile: extra.storeFile };
   if (photoMap.__skipped) {
     out.photosSkipped = photoMap.__skipped;
@@ -2568,6 +2569,7 @@ function saveShopper(ss, p, ctx, isSurvey) {
     } catch (err) { extra.storeFile = { ok: false, error: opErr('매장 파일 기록', err) }; }
   }
   dropDashCache(p.date);
+  dropStoreCache(p.store, yymm(p.date));   // 방금 쓴 매장·달의 조회 캐시도 함께 비운다
   return { ok: true, dashboard: extra.dashboard, storeFile: extra.storeFile };
 }
 
@@ -3164,13 +3166,15 @@ function readStoreTab(ss, sh, store, ym) {
      실물 월 탭의 라벨은 '개선요청사항'·'개선예정/진행'인데 종전 목록에는 둘 다 없었다.
      그래서 요약 건수를 시트에서 읽지 못하고 늘 표를 다시 세는 폴백으로 넘어갔고,
      "'개선예정/진행' 라벨을 찾지 못했습니다" 경고가 모든 매장·모든 달에 상시 떴다. */
-  const vReq = labelValue(lm, ['개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수']);
+  const vReq = labelValue(lm, REQ_LABELS);
   const vProg = labelValue(lm, ['개선예정/진행', '개선예정', '개선진행', '진행중', '진행']);
   const vDone = labelValue(lm, ['개선완료', '조치완료', '완료']);
   const vTodo = labelValue(lm, ['미조치', '미이행']);
 
   // 개선요청 표: B~O를 값과 수식 둘 다 읽는다 (=IMAGE() 셀은 getValues()가 ''를 준다)
-  const rng = grid(sh, 12, 2, 200, 14);
+  /* 표 끝을 시트에서 읽어 그만큼만 훑는다 — 못 읽으면 종전처럼 200줄 (tableEndRow 주석) */
+  const endRow = tableEndRow(sh, lm);
+  const rng = grid(sh, 12, 2, endRow ? Math.max(0, endRow - 11) : 200, 14);
   const vals = rng ? rng.getValues() : [];
   const fmls = rng ? rng.getFormulas() : [];
   const items = [];
@@ -3474,6 +3478,48 @@ function labelValue(lm, names) {
   return { found: false, v: null };
 }
 
+/* 개선요청 표의 마지막 행. ★시트가 스스로 알고 있다★ —
+   요약의 '개선요청사항' 칸이 =COUNTA(J12:J38) 이므로 그 수식에서 끝 행(38)을 읽는다.
+   실물 표는 12~38행(27줄)이고, 그 아래에 안내문·이월 메모를 적어 둔 파일이 있다.
+   ★종전에는 읽기도 쓰기도 이 경계를 몰랐다★ —
+     읽기는 12행부터 200줄을 세어 표 아래 글까지 개선요청 카드로 만들었고(건수·개선율이 틀어진다),
+     쓰기는 sh.getMaxRows()까지를 빈 칸으로 보고 밀고 내려가 그 글을 덮어썼다.
+   수식을 못 읽으면 0을 돌려준다 — 부르는 쪽이 종전처럼 넉넉히 잡는다(동작이 나빠지지 않는다). */
+const REQ_LABELS = ['개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수'];
+
+function tableEndRow(sh, lm) {
+  try {
+    const map = lm || labelMap(sh);
+    const p = labelValue(map, REQ_LABELS);
+    if (!p || !p.found || !p.row) return 0;
+    const c = grid(sh, p.row, p.col, 1, 1);
+    const f = String((c && c.getFormula()) || '');
+    const m = f.match(/COUNTA\s*\(\s*\$?[A-Z]+\$?\d+\s*:\s*\$?[A-Z]+\$?(\d+)\s*\)/i);
+    if (!m) return 0;
+    const n = Number(m[1]);
+    return (n >= 12 && n <= 1000) ? n : 0;
+  } catch (e) { return 0; }
+}
+
+/* 매장 파일에 쓴 직후 그 매장·그 달의 조회 캐시를 지운다.
+   ★안 지우면 점검 직후가 정확히 어긋나는 구간이 된다★ — store.get은 60초 캐시라
+   방금 기록한 개선요청이 최대 1분 동안 안 보인다. 하필 그때가 담당자가 매장에
+   "이제 들어가서 보시라"고 안내하는 순간이다.
+   dropDashCache는 통합시트(대시보드) 키만 지운다 — 매장 월 키는 여기서 따로 지운다.
+   notify.badge(홈 알림)도 같은 키를 쓰므로 함께 최신이 된다. */
+function dropStoreCache(store, ym) {
+  try {
+    const s = normStore(store);
+    if (!s || !ym) return;
+    CacheService.getScriptCache().removeAll([
+      'store:v' + epoch() + ':' + s + ':' + ym,
+      'rnd:v' + epoch() + ':' + s + ':' + ym,
+    ]);
+  } catch (e) { }
+}
+
+
+
 /* ---------- 매장현황 저장 (명세 §11-2 · 3단계) ---------- */
 
 /* ★K~O만 쓴다★. 본사 몫인 B·C·D·J를 쓰는 코드 경로를 매장 기능층에 아예 만들지 않는다
@@ -3579,6 +3625,7 @@ function fnStoreSave(ctx, payload, target) {
     try {
       CacheService.getScriptCache().remove('store:v' + epoch() + ':' + store + ':' + ym);
     } catch (e) { }
+    dropStoreCache(store, ym);   // 저장 직후 조회가 직전 값을 보여주지 않게
     return { ok: true, item: item, summary: summary };
   } finally {
     try { lock.releaseLock(); } catch (e) { }
@@ -3622,7 +3669,8 @@ function itemOf(no, v /* J~O */, f, tz, ym) {
 /* 요약 재집계. ★I9(개선율)는 수식이므로 절대 쓰지 않는다★.
    I5~I8이 수식이면 건드리지 않고, 수기면 서버가 세어 다시 쓴다. */
 function recountSummary(sh, tz) {
-  const rng = grid(sh, 12, 2, 200, 14);
+  const endRow2 = tableEndRow(sh);   // 표 끝 아래의 안내문까지 세지 않는다
+  const rng = grid(sh, 12, 2, endRow2 ? Math.max(0, endRow2 - 11) : 200, 14);
   const vals = rng ? rng.getValues() : [];
   let req = 0, prog = 0, done = 0;
   for (let i = 0; i < vals.length; i++) {
@@ -3786,18 +3834,28 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   }
   if (headRow < 0) return { ok: false, error: "개선요청 표 헤더(B열 'NO.')를 못 찾음: " + tab, warn: warn };
 
-  const colJRange = grid(sh, headRow + 1, 10, 200, 1);
+  /* ★표의 끝을 시트에서 읽는다★ — 요약의 =COUNTA(J12:J38)이 알려 준다(tableEndRow 주석).
+     종전에는 헤더 아래 200줄을 훑고 남은 칸도 sh.getMaxRows()까지로 봤다. 그래서
+     ①표 아래 안내문이 '이미 쓴 행'으로 잡혀 그 아래에 이어 쓰고
+     ②27건을 넘기면 그 안내문을 덮어썼다. 둘 다 조용히 일어난다. */
+  const lastRow = tableEndRow(sh) || sh.getMaxRows();
+  const scan = Math.max(0, lastRow - headRow);
+  const colJRange = grid(sh, headRow + 1, 10, scan || 200, 1);
   const colJ = colJRange ? colJRange.getValues() : [];
   let used = 0;
   for (let i = 0; i < colJ.length; i++) { if (String(colJ[i][0]).trim() !== '') used = i + 1; }
   const row = headRow + 1 + used;
   let no = used;
 
-  /* 표가 모자라면 예외로 죽는 대신 쓸 수 있는 만큼만 쓴다 —
-     한 회차 개선요청이 남은 빈 행보다 많을 수 있다(사람이 만든 탭은 행 수가 제각각). */
-  const room = sh.getMaxRows() - row + 1;
+  /* 표가 모자라면 예외로 죽는 대신 쓸 수 있는 만큼만 쓰고, ★몇 건을 못 썼는지 반드시 알린다★ —
+     조용히 잘리면 점검자는 다 기록된 줄 안다. */
+  const room = lastRow - row + 1;
   const list = found.slice(0, Math.max(0, room));
-  if (!list.length) return { ok: false, error: '개선요청 표에 빈 행이 없음: ' + tab, warn: warn };
+  if (!list.length) return { ok: false, error: '개선요청 표에 빈 행이 없음: ' + tab + ' (표 끝 ' + lastRow + '행)', warn: warn };
+  if (list.length < found.length) {
+    warn.push('개선요청 ' + found.length + '건 중 ' + list.length + '건만 기록했습니다 — 표(' +
+      (headRow + 1) + '~' + lastRow + '행)에 빈 행이 모자랍니다');
+  }
 
   const bc = [], d = [], j = [], imgCells = [];   // imgCells[i] = 그 행에 넣을 사진 파일 ID ('' = 없음)
   list.forEach(function (it) {
@@ -4129,11 +4187,26 @@ function auditStoreFiles(stores, page) {
     // ⑤ K열 데이터 유효성
     const dept = deptOptions(sh);
     line.push('⑤ deptOptions(' + dept.length + '): ' + dept.join(', '));
-    // ⑥ I5~I9가 수식인지
+    /* ⑥ 요약 값 칸이 수식인가 — ★고정 주소로 보지 않는다★
+       종전에는 I5~I9를 봤는데 실물 요약 값은 H열이다(라벨 D5:G5 병합 + 값 H5).
+       그래서 전부 '수기'로 나왔고, STORE_FILE_WRITE를 켤지 판단하는 근거가 통째로 틀렸다.
+       라벨을 찾아 그 값 칸을 보는 방식으로 바꾼다 — 파일마다 열이 달라도 맞는다. */
     try {
-      const f = grid(sh, 5, 9, 5, 1).getFormulas();
-      line.push('⑥ I5~I9 수식여부: ' + f.map(function (r) { return r[0] ? '수식' : '수기'; }).join(', '));
-    } catch (e) { line.push('⑥ I5~I9 확인 실패'); }
+      const lm6 = labelMap(sh);
+      const names6 = [['방문일', ['방문일', '방문일자', '점검일']], ['위생점수', ['위생점수']],
+        ['CS점수', ['CS점수']], ['종합점수', ['종합점수']],
+        ['개선요청', REQ_LABELS], ['개선완료', ['개선완료', '조치완료', '완료']],
+        ['미조치', ['미조치', '미이행']], ['개선율', ['개선율']]];
+      const got6 = names6.map(function (n6) {
+        const pv = labelValue(lm6, n6[1]);
+        if (!pv.found || !pv.row) return n6[0] + '=라벨없음';
+        const cc = grid(sh, pv.row, pv.col, 1, 1);
+        const a1 = cc ? cc.getA1Notation() : '?';
+        return n6[0] + '@' + a1 + '=' + ((cc && String(cc.getFormula() || '')) ? '수식' : '수기');
+      });
+      line.push('⑥ 요약 값 칸: ' + got6.join(' · '));
+      line.push('   표 끝(=COUNTA에서 읽음): ' + (tableEndRow(sh, lm6) || '못 읽음'));
+    } catch (e) { line.push('⑥ 요약 값 칸 확인 실패: ' + String(e)); }
     // ⑧ 보호 범위 — 3단계의 최우선 게이트
     try {
       const pr = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE)
@@ -4344,6 +4417,22 @@ function makeMonthTabIn(ss, ym) {
   const src = ss.getSheetByName(tabs[0]);
   const sh = src.copyTo(ss);          // 이름이 "2608의 사본"이 된다
   sh.setName(ym);                     // ★setName 필수★
+  /* ★반드시 보이게 만든다★ (2026-08-17) — 사본 테스트에서 만들어진 2610 탭이 숨김 상태로
+     태어났다. copyTo는 원본의 숨김 여부를 따라가므로, 직전 월 탭이 어쩌다 숨겨져 있으면
+     새 달이 통째로 안 보이는 채 시작된다. 앱은 숨김 시트도 읽어서 연동은 되지만
+     ★매장이 시트를 직접 열면 이번 달 탭이 없다★ — 원인을 찾기가 매우 어려운 종류다.
+     조건 없이 showSheet()를 부른다. 이미 보이는 시트에 불러도 아무 일도 일어나지 않는다. */
+  try { sh.showSheet(); } catch (e) { }
+  /* ★제목을 이번 달로 고쳐 쓴다★ — D2가 고정 텍스트라 복제하면 "8월 QSC 현황"이 그대로
+     10월 탭에 남는다. 라벨이 아니라 제목이라 아래 값 칸 초기화 목록에도 걸리지 않는다.
+     '<월>월 QSC 현황' 형태만 갈아 끼우고, 다른 형태로 적어 둔 파일은 건드리지 않는다. */
+  try {
+    const t2 = grid(sh, 2, 4, 1, 1);
+    const cur2 = t2 ? String(t2.getValue() || '') : '';
+    if (/^\s*\d{1,2}\s*월/.test(cur2)) {
+      t2.setValue(cur2.replace(/^\s*\d{1,2}\s*월/, Number(ym.slice(2, 4)) + '월'));
+    }
+  } catch (e) { }
   // ① 개선요청 표 본문
   const bodyRng = grid(sh, 12, 2, sh.getMaxRows() - 11, 14);
   if (bodyRng) bodyRng.clearContent();
