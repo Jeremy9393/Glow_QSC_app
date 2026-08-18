@@ -24,10 +24,23 @@ SRC = r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\QSC 평가 체계 개편_v3.xlsx'
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'data' / 'master.json'
 
+# ★버전을 손으로 적지 않는다★ — 적어 두면 엑셀만 고치고 이 줄을 안 고쳤을 때
+#   master.json이 옛 날짜를 그대로 달고 나간다. 화면 세 곳이 이 값을 '평가표 … 기준'으로
+#   보여 주므로, 그 눈금이 거짓말을 하면 배포가 됐는지 사람이 알 길이 없다.
+import datetime, hashlib
+_raw = Path(SRC).read_bytes()
+XLSX_VERSION = datetime.datetime.fromtimestamp(Path(SRC).stat().st_mtime).strftime('%Y-%m-%d')
+XLSX_SHA = hashlib.sha256(_raw).hexdigest()[:12]     # 사람에게는 안 보인다. 기계가 대조용으로 쓴다.
+
 wb = openpyxl.load_workbook(SRC)
 ws = wb['QSC 평가표']
 
-GROUPS = [(10, 16), (17, 27), (28, 40), (41, 55), (56, 65), (66, 83)]
+# ★행 범위를 박아 두지 않는다★ — A열 병합이 곧 대분류 경계다.
+#   상수로 두면 엑셀에서 행을 하나 넣고 하나 빼는 순간, 74 검사는 통과하면서
+#   문항이 옆 대분류로 넘어간다(쇼퍼 쪽에서 같은 부류의 사고가 실제로 났다).
+GROUPS = sorted((m.min_row, m.max_row) for m in ws.merged_cells.ranges
+                if m.min_col == 1 and 10 <= m.min_row <= 83)
+assert len(GROUPS) == 6, 'QSC 대분류가 %d개 — A열 병합을 확인하십시오' % len(GROUPS)
 
 qsc_groups = []
 item_no = 0
@@ -133,10 +146,15 @@ if DASH.exists():
             continue
         stores.append(str(name).strip())
 else:
-    print('!!! 통합시트 파일 없음 — 매장 목록 생략')
+    raise SystemExit('★중단★ 통합시트를 찾지 못했습니다: %s' % DASH)
+assert len(stores) >= 20, ('★중단★ 매장이 %d곳뿐입니다 — 통합시트 매장명 열을 확인하십시오. '
+                           '로컬 사본은 E열, 실물 구글시트는 D열이라 어긋난 적이 있습니다.' % len(stores))
+assert len(stores) >= 20, ('★중단★ 매장이 %d곳뿐입니다 — 통합시트 매장명 열을 확인하십시오. '
+                           '로컬 사본은 E열, 실물 구글시트는 D열이라 어긋난 적이 있습니다.' % len(stores))
 
 master = {
-    'version': '2026-08-18 (v3.15)',
+    'version': XLSX_VERSION,          # 화면에 '평가표 … 기준'으로 뜬다
+    'source_sha': XLSX_SHA,           # 엑셀이 바뀌면 반드시 바뀐다 — 배포 점검이 이걸 본다
     'source': 'QSC 평가 체계 개편_v3.xlsx',
     'stores': stores,
     # 절대 감점제 파라미터 — 엑셀 '채점기준' 시트와 반드시 일치시킬 것

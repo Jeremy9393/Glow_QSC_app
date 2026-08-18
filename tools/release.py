@@ -360,17 +360,21 @@ for attempt in range(1, 13):
         live_index = fetch('index.html')
         live_qs = sorted({int(x) for x in re.findall(r'\?v=(\d+)', live_index)})
 
+        # ★source_sha 를 함께 본다★ — version은 날짜뿐이라 같은 날 두 번 고치면 구별이 안 된다.
+        #   sha는 엑셀 내용이 한 글자만 달라도 바뀌므로 '올렸는데 안 바뀐' 경우를 잡아낸다.
         same = (live_ver == VER
                 and live_master.get('version') == want_master.get('version')
+                and live_master.get('source_sha') == want_master.get('source_sha')
                 and live_shopper == want_shopper and live_qsc == want_qsc
                 and live_qs == [VER])
-        print('   [%2d] 실서버 v%s · 마스터 %s · 쇼퍼 %d · QSC %d'
-              % (attempt, live_ver, live_master.get('version'), live_shopper, live_qsc))
+        print('   [%2d] 실서버 v%s · 평가표 %s(%s) · 쇼퍼 %d · QSC %d'
+              % (attempt, live_ver, live_master.get('version'),
+                 str(live_master.get('source_sha'))[:6], live_shopper, live_qsc))
         if same:
             print('\n' + '═' * 60)
             print('배포 완료 — 실서버가 새 버전을 주고 있습니다')
             print('  캐시 버전   v%d' % VER)
-            print('  마스터      %s' % want_master.get('version'))
+            print('  평가표      %s (%s)' % (want_master.get('version'), want_master.get('source_sha')))
             print('  문항        QSC %d · 미스터리쇼퍼 %d' % (want_qsc, want_shopper))
             print('  매장        %d곳' % len(want_master.get('stores') or []))
             if warnings:
