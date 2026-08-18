@@ -3816,6 +3816,22 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
 
   /* 라벨을 못 찾아도 조용히 "저장 완료"가 뜨면 안 된다 — 반환값을 모아 warn으로 올린다 (§9-7) */
   const warn = [];
+  /* ★재제출은 덮어쓴다★ (2026-08-18 사용자 결정)
+     종전에는 무조건 이어 붙였다. 그래서 실수로 한 번 더 제출하면 개선요청이 두 벌 쌓이고,
+     =COUNTA가 두 벌을 세어 개선율이 반토막 났다.
+     '같은 회차인가'는 ★방문일(+방문시간)★로 판정한다 — 한 달에 두 번 점검한 경우는
+     날짜가 다르므로 덮어쓰지 않고 종전대로 이어 붙는다.
+     ★반드시 setByLabel로 덮어쓰기 전에 읽어야 한다★ — 아래 줄이 방문일을 새 값으로 바꾼다. */
+  const prevDate = (function () {
+    const lm0 = labelMap(sh);
+    const d0 = labelValue(lm0, ['방문일', '방문일자', '점검일', '점검일자']);
+    const t0 = labelValue(lm0, ['방문시간']);
+    return {
+      date: dateOfCell(d0.v, fileTz(ss)),
+      time: timeKeyOf(t0.v, fileTz(ss)),
+    };
+  })();
+
   if (!setByLabel(sh, '방문일', p.date)) warn.push("'방문일' 라벨을 찾지 못했습니다");
   if (p.time) setByLabel(sh, '방문시간', p.time); // 월 탭에 라벨이 없으면 조용히 건너뜀
   if (p.result.final != null && !setByLabel(sh, '위생점수', p.result.final / 100)) {
@@ -3842,8 +3858,50 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   const scan = Math.max(0, lastRow - headRow);
   const colJRange = grid(sh, headRow + 1, 10, scan || 200, 1);
   const colJ = colJRange ? colJRange.getValues() : [];
+  /* ── 같은 회차 재제출이면 이전 기록을 지우고 새로 쓴다 ─────────────────────
+     ★매장이 이미 뭔가 적었으면 절대 지우지 않는다★ — K~O(담당부서·담당자·예정일·완료·사진)는
+       매장 몫이다. 본사 몫(B·C·D·J)만 갈아 끼우면 행 번호는 그대로인데 내용이 바뀌어,
+       매장이 적어 둔 개선 결과가 ★엉뚱한 지적사항에 붙는다★. 그러면 아무도 눈치채지 못한다.
+       그래서 그 경우에는 쓰지 않고 사유를 돌려준다 — 조용히 지우는 것이 가장 나쁘다. */
+  let wiped = 0;
+  const sameRound = !!(prevDate.date && prevDate.date === dateOfCell(p.date, fileTz(ss)) &&
+    (!p.time || !prevDate.time || prevDate.time === timeKeyOf(p.time, fileTz(ss))));
+  if (sameRound) {
+    const bodyN = Math.max(0, lastRow - headRow);
+    const bodyR = grid(sh, headRow + 1, 2, bodyN, 14);   // B~O
+    const body = bodyR ? bodyR.getValues() : [];
+    let filled = 0, storeTouched = 0;
+    for (let i = 0; i < body.length; i++) {
+      const hasHq = String(body[i][8] == null ? '' : body[i][8]).trim() !== '';   // J열(본문)
+      if (!hasHq) continue;
+      filled = i + 1;
+      for (let c = 9; c <= 13; c++) {                                             // K~O(매장 몫)
+        if (String(body[i][c] == null ? '' : body[i][c]).trim() !== '') { storeTouched++; break; }
+      }
+    }
+    if (storeTouched > 0) {
+      return { ok: false,
+        error: '같은 방문일(' + prevDate.date + ')로 이미 기록된 개선요청이 있고, 그중 ' + storeTouched +
+               '건은 매장이 개선 내용을 이미 적었습니다. 덮어쓰면 매장이 적은 내용이 엉뚱한 항목에 붙으므로 기록하지 않았습니다. ' +
+               '시트에서 직접 정리한 뒤 다시 제출해 주세요.',
+        warn: warn };
+    }
+    if (filled > 0) {
+      const bcW = grid(sh, headRow + 1, 2, filled, 2);   // B:C
+      const dW = grid(sh, headRow + 1, 4, filled, 1);    // D
+      const jW = grid(sh, headRow + 1, 10, filled, 1);   // J
+      if (bcW) bcW.clearContent();
+      if (dW) dW.clearContent();
+      if (jW) jW.clearContent();
+      wiped = filled;
+      warn.push('같은 방문일(' + prevDate.date + ') 재제출이라 이전 기록 ' + wiped + '건을 지우고 새로 기록했습니다');
+    }
+  }
+
+
+  const colJv = wiped ? (grid(sh, headRow + 1, 10, scan || 200, 1) || { getValues: function () { return []; } }).getValues() : colJ;
   let used = 0;
-  for (let i = 0; i < colJ.length; i++) { if (String(colJ[i][0]).trim() !== '') used = i + 1; }
+  for (let i = 0; i < colJv.length; i++) { if (String(colJv[i][0]).trim() !== '') used = i + 1; }
   const row = headRow + 1 + used;
   let no = used;
 
@@ -4423,6 +4481,31 @@ function makeMonthTabIn(ss, ym) {
      ★매장이 시트를 직접 열면 이번 달 탭이 없다★ — 원인을 찾기가 매우 어려운 종류다.
      조건 없이 showSheet()를 부른다. 이미 보이는 시트에 불러도 아무 일도 일어나지 않는다. */
   try { sh.showSheet(); } catch (e) { }
+  /* ★2610부터 종합점수 산식을 바꾼다★ (2026-08-18 확정)
+       9월까지 : I3 = AVERAGE(위생, CS) − 개선요청건수/100
+                 → 지적 '건수'가 종합점수를 깎았다. 그런데 그 건수는 이미 QSC 점수 안에서
+                   감점된 것이라 같은 사유로 두 번 깎이고 있었다.
+       10월부터: I3 = 위생×0.6 + CS×0.3 + 개선율×0.1
+                 → 지적을 받아 깎이는 구조가 아니라, ★얼마나 개선했는지가 점수로 들어가는★ 구조다.
+                   중대차감은 QSC 점수 안에서만 빠진다 — 종합에서 또 빼지 않는다.
+     복제 원본이 9월 탭이면 옛 수식이 그대로 따라오므로 여기서 갈아 끼운다.
+     ★칸을 라벨로 찾는다★ — 파일마다 열이 다를 수 있다(위생 E3·CS G3·종합 I3·개선율 H9가 실물). */
+  if (ym >= '2610') {
+    try {
+      const lmF = labelMap(sh);
+      const cH = labelValue(lmF, ['위생점수', 'QSC점수', '위생']);
+      const cC = labelValue(lmF, ['CS점수', 'CS']);
+      const cT = labelValue(lmF, ['종합점수', '종합']);
+      const cR = labelValue(lmF, ['개선율']);
+      if (cH.found && cC.found && cT.found && cR.found) {
+        const a1 = function (pv) { return grid(sh, pv.row, pv.col, 1, 1).getA1Notation(); };
+        const f = '=IF(COUNT(' + a1(cH) + ',' + a1(cC) + ')=0,"",' +
+          a1(cH) + '*0.6+' + a1(cC) + '*0.3+IFERROR(' + a1(cR) + ',0)*0.1)';
+        grid(sh, cT.row, cT.col, 1, 1).setFormula(f);
+      }
+    } catch (e) { /* 못 바꿔도 탭 생성 자체는 성공시킨다 — 수식은 눈으로 고칠 수 있다 */ }
+  }
+
   /* ★제목을 이번 달로 고쳐 쓴다★ — D2가 고정 텍스트라 복제하면 "8월 QSC 현황"이 그대로
      10월 탭에 남는다. 라벨이 아니라 제목이라 아래 값 칸 초기화 목록에도 걸리지 않는다.
      '<월>월 QSC 현황' 형태만 갈아 끼우고, 다른 형태로 적어 둔 파일은 건드리지 않는다. */

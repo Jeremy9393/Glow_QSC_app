@@ -393,6 +393,15 @@
         if (r.dashboard && r.dashboard.skipped) {
           done += '\n\n▶ 통합시트 위생 칸에 입력\n   ' + res.qsc.toFixed(1) + '%';
         }
+        /* ★매장 파일 기록 결과를 반드시 사람에게 보인다★ (2026-08-18)
+           서버는 덮어쓰기·잘림·거절을 storeFile에 담아 보내는데 화면이 읽지 않고 있었다.
+           '저장 완료'만 뜨면 점검자는 다 들어간 줄 안다 — 조용한 실패가 가장 나쁘다. */
+        const sf = r.storeFile;
+        if (sf && sf.ok === false) {
+          done += '\n\n⚠ 매장 파일에는 기록하지 못했습니다\n   ' + (sf.error || '알 수 없는 이유');
+        } else if (sf && sf.warn && sf.warn.length) {
+          done += '\n\n· ' + sf.warn.join('\n· ');
+        }
         alert(done);
         if (confirm('입력을 초기화할까요? (새 점검 시작)')) {
           localStorage.removeItem(DRAFT_KEY);
