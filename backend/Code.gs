@@ -4933,6 +4933,18 @@ function testStoreCopy(srcId, ym) {
   // ── 2. 월 탭 자동 생성 ──────────────────────────────────
   const before = monthTabs(ss).join(',');
   out.push('② 탭(생성 전): ' + before);
+  /* ★같은 달로 다시 돌릴 수 있게 이전 테스트 탭을 지운다★ (2026-08-18)
+     makeMonthTabIn은 탭이 이미 있으면 '이미 있음'만 돌려주고 아무것도 안 한다. 그러면
+     두 번째 실행부터는 ★새로 만드는 과정(숨김 해제·제목 교체·새 산식)이 검증되지 않는다★.
+     10월에도 이 테스트를 다시 돌릴 것이므로 반복 가능하게 만들어 둔다.
+     지우는 대상은 위에서 이름에 _연동테스트가 있음을 확인한 ★사본★뿐이다.
+     원본에는 이 함수가 애초에 닿지 않는다(SRC는 makeCopy의 소스로만 쓰인다). */
+  const dead = ss.getSheetByName(ym);
+  if (dead) {
+    ss.deleteSheet(dead);
+    out.push('   ↺ 이전 테스트 탭 ' + ym + ' 삭제 (다시 만들어 전 과정을 검증한다)');
+  }
+
   const made = makeMonthTabIn(ss, ym);
   out.push('   ' + made.mark + ' ' + made.msg);
   const sh = ss.getSheetByName(ym);
