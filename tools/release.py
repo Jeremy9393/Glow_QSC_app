@@ -182,6 +182,41 @@ else:
 
 
 # ══════════════════════════════════════════════════════════════
+print('\n━━ 3-2. 문항과 예시가 맞물리는가 ' + '━' * 26)
+
+# 쇼퍼 화면은 문항마다 '예: …' 힌트를 붙인다. 종전에는 그 힌트를 1~40 일련번호로
+# 묶어 두어, 문항이 둘 줄자 번호가 밀려 엉뚱한 예시가 붙었다(2026-08-18).
+# 화면에는 멀쩡한 문장이 떠서 아무도 못 알아챈다 — 그래서 기계가 대조한다.
+try:
+    core = (ROOT / 'js' / 'shopper-core.js').read_text(encoding='utf-8')
+    ex_block = core.split('const EX = {')[1].split('};')[0]
+    ex_keys = set(re.findall(r"'(\d+-\d+)'\s*:", ex_block))
+
+    mj = json.loads((ROOT / 'data' / 'master.json').read_text(encoding='utf-8'))
+    q_codes, no_code = set(), []
+    for c in mj['shopper_categories']:
+        for q in c['questions']:
+            mm = re.match(r'^(\d+-\d+)\.', q['text'])
+            if mm:
+                q_codes.add(mm.group(1))
+            else:
+                no_code.append(q['text'][:30])
+
+    if no_code:
+        warn('문항 코드(예: 13-1)로 시작하지 않는 문항이 있습니다 — %s' % ', '.join(no_code[:3]))
+    miss = sorted(q_codes - ex_keys)
+    orph = sorted(ex_keys - q_codes)
+    if miss:
+        warn('예시가 없는 문항: %s (힌트 없이 뜹니다)' % ', '.join(miss))
+    if orph:
+        warn('없어진 문항의 예시가 남아 있습니다: %s' % ', '.join(orph))
+    if not miss and not orph:
+        ok('%d개 문항이 모두 제 예시와 맞물려 있습니다' % len(q_codes))
+except Exception as e:      # noqa: BLE001
+    warn('문항·예시 대조를 못 했습니다 — %s' % str(e).split('\n')[0])
+
+
+# ══════════════════════════════════════════════════════════════
 print('\n━━ 4. 올리면 안 되는 것이 섞였는가 ' + '━' * 25)
 
 tracked = set(git('ls-files').split('\n'))
