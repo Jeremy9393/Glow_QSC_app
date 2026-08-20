@@ -92,7 +92,7 @@
     try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { return null; }
   }
 
-  // ---------- 사진 ---------- (줄이기는 js/ui-photo.js의 공통 부품 — 쇼퍼 영수증과 같은 규격)
+  // ---------- 사진 ---------- (줄이기는 js/ui-photo.js의 공통 부품 — 매장 개선보고와 같은 규격)
   $('#photoInput').addEventListener('change', async function (e) {
     const files = Array.from(e.target.files);
     e.target.value = '';

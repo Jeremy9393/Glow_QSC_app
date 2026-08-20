@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=52">
+<link rel="stylesheet" href="css/app.css?v=53">
 </head>
 <body>
 <header class="topbar">
@@ -54,12 +54,11 @@
      ★이 화면에서도 guard()는 절대 부르지 않는다 — 리다이렉트 금지.
        고객용 survey.html과 달리 이 화면은 관리자용이지만, 현장에서 작성 중이던 내용이
        로그인 화면으로 튕기며 날아가는 사고는 똑같이 비싸다. -->
-<script src="js/auth.js?v=52"></script>
-<script src="js/scoring.js?v=52"></script>
-<script src="js/api.js?v=52"></script>
-<script src="js/ui-time.js?v=52"></script>
-<script src="js/ui-photo.js?v=52"></script>
-<script src="js/shopper-core.js?v=52"></script>
+<script src="js/auth.js?v=53"></script>
+<script src="js/scoring.js?v=53"></script>
+<script src="js/api.js?v=53"></script>
+<script src="js/ui-time.js?v=53"></script>
+<script src="js/shopper-core.js?v=53"></script>
 <script>
 initShopperForm({ admin: true });
 
@@ -135,7 +134,7 @@ initShopperForm({ admin: true });
 })();
 
 /* 뒤로가기를 눌렀을 때 한 번 되묻는다. (qsc.html과 같은 장치·같은 이유)
-   ★사진(영수증)은 임시저장에 들어가지 않는다★ — 화면을 떠나는 순간이 곧 사진 유실이다.
+   ※사진은 이 화면에서 다루지 않는다 (영수증 첨부를 2026-08-20에 없앴다).
    ★beforeunload를 쓰지 않는다★ — js/shopper-core.js가 제출 성공 뒤 화면을 갈아 끼우는데,
      그 파일은 내 담당이 아니라 해제 신호를 넣을 수 없어 정상 흐름에도 경고창이 뜬다.
    ★capture 단계에서 document에 위임한다★ — 두 뒤로가기 버튼 모두 auth.js가 나중에 만든다. */

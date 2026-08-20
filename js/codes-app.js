@@ -207,7 +207,6 @@
             const why = prompt(store + ' — ' + fmt(m[store].usedAt) + ' 제출분을 삭제합니다.\n\n' +
               '· 응답과 비고가 시트에서 지워집니다\n' +
               '· 이 달 CS 점수에서 빠지고 통합시트가 다시 계산됩니다\n' +
-              '· 영수증 사진은 드라이브 휴지통으로 (30일간 복구 가능)\n' +
               '· 삭제 후 이 매장에 코드를 다시 발급할 수 있습니다\n\n삭제 사유를 적어 주세요', '');
             if (why === null) return;
             if (!confirm(store + ' — ' + fmt(m[store].usedAt) + ' 제출분\n\n정말 삭제할까요? 되돌릴 수 없습니다.')) return;
