@@ -217,6 +217,42 @@ except Exception as e:      # noqa: BLE001
 
 
 # ══════════════════════════════════════════════════════════════
+print('\n━━ 3-3. 매장 목록이 실물 시트와 같은가 ' + '━' * 21)
+
+# ★로컬 통합시트 사본은 낡을 수 있다★ — extract_master.py 는 그 사본을 읽는다.
+# 2026-08-20에 '창창 창신'이 사본에만 옛 이름('창창족발 (창창 창신)')으로 남아 있었고,
+# 앱에 동봉된 목록과 서버가 내려주는 목록이 달랐다. 이름이 어긋난 매장은
+# 로그인·설문에서 조용히 막히므로, 실물 시트에 직접 물어 대조한다.
+try:
+    api = (ROOT / 'js' / 'api.js').read_text(encoding='utf-8')
+    mu = re.search(r"APPS_SCRIPT_URL:\s*'([^']+)'", api)
+    if not mu:
+        warn('js/api.js 에서 서버 주소를 못 찾아 실물 시트와 대조하지 못했습니다')
+    else:
+        body = json.dumps({'action': 'config.stores'}).encode('utf-8')
+        req = urllib.request.Request(mu.group(1), data=body,
+                                     headers={'Content-Type': 'text/plain;charset=utf-8'})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            resp = json.loads(r.read().decode('utf-8'))
+        live_stores = (resp.get('data') or {}).get('stores') or resp.get('stores') or []
+        mine = json.loads((ROOT / 'data' / 'master.json').read_text(encoding='utf-8')).get('stores') or []
+        only_live = sorted(set(live_stores) - set(mine))
+        only_mine = sorted(set(mine) - set(live_stores))
+        if not live_stores:
+            warn('서버가 매장 목록을 주지 않아 대조하지 못했습니다')
+        elif only_live or only_mine:
+            if only_mine:
+                fail('앱에만 있는 매장: %s — 실물 시트에 없는 이름입니다' % ', '.join(only_mine))
+            if only_live:
+                fail('실물 시트에만 있는 매장: %s — 통합시트 사본을 새로 받으십시오' % ', '.join(only_live))
+        else:
+            ok('%d곳이 실물 시트와 정확히 같습니다' % len(mine))
+except Exception as e:      # noqa: BLE001 — 인터넷이 끊겨도 배포는 막지 않는다
+    warn('실물 시트와 대조하지 못했습니다 (%s) — 인터넷 상태를 확인하십시오'
+         % str(e).split('\n')[0][:60])
+
+
+# ══════════════════════════════════════════════════════════════
 print('\n━━ 4. 올리면 안 되는 것이 섞였는가 ' + '━' * 25)
 
 tracked = set(git('ls-files').split('\n'))
