@@ -2332,10 +2332,11 @@ function fnStatusMonth(ctx, payload) {
     const tz = ss.getSpreadsheetTimeZone();
     // QSC_회차: 0 제출시각 · 1 점검일자 · 2 방문시간 · 3 매장명
     qscSet = submittedStores(ss.getSheetByName('QSC_회차'), tz, wantYm, 4, 1, 3, -1);
-    /* 쇼퍼_응답: 1 방문날짜 · 3 매장명 · 7 입력경로.
-       ★'관리자 입력'만 센다★ — survey.html은 누구나 열 수 있어서, 이 조건이 없으면
-       고객이 설문 한 건을 넣은 매장이 '쇼퍼 제출 완료'로 잡혀 담당자가 독촉을 건너뛴다. */
-    shopperSet = submittedStores(ss.getSheetByName('쇼퍼_응답'), tz, wantYm, 8, 1, 3, 7);
+    /* 쇼퍼_응답: 1 방문날짜 · 3 매장명.
+       ★본사가 냈든 고객이 냈든 그 달은 제출된 것으로 본다★ (2026-08-20 사용자 결정) —
+       점수에서 두 경로를 구별하지 않기로 했으므로 '아직 안 받은 달'의 기준도 같아야 한다.
+       마지막 인자 -1 = 입력경로를 보지 않는다. */
+    shopperSet = submittedStores(ss.getSheetByName('쇼퍼_응답'), tz, wantYm, 8, 1, 3, -1);
   } catch (e) {
     return err('SERVER_ERROR', '제출 현황을 불러오지 못했습니다.');
   }
@@ -2593,11 +2594,15 @@ function fnQscSubmit(ctx, payload) {
 function fnShopperSubmit(ctx, payload) {
   return saveShopper(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx, false);
 }
-/* 익명 경로는 물리적으로 다른 코드를 탄다: 매장 파일·통합시트 쓰기 함수를 호출하지 않고,
-   시트 '입력경로' 칸을 서버가 '고객 직접'으로 강제한다(클라이언트 source는 읽지도 않는다).
-   그리고 shopperMonthAvg의 '관리자 입력' 필터가 함께 있어야 격리가 완성된다 — 액션을
-   가르는 것만으로는 절반만 참이다. 익명 데이터는 쓰기 함수를 호출하지 않아도 집계 함수를
-   통해 공식 점수에 들어간다. */
+/* ★익명 경로도 이제 같은 일을 한다★ (2026-08-20 사용자 결정 — 본사가 채운 것과 고객이 낸 것은
+   같은 미스터리쇼퍼다). 그래서 점수에서 두 경로를 구별하지 않는다.
+   서버가 여전히 다르게 하는 것은 하나뿐이다: 시트 '입력경로' 칸을 '고객 직접'으로 ★강제★한다
+   (클라이언트가 보낸 source는 읽지도 않는다). 그 칸은 이제 ★기록용★이지 판정용이 아니다.
+
+   ⚠그래서 익명 제출 한 건이 그 매장의 그 달 CS 평균을 바꾸고, 매장 파일 CS 칸까지 덮어쓴다.
+     survey.html은 누구나 열 수 있으므로 ★제출 코드가 생기기 전까지는 그것이 열려 있다★
+     (설계: `_보관/설계/쇼퍼_제출코드_설계.md`). 그때까지는 담당자가 `쇼퍼_응답` 시트를 보고
+     이상한 건을 지우거나 고친다 — 평균은 시트를 다시 읽어 계산하므로 그 편집이 곧 반영된다. */
 function fnSurveySubmit(ctx, payload) {
   return saveShopper(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx, true);
 }
@@ -2714,8 +2719,19 @@ function saveShopper(ss, p, ctx, isSurvey) {
     appendRows(ms, memoRows);
   }
 
-  // 익명 설문은 여기서 끝. 매장 파일·통합시트 쓰기 함수를 아예 호출하지 않는다.
-  if (isSurvey) return { ok: true };
+  /* ★제출이 들어올 때마다 그 달 평균을 다시 계산해 덮어쓴다★ (2026-08-20 사용자 제안)
+
+     종전에는 익명 설문이 여기서 곧장 끝났다 — 매장 파일·통합시트를 아예 부르지 않았다.
+     그래서 순서에 따라 이런 일이 생겼다:
+         5일  본사 제출        → 그때까지의 평균이 숫자로 박힌다
+         20일 고객 3건 들어옴  → 아무 일도 일어나지 않는다 (영영 점수에 안 들어간다)
+     고객 응답도 CS에 똑같이 반영하기로 한 이상 이 구멍을 그대로 둘 수 없다.
+     ★그 달 마지막 제출이 항상 옳은 값을 남기게 한다★ — 덮어쓰기라 몇 번 돌아도 결과가 같다.
+
+     ⚠이 줄 때문에 ★익명 경로가 매장 파일 한 칸(CS 점수)을 쓰게 된다★.
+       쓰는 값은 사용자가 보낸 숫자가 아니라 시트에서 다시 계산한 평균이고,
+       스위치(STORE_FILE_WRITE·DASHBOARD_WRITE)가 꺼져 있으면 애초에 쓰지 않는다.
+       그래도 넓어지는 것은 사실이므로, 제출 코드가 생기기 전까지는 그 점을 알고 있어야 한다. */
 
   // 통합시트 CS 칸 + 매장 파일 CS점수: 같은 달 쇼퍼가 여러 명이면 "해당 월 평균"으로 기록
   const extra = { dashboard: null, storeFile: null };
@@ -2736,7 +2752,11 @@ function saveShopper(ss, p, ctx, isSurvey) {
   }
   dropDashCache(p.date);
   dropStoreCache(p.store, yymm(p.date));   // 방금 쓴 매장·달의 조회 캐시도 함께 비운다
-  return { ok: true, dashboard: extra.dashboard, storeFile: extra.storeFile };
+  /* ★익명 제출에는 결과를 돌려주지 않는다★ — 쓰기는 하되 무엇이 쓰였는지는 알려 주지 않는다.
+     extra 안에는 그 매장의 이번 달 CS 평균(monthAvg)과 시트 기록 상태가 들어 있다.
+     고객 화면은 그 값을 쓰지 않지만(감사 인사만 띄운다), 응답 본문에 실리면
+     설문을 한 건 넣는 것만으로 그 매장 점수를 읽어 갈 수 있다. */
+  return isSurvey ? { ok: true } : { ok: true, dashboard: extra.dashboard, storeFile: extra.storeFile };
 }
 
 /* ★tz는 반드시 '스프레드시트' 타임존이다 (§9-4)★
@@ -2758,15 +2778,19 @@ function shopperMonthAvg(sh, store, dateStr, tz) {
   const vals = rng ? rng.getValues() : [];
   const scores = [];
   const key = normStore(store);
+  /* ★본사가 채운 것과 고객이 낸 것을 구별하지 않는다★ (2026-08-20 사용자 결정)
+     담당자가 직접 체크하는 경우도 미스터리쇼퍼와 같은 일이다 — 손님으로 가서 보고 적는 것이다.
+     그래서 두 경로가 CS 점수에 똑같이 들어간다. 시트의 '입력경로' 칸은 ★기록용으로만★ 남는다.
+
+     ⚠종전에는 '관리자 입력'만 셌다. 이유는 survey.html을 누구나 열 수 있다는 것이었다 —
+       아무나 특정 매장 이름으로 설문을 여러 건 넣어 그 달 CS를 끌어내리거나(또는 올리거나) 할 수 있다.
+       CS는 10월부터 종합점수의 30%다. ★그 방어는 제출 코드(매장 1곳 = 코드 1개 = 월 1회)가 맡는다★ —
+       설계는 `_보관/설계/쇼퍼_제출코드_설계.md`에 있고 아직 만들지 않았다.
+       그때까지는 담당자가 `쇼퍼_응답` 시트를 보고 이상한 건을 지우거나 고친다(그 편집이 곧 반영된다). */
   for (let i = 0; i < vals.length; i++) {
     const dYm = ymOfCell(vals[i][1], tz);
     // 열 순서: 0 제출시각 · 1 방문날짜 · 2 방문시간 · 3 매장명 … 7 입력경로 · 8 점수
-    // ⚠'관리자 입력'만 센다. survey.html은 누구나 열 수 있으므로, 이 조건이 없으면
-    //   아무나 특정 매장 이름으로 0점 설문을 여러 건 넣어 그 달 CS 평균을 끌어내릴 수 있다.
-    //   그 평균은 매장 파일 CS 칸과 통합시트로 흘러가고, 10월부터 CS는 종합점수의 30%다.
-    //   (고객 설문은 시트에 그대로 쌓이되 공식 점수 집계에서만 빠진다)
-    if (normStore(vals[i][3]) === key && dYm === ym &&
-      String(vals[i][7]).trim() === '관리자 입력' && typeof vals[i][8] === 'number') {
+    if (normStore(vals[i][3]) === key && dYm === ym && typeof vals[i][8] === 'number') {
       scores.push(vals[i][8]);
     }
   }
