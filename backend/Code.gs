@@ -155,7 +155,7 @@ const DASH_PUBLIC = ['rank', 'store', 'region', 'category', 'qsc', 'qscGrade', '
    대시보드와 달리 여기서는 '투영'조차 하지 않고 accountRow()가 객체를 직접 조립한다 —
    계정 객체에는 해시가 들어 있으므로, 화이트리스트 루프를 도는 코드가 있으면 언젠가
    목록을 한 줄 늘리는 것만으로 해시가 나간다. 담을 값을 손으로 적는 편이 안전하다. */
-const ACCOUNT_PUBLIC = ['id', 'name', 'role', 'status', 'scope', 'hasPw', 'pwAt', 'lastSeen'];
+const ACCOUNT_PUBLIC = ['id', 'name', 'role', 'status', 'scope', 'hasPw', 'pw', 'pwAt', 'lastSeen'];
 
 /* ---------- 스크립트 속성 읽기 ---------- */
 
@@ -1727,6 +1727,152 @@ function authTz() {
   return _authTzMemo;
 }
 
+/* ---------- 비밀번호 보관 (계정 관리 화면의 '현재 비밀번호' 표시용) ----------
+
+   ★이 서버의 원칙은 '평문은 어디에도 남기지 않는다'였고, 여기 한 곳만 의도적으로 뒤집는다★
+     이유는 운영 하나다. 26개 매장의 비밀번호를 담당자 한 사람이 정해 주는 구조인데,
+     매장이 "비밀번호가 뭐였죠"라고 물으면 지금까지는 '다시 설정'밖에 답이 없었다.
+     그런데 다시 설정하면 그 매장의 기존 로그인이 전부 끊긴다 — 물어본 대가치고 비싸다.
+
+   ★대신 네 가지를 지킨다★
+     ① 시트에는 쓰지 않는다. 스크립트 속성에만 둔다 — 인증 시트를 공유하거나 사본을 떠도
+        보관값은 따라가지 않는다(`계정` 탭에 열을 하나 늘리지 않은 이유가 이것이다).
+     ② 속성에도 평문으로 두지 않는다. PW_SHOW_KEY로 만든 키스트림을 XOR해 hex로 적는다.
+     ③ 무결성 확인을 붙인다. MAC에 ★현재 해시★를 섞어 넣으므로, 누군가 시트 G열을 손으로
+        고쳐 비밀번호가 달라지면 보관값은 그 즉시 스스로 무효가 된다.
+     ④ 맞지 않으면 '모른다'고 답한다. ★옛 값을 '현재 비밀번호'라고 보여 주는 것이
+        아무것도 안 보여 주는 것보다 훨씬 위험하다★ — 담당자가 매장에 틀린 값을 불러 준다.
+
+   ★로그인 검증은 여전히 G열 해시로만 한다★ — 이 보관값은 화면 표시 전용이고, 지워지거나
+     깨져도 로그인에는 아무 영향이 없다. 속성을 전부 지우면 목록이 '확인 불가'로 바뀔 뿐이고,
+     다시 설정하면 그때부터 다시 보인다. */
+
+const PWSHOW_PREFIX = 'PWS:';
+
+/* 보관 전용 키. ★TOKEN_KEY·PW_PEPPER를 재사용하지 않는다★ — 그 둘은 사고가 났을 때
+   일부러 바꾸는(= 전원 강제 로그아웃) 수단이라, 거기에 묶어 두면 비상사태를 푸는 순간
+   26곳의 보관값이 함께 날아간다. 없으면 그 자리에서 만든다(초기 설정 단계를 늘리지 않게). */
+function pwShowKey() {
+  let k = prop('PW_SHOW_KEY', '');
+  if (!k) {
+    k = Utilities.getUuid() + Utilities.getUuid();
+    PROPS.setProperty('PW_SHOW_KEY', k);
+  }
+  return k;
+}
+
+/* SHA-256 키스트림. 같은 (키, 논스)면 같은 바이트가 나오므로 논스는 보관할 때마다 새로 만든다
+   (같은 스트림에 두 비밀번호를 XOR하면, 둘을 서로 지우는 것만으로 글자가 드러난다). */
+function pwShowStream(nonce, n) {
+  const key = pwShowKey();
+  const out = [];
+  let blk = 0;
+  while (out.length < n) {
+    const h = sha256Hex(key + '|' + nonce + '|' + blk);
+    for (let i = 0; i < h.length && out.length < n; i += 2) out.push(parseInt(h.substr(i, 2), 16));
+    blk++;
+  }
+  return out;
+}
+
+function pwShowMac(id, nonce, hex, hash) {
+  return sha256Hex(pwShowKey() + '|' + normId(id) + '|' + nonce + '|' + hex + '|' +
+    String(hash == null ? '' : hash).slice(0, 16)).slice(0, 16);
+}
+
+/* 보관. hash는 방금 G열에 쓴 값이다 — 이것을 MAC에 섞는 것이 위 ③의 실행부다.
+   ★예외를 밖으로 내지 않는다★ — 보관은 편의 기능이고, 이것이 실패해서 비밀번호 설정 자체가
+   실패하면 배본이 전도된다(속성 저장소는 할당량 초과로 실패할 수 있는 자리다). */
+function pwStash(id, plain, hash) {
+  try {
+    const s = String(plain == null ? '' : plain);
+    if (!s) { pwStashClear(id); return; }
+    const nonce = Utilities.getUuid();
+    const b = Utilities.newBlob(s).getBytes();
+    const ks = pwShowStream(nonce, b.length);
+    let hex = '';
+    for (let i = 0; i < b.length; i++) {
+      hex += ('0' + (((((b[i] + 256) % 256)) ^ ks[i]) & 255).toString(16)).slice(-2);
+    }
+    PROPS.setProperty(PWSHOW_PREFIX + normId(id),
+      'v1:' + nonce + ':' + hex + ':' + pwShowMac(id, nonce, hex, hash));
+  } catch (e) {
+    Logger.log('pwStash 실패(무시됨): ' + String(e));
+  }
+}
+
+function pwStashClear(id) {
+  try { PROPS.deleteProperty(PWSHOW_PREFIX + normId(id)); } catch (e) { }
+}
+
+/* 꺼내기. props를 넘기면 그 지도에서 읽는다 — 목록 26줄을 그릴 때 속성을 26번 따로 읽지
+   않기 위해서다(fnAccountList가 getProperties()를 한 번만 부른다).
+   ★어떤 이유로든 확신할 수 없으면 빈 문자열을 돌려준다★ — 화면은 그걸 '확인 불가'로 적는다. */
+function pwStashRead(id, hash, props) {
+  try {
+    if (!hash) return '';                       // 비밀번호가 설정되지 않은 계정
+    const k = PWSHOW_PREFIX + normId(id);
+    const raw = String((props && props[k] != null) ? props[k] : (PROPS.getProperty(k) || ''));
+    if (!raw) return '';
+    const p = raw.split(':');
+    if (p.length !== 4 || p[0] !== 'v1') return '';
+    const nonce = p[1], hex = p[2];
+    if (!/^[0-9a-f]*$/.test(hex) || hex.length % 2) return '';
+    /* 해시까지 섞은 MAC이다. 비밀번호가 바뀌었는데 보관값이 안 바뀌었으면 여기서 걸러진다 */
+    if (!ctEq(pwShowMac(id, nonce, hex, hash), p[3])) return '';
+    const n = hex.length / 2;
+    const ks = pwShowStream(nonce, n);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const v = (parseInt(hex.substr(i * 2, 2), 16) ^ ks[i]) & 255;
+      out.push(v > 127 ? v - 256 : v);          // 자바 byte는 부호가 있다 (toHex의 반대 보정)
+    }
+    return out.length ? Utilities.newBlob(out).getDataAsString() : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/* 목록을 그릴 때 한 번만 부른다. 실패하면 null — pwStashRead가 계정별로 다시 읽는다. */
+function pwStashAll() {
+  try { return PROPS.getProperties() || null; } catch (e) { return null; }
+}
+
+/* 편집기 전용 자기시험. ★실계정을 건드리지 않는다★ — 없는 아이디로 보관하고 되읽어 본 뒤
+   끝에 지운다. 편집기에서 testPwStash를 실행하고 [실행 로그]를 보면 된다.
+   이 시험이 확인하는 것은 셋이다.
+     ① 한글·특수문자·긴 값이 그대로 되돌아오는가 (UTF-8 바이트 왕복)
+     ② 해시가 다르면 값을 내지 않는가 — ★옛 비밀번호를 '현재'라고 보여 주는 사고의 방지선★
+     ③ 지우면 빈 문자열인가 (그때 화면은 '확인 불가'로 적는다) */
+function testPwStash() {
+  const id = '__pwstash_test__';
+  const hash = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+  const cases = ['abcd1234', '한글비밀번호12', 'Aa!@#$%^&*()_+-=[]{};:,.<>?/~`', '가나다라마바사아자차'];
+  let bad = 0;
+  for (let i = 0; i < cases.length; i++) {
+    pwStash(id, cases[i], hash);
+    const back = pwStashRead(id, hash, null);
+    if (back === cases[i]) {
+      Logger.log('✓ [' + i + '] ' + cases[i].length + '자 복원 성공');
+    } else {
+      bad++;
+      Logger.log('✗ [' + i + '] 불일치 — 넣은 값 「' + cases[i] + '」 돌아온 값 「' + back + '」');
+    }
+  }
+
+  pwStash(id, 'abcd1234', hash);
+  const other = pwStashRead(id, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', null);
+  if (other === '') Logger.log('✓ 해시가 다르면 값을 내지 않는다');
+  else { bad++; Logger.log('✗ 해시가 달라도 값이 나왔다: ' + other); }
+
+  pwStashClear(id);
+  if (pwStashRead(id, hash, null) === '') Logger.log('✓ 지우면 빈 문자열');
+  else { bad++; Logger.log('✗ 지운 뒤에도 값이 나온다'); }
+
+  Logger.log(bad ? ('실패 ' + bad + '건 — 이 상태로는 배포하지 마십시오') : '전부 통과 (' + (cases.length + 2) + '/' + (cases.length + 2) + ')');
+  return bad === 0;
+}
+
 /* G·H·I·J 기록 (해시·솔트·반복수:페퍼버전·비번변경일). A~F는 건드리지 않는다.
    ★이 함수가 강제 로그아웃 ①의 실행부다★ — 해시가 바뀌면 credFingerprint가 바뀌고,
    dropAccountCache로 캐시까지 즉시 버리므로 그 계정의 모든 기기가 다음 요청에서 끊긴다. */
@@ -1753,6 +1899,11 @@ function writeCredential(acct, plain, iter) {
   const tz = ss.getSpreadsheetTimeZone();
   rng.setValues([[h, salt, iter + ':' + prop('PW_PEPPER_V', '1'),
     Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm')]]);
+  /* ★평문 보관은 이 한 줄뿐이다★ — 여기 두는 이유는 비밀번호가 바뀌는 경로가 셋(관리자 설정,
+     본인 변경, 로그인 중 반복수 승급)인데 전부 이 함수를 지나기 때문이다. 호출부마다 적으면
+     언젠가 한 곳을 빠뜨리고, 그때 화면은 ★옛 비밀번호를 '현재'라고 보여 준다★.
+     h를 함께 넘긴다 — 보관값을 지금 해시에 묶어 두는 것이 그 사고의 마지막 안전망이다. */
+  pwStash(acct.id, plain, h);
   dropAccountCache(acct.id);
 }
 
@@ -1911,8 +2062,11 @@ function menusOf(role) {
 
 /* 계정 1행을 화면용 객체로. ★해시·솔트·반복수·페퍼버전은 담지 않는다★
    화이트리스트 배열을 도는 대신 담을 값을 손으로 적는다 — 계정 객체에는 해시가 들어 있어서,
-   투영 루프가 있으면 목록을 한 줄 늘리는 것만으로 해시가 응답에 실릴 수 있다. */
-function accountRow(a) {
+   투영 루프가 있으면 목록을 한 줄 늘리는 것만으로 해시가 응답에 실릴 수 있다.
+   ★pw는 해시가 아니라 따로 보관해 둔 원문이다★ (pwStash 주석 참조). 이 함수를 부르는 곳은
+   account.* 넷뿐이고 전부 menu:'accounts' 권한이 걸려 있다 — 매장 계정은 이 응답을 받을 수
+   없다. 다른 화면에서 이 함수를 가져다 쓰면 그 순간 26곳 비밀번호가 함께 나간다. */
+function accountRow(a, props) {
   return {
     id: a.id,               // 정규화된 아이디 (요청에 그대로 되돌려 보내면 된다)
     name: a.rawId || a.id,  // 화면에 보이는 이름 = 시트 A열 원문(매장명 그대로)
@@ -1920,6 +2074,9 @@ function accountRow(a) {
     status: a.status,
     scope: a.scope,
     hasPw: !!a.hash,        // 비밀번호 설정 여부 — 해시 자체는 절대 내보내지 않는다
+    /* 현재 비밀번호 원문. 보관값이 없거나(이 기능이 생기기 전에 정한 비밀번호) 해시와 짝이
+       맞지 않으면(시트를 손으로 고친 경우) 빈 문자열이다. 화면은 그걸 '확인 불가'로 적는다. */
+    pw: pwStashRead(a.id, a.hash, props),
     pwAt: a.pwAt || '',
     lastSeen: a.lastSeen || ''
   };
@@ -1934,7 +2091,9 @@ function fnAccountList(ctx) {
   for (let i = 0; i < all.length; i++) {
     if (all[i].dup && dups.indexOf(all[i].id) < 0) dups.push(all[i].id);
   }
-  for (let i = 0; i < all.length; i++) rows.push(accountRow(all[i]));
+  /* 속성은 한 번만 읽어 넘긴다 — 줄마다 따로 읽으면 26번의 속성 조회가 된다 */
+  const props = pwStashAll();
+  for (let i = 0; i < all.length; i++) rows.push(accountRow(all[i], props));
   /* 아직 쓰지 않는 매장을 위로 올린다 — 이 화면을 여는 이유가 대부분 그것이기 때문이다
      (비밀번호 미설정 → 접속 이력 없음 → 나머지). 같은 묶음 안에서는 이름순. */
   rows.sort(function (x, y) {
@@ -1986,8 +2145,10 @@ function missingStoreAccounts(all) {
 }
 
 /* 관리자가 매장 비밀번호를 정해 준다 (확정사항 3).
-   ★평문을 응답에도 감사로그에도 담지 않는다★ — 매장에 보낼 안내 문구는 화면이 조립한다
-   (화면은 방금 입력한 값을 메모리에 갖고 있으므로 서버가 되돌려 줄 이유가 없다). */
+   ★감사로그에는 여전히 평문을 담지 않는다★ — 감사로그는 시트에 그대로 쌓이고 지울 수도
+   없으므로, 거기 한 번 들어가면 영원히 남는다.
+   응답의 account.pw에는 들어 있다 — 목록 화면이 '현재 비밀번호'를 보여 주기 위해서고,
+   그 값은 pwStash가 따로 보관한 것이다(pwStash 주석 참조). */
 function fnAccountSetPassword(ctx, payload) {
   if (!prop('TOKEN_KEY', '') || !prop('PW_PEPPER', '')) {
     return err('SERVER_ERROR', '서버 설정이 끝나지 않았습니다.');

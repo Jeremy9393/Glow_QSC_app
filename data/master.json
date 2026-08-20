@@ -1,6 +1,6 @@
 {
  "version": "2026-08-20",
- "source_sha": "0e289bfa9ac0",
+ "source_sha": "258f1d4e813a",
  "source": "QSC 평가 체계 개편_v3.xlsx",
  "stores": [
   "금종제과",
@@ -128,7 +128,7 @@
      "no": 5,
      "code": "A-05",
      "row": 14,
-     "text": "원산지 표시 미게시 (고객이 잘 보이는 위치, 게시물·메뉴판 등)",
+     "text": "원산지 표시, 알레르기표시 미게시 (고객이 잘 보이는 위치, 게시물·메뉴판 등)",
      "severity": "S2",
      "critical": true
     },
