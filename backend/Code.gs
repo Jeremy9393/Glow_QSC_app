@@ -28,7 +28,6 @@
         📁 매장현황              … 매장별 QSC현황 시트 26개 (ID 불필요 — 통합시트 D열 링크에서 자동 추출)
      📁 QSC 사진 (개인 계정)      … PHOTO_FOLDER_ID
         2026 / QSC점검      / 매장 / 날짜   ← 관리자 점검 사진
-        2026 / 미스터리쇼퍼 / 매장 / 날짜   ← 영수증
         2026 / 개선보고     / 매장 / 날짜   ← 매장이 올리는 개선 후 사진
      📊 QSC 응답 (개인 계정)      … SPREADSHEET_ID   ← 익명 고객이 글자를 쓸 수 있는 파일
      📊 QSC 인증 (개인 계정)      … AUTH_SHEET_ID    ← 계정·역할·감사로그·매장파일맵. 아무와도 공유하지 말 것
@@ -69,7 +68,6 @@
                          설정(26회) + 그날 저녁 26곳 첫 로그인(26회) + 오타 재시도가 하루에 몰린다
      HASH_BUDGET_ID      기본 12 (시간당 느린 해시 실행 '아이디별' 상한). 실제 브레이크는 이쪽이다
      GLOBAL_FAIL_MAX     기본 40 (시간당 전역 로그인 실패 상한 → 실패 응답 문구만 바뀐다)
-     SURVEY_PHOTO        'false'(기본) | 'true'.  익명 설문의 영수증 사진 허용 여부
      PHOTO_DAY_MAX       기본 200 (계정당 하루 사진 저장 건수)
      IMPROVE_DUE_DAY     기본 10 (익월 며칠까지 종합점수를 '잠정'으로 표시)
      STORE_FILE_WRITE    'false'(기본) | 'true'.  매장 파일에 점검 결과 자동 기록
@@ -270,13 +268,11 @@ function actionTable() {
   /* qsc.submit 이 12MB인 이유: ui-photo.js의 TARGET_BYTES(180KB)는 목표이지 상한이 아니다.
      base64는 4/3배라 장당 약 240KB이고 40장이면 9.6MB다. 74문항을 다 마치고 제출을 누른 순간
      BAD_REQUEST로 전부 날아가는 사고를 막기 위해 상한을 넉넉히 둔다. */
-  /* ★survey.submit 의 상한을 shopper.submit 과 같은 3MB로 둔다★
-     종전에는 SURVEY_PHOTO='false'면 80KB였는데, 고객 화면은 영수증이 필수이고 PhotoPick이 최대
-     3장(장당 약 240KB)을 담는다. 즉 80KB로 두면 프론트가 survey.submit 을 부르기 시작하는 순간
-     고객 설문이 전부 BAD_REQUEST로 죽는다. 드라이브를 지키는 것은 본문 상한이 아니라
-     saveReceipts()의 SURVEY_PHOTO 게이트다(사진을 아예 저장하지 않는다). 상한은 그 앞의
-     대역폭·파싱 비용만 막으면 되고, 그 몫은 anonThrottle이 맡는다. */
-  const surveyMax = 3 * MB;
+  /* survey.submit 상한. ★영수증 사진 첨부를 2026-08-20에 없애서 이제 글자만 오간다★
+     (38문항 답 + 비고). 그래도 상한을 크게 줄이지는 않는다 — 비고를 길게 쓴 응답 하나가
+     BAD_REQUEST로 통째로 날아가는 것이 훨씬 비싼 사고이기 때문이다.
+     대역폭·파싱 비용을 막는 몫은 anonThrottle이 맡는다. */
+  const surveyMax = 1 * MB;
   return {
     'auth.login':         { menu: '', act: '', scope: 'none', anon: true, max: 2 * KB, fn: fnLogin },
     /* setPassword는 anon이 아니라 '선택적 인증'이다. anon으로 두면 doPost가 토큰을 아예 검증하지
@@ -2691,13 +2687,22 @@ function saveQsc(ss, p, ctx) {
 function saveShopper(ss, p, ctx, isSurvey) {
   // 익명 경로는 입력경로를 서버가 강제한다. 클라이언트가 보낸 p.source는 읽지 않는다.
   const route = isSurvey ? '고객 직접' : '관리자 입력';
-  const receipts = saveReceipts(p, ctx, isSurvey); // 영수증 사진 → 드라이브, 링크만 시트에
-  const sh = sheet(ss, '쇼퍼_응답', ['제출시각', '방문날짜', '방문시간', '매장명', '응대직원설명', '주문내역', '작성자연령대성별', '입력경로', '점수', '응답수', '영수증']
+  const sh = sheet(ss, '쇼퍼_응답', ['제출시각', '방문날짜', '방문시간', '매장명', '응대직원설명', '주문내역', '작성자연령대성별', '입력경로', '점수', '응답수']
     .concat(p.answers.map(function (a) { return 'Q' + a.no; })));
-  sh.appendRow(safeRow([p.submittedAt, p.date, p.time || '', p.store, p.staff, p.order, p.demographic,
-    route,
-    p.result.score == null ? '' : round1(p.result.score), p.result.answered, receipts.join('\n')]
-    .concat(p.answers.map(function (a) { return a.answer || ''; }))));
+  const row = [p.submittedAt, p.date, p.time || '', p.store, p.staff, p.order, p.demographic,
+    route, p.result.score == null ? '' : round1(p.result.score), p.result.answered]
+    .concat(p.answers.map(function (a) { return a.answer || ''; }));
+  /* ★영수증 열은 2026-08-20에 없앴다 — 그런데 이미 만들어진 시트에는 그 열이 남아 있다★
+     sheet()는 시트가 없을 때만 머리글을 쓰므로, 옛 시트는 11번째 칸이 '영수증'인 채로 그대로다.
+     보정 없이 짧아진 행을 붙이면 Q1의 답이 그 칸으로 들어가 ★그 뒤가 통째로 한 칸씩 밀린다★.
+     그래서 머리글을 보고 그 자리에 빈칸을 하나 끼운다. 열을 아주 없애려면 편집기에서
+     dropReceiptColumn() 을 한 번 돌린다 — 돌리지 않아도 기록은 어긋나지 않는다. */
+  try {
+    const head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
+    const at = head.indexOf('영수증');
+    if (at >= 0) row.splice(at, 0, '');
+  } catch (e) { /* 머리글을 못 읽으면 보정 없이 그대로 붙인다 */ }
+  sh.appendRow(safeRow(row));
 
   // 문항별 이유·비고 — 작성된 것만 1행씩 (추적용, 특히 '아니오'의 근거)
   const memoRows = p.answers.filter(function (a) { return a.memo; }).map(function (a) {
@@ -4147,7 +4152,7 @@ function validPhoto(dataUrl) {
   return '';
 }
 
-/* 계정당 하루 사진 건수 상한. 익명 경로는 SURVEY_PHOTO=false가 기본이라 여기까지 오지 않는다.
+/* 계정당 하루 사진 건수 상한. 익명 설문은 사진을 아예 다루지 않으므로 여기까지 오지 않는다.
    ★n장을 한 번에 예약한다★ — 장당 setProperty를 부르면 40장 제출에 속성 쓰기 40회(수 초)가 붙는다.
    전날 키는 그때 함께 지운다. 속성은 durable이라 스스로 사라지지 않아 계정×날짜만큼 쌓인다. */
 /* ★1단계에는 토큰이 없어 ctx.id가 전부 '(무인증)'이다★ — 계정별 상한이 그대로 '회사 전체
@@ -4224,30 +4229,32 @@ function savePhotos(p, ctx) {
   return out;
 }
 
-// 쇼퍼 영수증 사진 — '미스터리쇼퍼/매장/날짜' 폴더에 저장하고 링크 배열 반환
-// ★익명 설문은 SURVEY_PHOTO=true 일 때만 받는다★ 1.5MB × 30건/10분 = 하루 9.7GB고,
-//   이틀이면 담당자 개인 계정 15GB가 Gmail까지 포함해 꽉 찬다.
-function saveReceipts(p, ctx, isSurvey) {
-  if (!PHOTO_FOLDER_ID || !p.receipts || !p.receipts.length) return [];
-  if (isSurvey && prop('SURVEY_PHOTO', 'false') !== 'true') return [];
-  try {
-    const safeName = fileSafe(p.store);
-    const dir = subFolder(subFolder(yearFolder(p.date, '미스터리쇼퍼'), safeName), fileSafe(p.date));
-    const out = [];
-    p.receipts.slice(0, 3).forEach(function (dataUrl, i) {
-      if (validPhoto(dataUrl)) return;
-      if (!photoQuotaOk(ctx, 1, p.store)) return;
-      const blob = Utilities.newBlob(Utilities.base64Decode(dataUrl.split(',')[1]), 'image/jpeg',
-        fileSafe(p.date) + '_' + safeName + '_영수증_' + (i + 1) + '.jpg');
-      out.push(dir.createFile(blob).getUrl());
-    });
-    return out;
-  } catch (err) {
-    /* 예외 원문에는 드라이브 파일 ID·폴더명이 실린다. 시트와 응답 양쪽에 그대로 남기던 것을
-       고정 문구로 바꾸고 원문은 실행 로그로만 보낸다 (응답 자체는 저장되어야 한다). */
-    Logger.log('saveReceipts 실패: ' + String(err));
-    return ['사진이 저장되지 않았습니다 (실행 로그 확인)'];
+/* ★영수증 사진 첨부는 2026-08-20에 없앴다★ (사용자 지시 — 없던 것으로).
+   `saveReceipts` 와 `SURVEY_PHOTO` 스위치를 함께 지웠다. 쇼퍼·고객 설문은 이제 사진을 다루지 않는다.
+   드라이브의 `2026/미스터리쇼퍼/...` 폴더에 옛 영수증이 남아 있으면 사람이 정리한다 —
+   코드가 지우지 않는다(지운 뒤 필요해지면 되돌릴 방법이 없다).
+
+   ※한 번만 돌리는 정리 함수. 옛 `쇼퍼_응답` 시트에 남은 '영수증' 열을 없앤다.
+     안 돌려도 기록은 어긋나지 않는다(saveShopper가 빈칸으로 맞춘다). */
+function dropReceiptColumn() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sh = ss.getSheetByName('쇼퍼_응답');
+  if (!sh) { const m = '쇼퍼_응답 시트가 없습니다 — 할 일이 없습니다.'; Logger.log(m); return m; }
+  const head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
+  const at = head.indexOf('영수증');
+  if (at < 0) { const m = "'영수증' 열이 이미 없습니다."; Logger.log(m); return m; }
+  const rows = sh.getLastRow() - 1;
+  const used = rows > 0
+    ? sh.getRange(2, at + 1, rows, 1).getValues().filter(function (r) { return String(r[0] || '').trim(); }).length
+    : 0;
+  if (used) {
+    const m = '★멈춤★ 그 열에 값이 ' + used + '건 있습니다 (' + (at + 1) + '번째 열). ' +
+      '지우면 드라이브 링크가 사라집니다 — 먼저 옮겨 두신 뒤 다시 부르십시오.';
+    Logger.log(m); return m;
   }
+  sh.deleteColumn(at + 1);
+  const m = "'영수증' 열(" + (at + 1) + '번째)을 지웠습니다. 값이 없어 잃은 것은 없습니다.';
+  Logger.log(m); return m;
 }
 
 // 매장이 올리는 개선 후 사진 (1장)

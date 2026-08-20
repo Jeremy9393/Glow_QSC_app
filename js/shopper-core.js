@@ -20,7 +20,6 @@ async function initShopperForm(opts) {
     { html: '답변에 대한 특이사항은 <b>비고</b>에 자유롭게 적어주세요.' },
     { html: '기억이 안 나거나 판단이 어려운 문항은, <b>비고에 상황이나 이유를 꼭 적어주시길</b> 부탁드립니다.' },
     { html: '<b>연령대·성별</b>은 직원이 아니라 <b>설문을 작성하시는 본인</b> 기준으로 적어주세요.' },
-    { tip: '영수증 필수', html: '방문을 확인할 수 있도록 <b>영수증 사진을 반드시 첨부</b>해 주세요. 미리 찍어두신 사진을 골라도 됩니다.' },
   ];
   const META_FIELDS = [
     { id: 'store', label: '매장명 *', full: true, control: '<select id="store"><option value="">방문한 매장 선택</option></select>' },
@@ -29,7 +28,6 @@ async function initShopperForm(opts) {
     { id: 'staff', label: '응대직원 설명 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 카운터 결제 응대 · 검은 뿔테 안경 직원">' },
     { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
     { id: 'demo', label: '연령대·성별 (작성자 본인) *', full: true, control: '<input type="text" id="demo" placeholder="직원이 아닌 본인 기준 — 예: 30대 여성">' },
-    { id: 'receipt', label: '영수증 사진 *', full: true, control: '<div id="receiptBox"></div>' },
   ];
   if ($('#guideBox')) {
     $('#guideBox').innerHTML = '<h2>평가 전 안내</h2><ul class="guideList">' +
@@ -43,11 +41,9 @@ async function initShopperForm(opts) {
         return '<div' + (f.full ? ' class="full"' : '') + '><label class="f">' + f.label + '</label>' + f.control + '</div>';
       }).join('') + '</div>';
   }
-  // 영수증 사진 — 방문 사실을 확인하는 증빙. 사진은 용량이 커서 임시저장에 넣지 않는다(새로고침 시 재첨부)
-  const receipt = PhotoPick.mount($('#receiptBox'), {
-    id: 'receipt', max: 3, label: '영수증 사진',
-    hint: '카메라로 찍거나 앨범에서 고를 수 있습니다 · 사진은 임시저장되지 않습니다',
-  });
+  /* ★영수증 사진 첨부는 2026-08-20에 없앴다★ (사용자 지시 — 없던 것으로).
+     그래서 이 화면은 사진을 한 장도 다루지 않는다. PhotoPick(js/ui-photo.js)도 부르지 않는다
+     — 그 부품 자체는 QSC 점검(문항 증빙)과 매장 개선보고가 계속 쓰므로 지우지 않았다. */
   const DRAFT_KEY = ADMIN ? 'shopper-admin-v4' : 'shopper-guest-v4';
   const state = { answers: {}, memos: {} };
   const allQs = [];
@@ -128,13 +124,6 @@ async function initShopperForm(opts) {
     { id: 'staff', label: '응대직원 설명' },
     { id: 'order', label: '주문내역' },
     { id: 'demo', label: '연령대·성별' },
-    /* 영수증은 방문 증빙이라 고객 화면에서는 필수.
-       ★관리자 화면은 '평가표 그 자체'다★ — 담당자가 매장에서 이 화면을 보며 직접 채운다.
-         종이는 어쩔 수 없을 때만 쓰는 예비 수단이고, 그때도 결국 이 화면에 옮겨 적는다.
-         그래서 건너뛰기를 허용하는 이유는 '종이라서'가 아니라 ★영수증을 받지 못했을 때★다
-         (현금 결제·영수증 미발행 등은 종이와 무관하게 생긴다). */
-    { id: 'receipt', label: '영수증 사진', verb: '첨부해', focus: 'receiptBtn', adminSkip: true,
-      get: function () { return receipt.count() ? 'ok' : ''; } },
   ];
   function withEulReul(word) {
     const ch = word.charCodeAt(word.length - 1);
@@ -303,11 +292,6 @@ async function initShopperForm(opts) {
     for (const f of REQUIRED_META) {
       const val = f.get ? f.get() : $('#' + f.id).value.trim();
       if (!val) {
-        if (f.adminSkip && ADMIN) {
-          if (confirm('영수증 사진이 없습니다.\n영수증을 받지 못한 경우에만 그대로 저장해 주세요.\n계속할까요?')) continue;
-          $('#' + (f.focus || f.id)).focus();
-          return;
-        }
         alert(withEulReul(f.label) + ' ' + (f.verb || (f.pick ? '선택해' : '입력해')) + ' 주세요.' +
           (f.id === 'staff' ? '\n이름 또는 특징과 함께 응대 시간대·응대 상황을 적어 주세요.\n예) 14시경 카운터 결제 응대 · 검은 뿔테 안경 직원' : '') +
           (f.id === 'demo' ? '\n응대 직원이 아니라, 설문을 작성하시는 본인 기준으로 적어 주세요.' : ''));
@@ -339,7 +323,6 @@ async function initShopperForm(opts) {
     const payload = {
       store: $('#store').value.trim(), date: $('#date').value, time: TimePick.get('time'),
       staff: $('#staff').value.trim(), order: $('#order').value.trim(), demographic: $('#demo').value.trim(),
-      receipts: receipt.get(),
       submittedAt: new Date().toISOString(),
       source: ADMIN ? 'admin' : 'customer',
       result: res,
