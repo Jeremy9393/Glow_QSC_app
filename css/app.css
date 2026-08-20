@@ -359,6 +359,21 @@ input[type=password], input[type=number] {
 .accBadge.warn { color: #111; background: var(--amber); }
 .acc-dup { opacity: .75; }
 
+/* 현재 비밀번호 칸. 눌러서 복사하므로 button이다 — 탭 이동과 엔터가 공짜로 따라온다.
+   ★등폭 글꼴을 쓴다★ 담당자가 전화로 불러 주는 값이라 1과 l, 0과 O가 구별되어야 한다.
+   .miniBtn을 재사용하지 않는 이유: 이것은 조작 버튼이 아니라 '값'이고, 조작 버튼과 같은
+   생김새면 목록 오른쪽의 [비밀번호]·[중지]와 헷갈린다. */
+.accPw { display: inline-block; max-width: 100%; overflow-wrap: anywhere; text-align: left;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; font-weight: 700; letter-spacing: .04em; line-height: 1.3;
+  color: var(--ink); background: #141414; border: 1px solid var(--line); border-radius: 5px;
+  padding: 2px 7px; margin-right: 5px; cursor: pointer; }
+.accPw:active { background: #202020; }
+/* 보관값이 없는 경우. 값이 아니라 안내 문구이므로 등폭을 풀고 흐리게 둔다 */
+.accPw-none { font-family: inherit; font-weight: 400; letter-spacing: 0; color: var(--sub);
+  border-style: dashed; cursor: default; }
+.pwEyeBar { margin: -3px 0 11px; }
+
 /* 접이식 감사로그. <details>를 쓰므로 열고 닫는 데 JS가 들지 않는다. */
 .foldHead { cursor: pointer; font-size: 14px; font-weight: 700; list-style: none; padding: 2px 0; }
 .foldHead::-webkit-details-marker { display: none; }

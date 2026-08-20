@@ -4,8 +4,11 @@
    담당자가 폰으로 그 자리에서 풀어 주는 것. 그래서 모든 조작이 목록 한 줄 안에서 끝나야 하고,
    비밀번호를 설정한 직후 곧바로 '매장에 보낼 안내 문구'를 복사할 수 있어야 한다.
 
-   ★비밀번호 원문은 어디에도 저장하지 않는다. 설정한 값은 이 화면이 열려 있는 동안 메모리에만
-     있고, 패널을 닫으면 사라진다(그래서 닫기 전에 복사하라고 안내한다).
+   ★현재 비밀번호는 목록에 그대로 보인다★ (2026-08-20). 종전에는 설정한 직후 한 번만 볼 수
+     있었고, 매장이 "뭐였죠"라고 물으면 다시 설정하는 수밖에 없었다 — 그러면 그 매장의
+     로그인이 전부 끊긴다. 서버가 원문을 따로 보관한다(Code.gs pwStash 주석에 이유와 대가).
+     ★그래서 이 화면은 26곳의 비밀번호가 한눈에 보이는 화면이다★ — 매장 안에서 펼쳐야 할 때를
+     위해 [비밀번호 숨기기]를 두었고, 그 선택은 이 기기에만 기억된다.
    ★역할 이름을 비교하지 않는다. 무엇을 보여줄지는 Auth.hasMenu()·Auth.can()만 묻는다.
    ★매장명·서버 문구는 전부 textContent로 넣는다. 외부 스크립트가 0개인 것과 이 관례가
      이 앱의 XSS 방어 전부다.
@@ -17,6 +20,17 @@
   const BASE = 'https://jeremy9393.github.io/Glow_QSC_app/';   // codes-app.js와 같은 앱 주소
   const MINPW = 8;                                             // login-app.js·서버와 같은 규칙
   const AUDIT_LIMIT = 100;                                     // 서버가 1~200으로 클램프한다
+  const PWSHOW_KEY = 'qsc-acct-pwshow';                        // api.js·auth.js와 같은 'qsc-' 접두어
+
+  /* 비밀번호를 눈에 보이게 둘지. ★기본은 보임이다★ — 이 화면을 여는 이유의 대부분이
+     "그 매장 비밀번호가 뭐였죠"이고, 한 번 더 눌러야 보인다면 그 한 번이 매번 든다.
+     매장 안에서 화면을 펴야 할 때만 가린다. 가려도 [복사]는 그대로 동작한다 —
+     가리기는 어깨너머를 막는 것이지 값을 잠그는 것이 아니다(잠금은 로그인이 맡는다). */
+  let pwShow = true;
+  try { pwShow = (localStorage.getItem(PWSHOW_KEY) !== '0'); } catch (e) { /* 사생활 모드 */ }
+  function savePwShow() {
+    try { localStorage.setItem(PWSHOW_KEY, pwShow ? '1' : '0'); } catch (e) { /* 이번 화면에서만 */ }
+  }
 
   /* 감사로그 표시용 매핑표. 로그를 읽는 사람은 비개발자 한 명이므로 'store.saveImprove'가
      아니라 '개선보고 저장'이 보여야 한다.
@@ -228,7 +242,7 @@
     if (n) setNote(n, '이 화면을 볼 수 있는 권한이 없습니다. 홈으로 이동합니다.');
     /* 감사로그·조작 버튼도 함께 감춘다. 서버가 어차피 열어 주지 않지만, 누를 수 있게 두면
        "권한이 없습니다"를 두 번 읽히는 화면이 된다. */
-    ['#syncBtn', '#q', '#auditCard'].forEach(function (s) {
+    ['#syncBtn', '#q', '#auditCard', '.pwEyeBar'].forEach(function (s) {
       const el = $(s); if (el) el.style.display = 'none';
     });
     /* replace다 — push로 남기면 홈에서 뒤로가기를 누를 때 이 화면으로 다시 떨어진다 */
@@ -371,12 +385,16 @@
     }
 
     a.hasPw = true;
+    /* 서버 응답에도 account.pw로 들어 있지만, 여기서 직접 넣는다 — 응답 형태가 바뀌어도
+       방금 내가 정한 값이 목록에 안 뜨는 일은 없어야 한다. */
+    a.pw = pw;
     showDone(a, pw, box, dead);
     render();     // 목록의 '미설정' 뱃지를 즉시 지운다 (서버 왕복을 한 번 더 하지 않는다)
   }
 
-  /* 설정 성공 화면. 여기서 안내 문구를 복사하지 않고 닫으면 비밀번호를 다시 볼 방법이 없다
-     (저장하지 않는 것이 원칙이므로 서버에도 원문이 없다) — 그 사실을 먼저 말해 준다.
+  /* 설정 성공 화면. 창을 닫아도 비밀번호는 목록에 그대로 남는다(2026-08-20부터) —
+     그래도 안내 문구 복사를 여기 두는 이유는, 매장에 보낼 문장을 만드는 일이 이 조작의
+     마지막 한 걸음이기 때문이다. 여기서 안 보내면 대개 영영 안 보낸다.
      dead = 본인 계정을 바꿔 이 기기의 세션이 죽은 경우. 닫기가 곧 로그아웃이 된다. */
   function showDone(a, pw, box, dead) {
     $('#npw', box).disabled = true;
@@ -393,7 +411,7 @@
       '<button class="miniBtn" id="cpMsg">안내 문구 복사</button>' +
       '<button class="miniBtn" id="cpPw">비밀번호만 복사</button>' +
       '</div>' +
-      '<p class="note">이 창을 닫으면 비밀번호를 다시 볼 수 없습니다. 먼저 복사해 매장에 전달해 주세요.</p>';
+      '<p class="note">이 비밀번호는 목록에도 계속 보입니다. 잊으셔도 다시 확인하실 수 있습니다.</p>';
 
     const text = msgFor(a.id, pw);
     $('.msgPrev', done).textContent = text;         // 사용자 데이터 — 반드시 textContent
@@ -489,11 +507,34 @@
       b.textContent = seen ? '이번 달 미접속' : '접속 기록 없음';
       info.appendChild(b);
     }
+    /* ★현재 비밀번호★ — 이 화면의 존재 이유가 여기로 옮겨 왔다.
+       · 값이 없으면 빈칸으로 두지 않고 '확인 불가'라고 적는다. 빈칸은 '비밀번호가 없다'로
+         읽히는데 실제로는 설정되어 있다(이 기능 이전에 정했거나, 시트를 손으로 고친 경우).
+       · 눌러서 복사된다. 폰에서 매장에 불러 주는 것보다 붙여넣어 보내는 편이 오타가 없다.
+       · 가려 두었어도 복사는 된다 — 가리기는 어깨너머 대비이지 값을 잠그는 장치가 아니다. */
+    if (a.hasPw) {
+      const pwEl = document.createElement('button');
+      pwEl.type = 'button';
+      pwEl.className = 'accPw' + (a.pw ? '' : ' accPw-none');
+      if (a.pw) {
+        // 사용자 데이터 — 반드시 textContent. 가릴 때도 원문 길이를 흘리지 않도록 고정 길이로 덮는다
+        pwEl.textContent = pwShow ? a.pw : '••••••••';
+        pwEl.title = pwShow ? '눌러서 복사' : '가려 둔 상태입니다. 눌러서 복사';
+        pwEl.onclick = function () { copy(a.pw, this); };
+      } else {
+        pwEl.textContent = '비밀번호 확인 불가';
+        pwEl.title = '이 비밀번호는 보관 기능이 생기기 전에 설정되었습니다. 새로 설정하시면 이 자리에 보입니다.';
+        pwEl.disabled = true;
+      }
+      info.appendChild(pwEl);
+    }
+
     const tail = document.createElement('span');
+    /* '비밀번호 설정됨'을 빼 두었다 — 바로 위 칸이 값을 그대로 보여 주므로 같은 말이 두 번 된다
+       (가려 둔 상태에서도 ●●●● 칸이 그 자리에 있어 '설정되어 있다'는 사실은 그대로 읽힌다). */
     tail.textContent = [
       a.role || '',
       off ? '' : '사용중',
-      a.hasPw ? '비밀번호 설정됨' : '',
       seen ? (seen + ' 접속') : '',
     ].filter(function (v) { return !!v; }).join(' · ');
     info.appendChild(tail);
@@ -601,9 +642,20 @@
         role: String(a.role || ''),
         status: (String(a.status || '') === '사용') ? '사용' : '중지',
         hasPw: !!a.hasPw,
+        /* 현재 비밀번호. 서버가 보관값을 확신하지 못하면 빈 문자열로 온다 —
+           그때는 '없음'이 아니라 '확인 불가'다(hasPw는 여전히 true다). */
+        pw: String(a.pw || ''),
         lastSeen: String(a.lastSeen || ''),
       };
     });
+  }
+
+  /* 비밀번호 보임/숨김 버튼. 문구는 '지금 상태'가 아니라 '누르면 일어나는 일'을 적는다 —
+     이 자리에서 상태를 적으면(보이는 중) 누르면 뭐가 되는지 매번 한 번 더 생각해야 한다. */
+  function paintPwEye() {
+    const b = $('#pwEyeBtn');
+    if (!b) return;
+    b.textContent = pwShow ? '비밀번호 숨기기' : '비밀번호 보기';
   }
 
   async function load() {
@@ -749,6 +801,18 @@
   $('#q').oninput = function () { render(); };
   $('#reloadBtn').onclick = function () { load(); };
 
+  /* 보임/숨김. 서버를 부르지 않는다 — 값은 이미 받아 두었고 화면만 덮는 것이다.
+     새로고침해도 유지되도록 이 기기에 기억한다(다른 기기에는 영향이 없다). */
+  if ($('#pwEyeBtn')) {
+    $('#pwEyeBtn').onclick = function () {
+      pwShow = !pwShow;
+      savePwShow();
+      paintPwEye();
+      render();
+    };
+  }
+  paintPwEye();
+
   $('#syncBtn').onclick = async function () {
     if (busy) return;
     if (!confirm('통합시트의 매장 목록을 읽어 계정을 맞춥니다.\n\n' +
@@ -756,8 +820,9 @@
       '· 이미 있는 계정은 손대지 않습니다\n' +
       '· 없어진 매장의 계정은 자동으로 지워지지 않습니다 — 필요하면 [중지]로 막아 주세요\n\n계속할까요?')) return;
 
-    /* 열려 있는 비밀번호 패널은 닫지 않는다. 방금 설정한 비밀번호를 아직 복사하지 않았을 수 있고,
-       닫으면 그 값은 어디에도 없어 다시 설정하는 수밖에 없다. 목록을 다시 그려도 패널은 남는다. */
+    /* 열려 있는 비밀번호 패널은 닫지 않는다. 방금 설정한 안내 문구를 아직 복사하지 않았을 수
+       있고, 조작 하나가 남의 화면을 치우는 것은 그 자체로 놀랄 일이다(값 자체는 이제 목록에도
+       남으므로 잃지는 않는다). 목록을 다시 그려도 패널은 남는다. */
     lock(true);
     $('#syncBtn').textContent = '동기화 중…';
     let res = null;
