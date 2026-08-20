@@ -247,6 +247,27 @@
     return { cases: cases, deduct: deduct, issue: issue };
   }
   function fmtM(n) { return n > 0 ? '−' + n : '0'; }
+  /* 하단 바의 실시간 감점 표시 — ★심각도별로 나눠 보여준다★ (2026-08-20)
+     종전에는 '개선 필요 6건'이라고 한 덩어리로만 보여서, 그 6건이 일반인지 중대인지 알 수 없었다.
+     점검 중에 가장 알고 싶은 것은 '중대가 걸렸는가'이므로 ★·★★는 색으로도 구분한다.
+     상한에 닿으면 그 표시도 붙인다 — 안 붙이면 한 건 더 넣어도 숫자가 안 움직여 점검자가 헷갈린다. */
+  function progHtml(res) {
+    const R = Scoring.RULES;
+    const seg = [];
+    const tier = function (t, label) {
+      if (!t.cases) return;
+      seg.push('<span class="bb-crit">' + label + ' ' + t.cases + '건 −' + t.capped +
+        (t.capHit ? ' 상한' : '') + '</span>');
+    };
+    seg.push('일반 ' + res.genCases + '건' + (res.genDeduct ? ' −' + res.genDeduct : ''));
+    tier(res.s2, R.S2.label);
+    tier(res.s1, R.S1.label);
+    if (res.na) seg.push('NA ' + res.na);
+    if (res.blank) seg.push('미확인 ' + res.blank);
+    return seg.join(' · ');
+  }
+
+
   function recompute() {
     const res = evalNow();
     master.qsc_groups.forEach(function (g, gi) {
@@ -256,10 +277,8 @@
       $('#nav' + gi + ' .n').textContent = st.cases + '건';
     });
     $('#bbScore').textContent = res.qsc == null ? '—' : 'QSC ' + res.qsc.toFixed(1) + '점';
-    $('#bbGrade').innerHTML = res.qsc == null ? '' :
-      (res.grade || '') + (res.criticalDeduct ? ' <span class="bb-crit">중대 −' + res.criticalDeduct + '점</span>' : '');
-    $('#bbProg').textContent = '개선 필요 ' + (res.genCases + res.s1.cases + res.s2.cases) + '건 · NA ' + res.na +
-      (res.blank ? ' · 미확인 ' + res.blank : '');
+    $('#bbGrade').textContent = res.qsc == null ? '' : (res.grade || '');
+    $('#bbProg').innerHTML = progHtml(res);
     renderSummary(res);
   }
 
