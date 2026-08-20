@@ -4636,83 +4636,96 @@ function makeMonthTabIn(ss, ym) {
   const src = ss.getSheetByName(tabs[0]);
   const sh = src.copyTo(ss);          // 이름이 "2608의 사본"이 된다
   sh.setName(ym);                     // ★setName 필수★
-  /* ★반드시 보이게 만든다★ (2026-08-17) — 사본 테스트에서 만들어진 2610 탭이 숨김 상태로
-     태어났다. copyTo는 원본의 숨김 여부를 따라가므로, 직전 월 탭이 어쩌다 숨겨져 있으면
-     새 달이 통째로 안 보이는 채 시작된다. 앱은 숨김 시트도 읽어서 연동은 되지만
-     ★매장이 시트를 직접 열면 이번 달 탭이 없다★ — 원인을 찾기가 매우 어려운 종류다.
-     조건 없이 showSheet()를 부른다. 이미 보이는 시트에 불러도 아무 일도 일어나지 않는다. */
-  try { sh.showSheet(); } catch (e) { }
-  /* ★2610부터 종합점수 산식을 바꾼다★ (2026-08-18 확정)
-       9월까지 : I3 = AVERAGE(위생, CS) − 개선요청건수/100
-                 → 지적 '건수'가 종합점수를 깎았다. 그런데 그 건수는 이미 QSC 점수 안에서
-                   감점된 것이라 같은 사유로 두 번 깎이고 있었다.
-       10월부터: I3 = 위생×0.6 + CS×0.3 + 개선율×0.1
-                 → 지적을 받아 깎이는 구조가 아니라, ★얼마나 개선했는지가 점수로 들어가는★ 구조다.
-                   중대차감은 QSC 점수 안에서만 빠진다 — 종합에서 또 빼지 않는다.
-     복제 원본이 9월 탭이면 옛 수식이 그대로 따라오므로 여기서 갈아 끼운다.
-     ★칸을 라벨로 찾는다★ — 파일마다 열이 다를 수 있다(위생 E3·CS G3·종합 I3·개선율 H9가 실물). */
-  if (ym >= '2610') {
-    try {
-      const lmF = labelMap(sh);
-      const cH = labelValue(lmF, ['위생점수', 'QSC점수', '위생']);
-      const cC = labelValue(lmF, ['CS점수', 'CS']);
-      const cT = labelValue(lmF, ['종합점수', '종합']);
-      const cR = labelValue(lmF, ['개선율']);
-      if (cH.found && cC.found && cT.found && cR.found) {
-        const a1 = function (pv) { return grid(sh, pv.row, pv.col, 1, 1).getA1Notation(); };
-        /* ★개선율이 비면 1(100%)로 본다★ — 개선율은 완료÷요청이라 ★요청이 0건이면 빈칸★이다.
-           그때 0으로 치면 지적이 하나도 없는 매장이 10%를 통째로 못 받아 오히려 손해를 본다.
-           개선할 것이 없었다는 뜻이므로 만점이 맞다. (통합시트 CA열 수식도 같은 규칙이다) */
-        const f = '=IF(COUNT(' + a1(cH) + ',' + a1(cC) + ')=0,"",' +
-          a1(cH) + '*0.6+' + a1(cC) + '*0.3+IF(' + a1(cR) + '="",1,' + a1(cR) + ')*0.1)';
-        grid(sh, cT.row, cT.col, 1, 1).setFormula(f);
-      }
-    } catch (e) { /* 못 바꿔도 탭 생성 자체는 성공시킨다 — 수식은 눈으로 고칠 수 있다 */ }
-  }
-
-  /* ★제목을 이번 달로 고쳐 쓴다★ — D2가 고정 텍스트라 복제하면 "8월 QSC 현황"이 그대로
-     10월 탭에 남는다. 라벨이 아니라 제목이라 아래 값 칸 초기화 목록에도 걸리지 않는다.
-     '<월>월 QSC 현황' 형태만 갈아 끼우고, 다른 형태로 적어 둔 파일은 건드리지 않는다. */
+  /* ★여기부터 끝까지를 한 덩어리로 묶는다★ (지적 1 · 2026-08-20)
+     copyTo + setName 까지는 끝났으므로 이 시점에 예외가 나면 ym 탭은 ★직전 달 데이터를
+     그대로 안은 채★ 남는다. 그런데 이 함수의 첫 줄이 '이미 있으면 돌아간다'라서
+     다시 실행해도 손대지 않는다 — 아무도 모르는 채 10월 탭에 9월 내용이 남는다.
+     그래서 실패하면 반쯤 만든 탭을 지우고, 지우는 것마저 실패하면 그 사실을 크게 알린다. */
   try {
-    const t2 = grid(sh, 2, 4, 1, 1);
-    const cur2 = t2 ? String(t2.getValue() || '') : '';
-    if (/^\s*\d{1,2}\s*월/.test(cur2)) {
-      t2.setValue(cur2.replace(/^\s*\d{1,2}\s*월/, Number(ym.slice(2, 4)) + '월'));
+    /* ★반드시 보이게 만든다★ (2026-08-17) — 사본 테스트에서 만들어진 2610 탭이 숨김 상태로
+       태어났다. copyTo는 원본의 숨김 여부를 따라가므로, 직전 월 탭이 어쩌다 숨겨져 있으면
+       새 달이 통째로 안 보이는 채 시작된다. 앱은 숨김 시트도 읽어서 연동은 되지만
+       ★매장이 시트를 직접 열면 이번 달 탭이 없다★ — 원인을 찾기가 매우 어려운 종류다.
+       조건 없이 showSheet()를 부른다. 이미 보이는 시트에 불러도 아무 일도 일어나지 않는다. */
+    try { sh.showSheet(); } catch (e) { }
+    /* ★2610부터 종합점수 산식을 바꾼다★ (2026-08-18 확정)
+         9월까지 : I3 = AVERAGE(위생, CS) − 개선요청건수/100
+                   → 지적 '건수'가 종합점수를 깎았다. 그런데 그 건수는 이미 QSC 점수 안에서
+                     감점된 것이라 같은 사유로 두 번 깎이고 있었다.
+         10월부터: I3 = 위생×0.6 + CS×0.3 + 개선율×0.1
+                   → 지적을 받아 깎이는 구조가 아니라, ★얼마나 개선했는지가 점수로 들어가는★ 구조다.
+                     중대차감은 QSC 점수 안에서만 빠진다 — 종합에서 또 빼지 않는다.
+       복제 원본이 9월 탭이면 옛 수식이 그대로 따라오므로 여기서 갈아 끼운다.
+       ★칸을 라벨로 찾는다★ — 파일마다 열이 다를 수 있다(위생 E3·CS G3·종합 I3·개선율 H9가 실물). */
+    if (ym >= '2610') {
+      try {
+        const lmF = labelMap(sh);
+        const cH = labelValue(lmF, ['위생점수', 'QSC점수', '위생']);
+        const cC = labelValue(lmF, ['CS점수', 'CS']);
+        const cT = labelValue(lmF, ['종합점수', '종합']);
+        const cR = labelValue(lmF, ['개선율']);
+        if (cH.found && cC.found && cT.found && cR.found) {
+          const a1 = function (pv) { return grid(sh, pv.row, pv.col, 1, 1).getA1Notation(); };
+          /* ★개선율이 비면 1(100%)로 본다★ — 개선율은 완료÷요청이라 ★요청이 0건이면 빈칸★이다.
+             그때 0으로 치면 지적이 하나도 없는 매장이 10%를 통째로 못 받아 오히려 손해를 본다.
+             개선할 것이 없었다는 뜻이므로 만점이 맞다. (통합시트 CA열 수식도 같은 규칙이다) */
+          const f = '=IF(COUNT(' + a1(cH) + ',' + a1(cC) + ')=0,"",' +
+            a1(cH) + '*0.6+' + a1(cC) + '*0.3+IF(' + a1(cR) + '="",1,' + a1(cR) + ')*0.1)';
+          grid(sh, cT.row, cT.col, 1, 1).setFormula(f);
+        }
+      } catch (e) { /* 못 바꿔도 탭 생성 자체는 성공시킨다 — 수식은 눈으로 고칠 수 있다 */ }
     }
-  } catch (e) { }
-  // ① 개선요청 표 본문
-  const bodyRng = grid(sh, 12, 2, sh.getMaxRows() - 11, 14);
-  if (bodyRng) bodyRng.clearContent();
-  // ② 라벨 옆 값 칸 중 수식이 아닌 것
-  const lm = labelMap(sh);
-  /* ★요약 건수 칸을 반드시 함께 지운다★ — 종전 목록에는 방문일·점수·등급만 있어서,
-     I5~I8이 수기인 파일은 10월 탭이 8월의 '요청 5 / 완료 4'를 안고 태어난다. 개선요청
-     표(B12 이하)는 비었는데 요약은 값이 있으므로 readStoreTab의 폴백(라벨을 못 찾을 때만
-     작동)도 걸리지 않는다 → 매장 화면에 "개선율 80%", 표는 빈 상태.
-     수식이면 아래 getFormula 검사가 어차피 건너뛴다. */
-  ['방문일', '방문일자', '점검일', '방문시간', '위생점수', 'CS점수', '종합점수',
-    '위생등급', 'CS등급', '종합등급',
-    '개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수',
-    '개선예정/진행', '개선예정', '개선진행', '진행중', '진행',
-    '개선완료', '조치완료', '완료', '미조치', '미이행'].forEach(function (label) {
-      const p = labelValue(lm, [label]);
-      if (!p.found || !p.row) return;
-      const c = grid(sh, p.row, p.col, 1, 1);
-      if (c && String(c.getFormula() || '') === '') c.clearContent();
-    });
-  /* ★복제된 보호 설정을 보고한다★ — copyTo는 보호까지 복제한다. 원본 탭이 보호돼 있으면
-     새 탭도 보호된 채 태어나고, store.saveImprove가 게이트·락·rev를 다 통과한 뒤
-     setValues 한 줄에서 죽어 SERVER_ERROR로만 보인다. 만드는 김에 알려주는 편이
-     26곳 전수 재감사보다 싸다. */
-  let mark = '✓';
-  let note = '';
-  try {
-    const pr = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE)
-      .concat(sh.getProtections(SpreadsheetApp.ProtectionType.SHEET));
-    const bad = pr.filter(function (x) { return !x.canEdit(); });
-    if (bad.length) { mark = '✗'; note = '  ★보호 ' + bad.length + '건 — 이 매장은 저장되지 않습니다★'; }
-  } catch (e2) { note = '  (보호 확인 실패)'; }
-  return { mark: mark, msg: tabs[0] + ' → ' + ym + note };
+
+    /* ★제목을 이번 달로 고쳐 쓴다★ — D2가 고정 텍스트라 복제하면 "8월 QSC 현황"이 그대로
+       10월 탭에 남는다. 라벨이 아니라 제목이라 아래 값 칸 초기화 목록에도 걸리지 않는다.
+       '<월>월 QSC 현황' 형태만 갈아 끼우고, 다른 형태로 적어 둔 파일은 건드리지 않는다. */
+    try {
+      const t2 = grid(sh, 2, 4, 1, 1);
+      const cur2 = t2 ? String(t2.getValue() || '') : '';
+      if (/^\s*\d{1,2}\s*월/.test(cur2)) {
+        t2.setValue(cur2.replace(/^\s*\d{1,2}\s*월/, Number(ym.slice(2, 4)) + '월'));
+      }
+    } catch (e) { }
+    // ① 개선요청 표 본문
+    const bodyRng = grid(sh, 12, 2, sh.getMaxRows() - 11, 14);
+    if (bodyRng) bodyRng.clearContent();
+    // ② 라벨 옆 값 칸 중 수식이 아닌 것
+    const lm = labelMap(sh);
+    /* ★요약 건수 칸을 반드시 함께 지운다★ — 종전 목록에는 방문일·점수·등급만 있어서,
+       I5~I8이 수기인 파일은 10월 탭이 8월의 '요청 5 / 완료 4'를 안고 태어난다. 개선요청
+       표(B12 이하)는 비었는데 요약은 값이 있으므로 readStoreTab의 폴백(라벨을 못 찾을 때만
+       작동)도 걸리지 않는다 → 매장 화면에 "개선율 80%", 표는 빈 상태.
+       수식이면 아래 getFormula 검사가 어차피 건너뛴다. */
+    ['방문일', '방문일자', '점검일', '방문시간', '위생점수', 'CS점수', '종합점수',
+      '위생등급', 'CS등급', '종합등급',
+      '개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수',
+      '개선예정/진행', '개선예정', '개선진행', '진행중', '진행',
+      '개선완료', '조치완료', '완료', '미조치', '미이행'].forEach(function (label) {
+        const p = labelValue(lm, [label]);
+        if (!p.found || !p.row) return;
+        const c = grid(sh, p.row, p.col, 1, 1);
+        if (c && String(c.getFormula() || '') === '') c.clearContent();
+      });
+    /* ★복제된 보호 설정을 보고한다★ — copyTo는 보호까지 복제한다. 원본 탭이 보호돼 있으면
+       새 탭도 보호된 채 태어나고, store.saveImprove가 게이트·락·rev를 다 통과한 뒤
+       setValues 한 줄에서 죽어 SERVER_ERROR로만 보인다. 만드는 김에 알려주는 편이
+       26곳 전수 재감사보다 싸다. */
+    let mark = '✓';
+    let note = '';
+    try {
+      const pr = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE)
+        .concat(sh.getProtections(SpreadsheetApp.ProtectionType.SHEET));
+      const bad = pr.filter(function (x) { return !x.canEdit(); });
+      if (bad.length) { mark = '✗'; note = '  ★보호 ' + bad.length + '건 — 이 매장은 저장되지 않습니다★'; }
+    } catch (e2) { note = '  (보호 확인 실패)'; }
+    return { mark: mark, msg: tabs[0] + ' → ' + ym + note };
+  } catch (e) {
+    let removed = false;
+    try { ss.deleteSheet(sh); removed = true; } catch (e2) { }
+    return removed
+      ? { mark: '✗', msg: '만들다 실패해 되돌렸습니다 — 다시 실행하십시오 (' + String(e).slice(0, 60) + ')' }
+      : { mark: '✗', msg: '★' + ym + ' 탭이 직전 달 내용을 안은 채 남았습니다 — 시트에서 그 탭을 지우고 다시 실행하십시오★ (' + String(e).slice(0, 60) + ')' };
+  }
 }
 
 /* 월 탭 자동 생성. 직전 월 탭을 copyTo → setName → 내용만 지우기.
@@ -5082,43 +5095,152 @@ function setupAll_once() { return setupAuthSheet_once(); }
 
    보호는 '시트 전체 보호 + K12:P 예외' 방식이다. 열 단위로 하나씩 거는 것보다 빠지는 칸이 없다. */
 
+/* ★한 월 탭에서 '매장이 쓰는 칸'이 어디인지 시트에게 물어본다★
+
+   열 번호를 코드에 박지 않는다. 실물 파일 ★한 개 안에 서식이 두 가지★이기 때문이다:
+     · 현행 (2605~)      머리글 11행 · 본문 12행~ · 매장 몫 K(담당부서)~P(비고)
+     · 구서식 (2601~2604) 머리글 9행(9:10 병합) · 본문 11행~ · 매장 몫 F(담당부서)~M(비고)
+
+   K12:P 를 고정으로 열어 주면 구서식 탭에서는 ★점장이 자기 칸을 못 쓰고, 대신 표 밖이 열린다★.
+   그래서 머리글 줄에서 '담당부서'와 '비고'를 찾아 그 사이를 매장 몫으로 잡는다.
+   본문 시작은 머리글 셀의 병합이 끝난 다음 줄이다(구서식은 9:10 병합이라 11행부터).
+
+   ★못 알아보면 열지 않는다★ — 자리를 모르는 채로 넉넉히 열면 요약·산식·차기 월 목표까지 열린다.
+   그럴 바에는 그 탭을 건너뛰고 사람에게 알리는 편이 낫다. */
+function storeCellsIn(sh) {
+  const NG = function (v) { return String(v == null ? '' : v).replace(/\s+/g, ''); };
+  let vals = [];
+  try { vals = sh.getRange(1, 1, Math.min(15, sh.getMaxRows()), sh.getMaxColumns()).getValues(); }
+  catch (e) { return { ok: false, why: '머리글을 읽지 못했습니다(' + String(e).slice(0, 40) + ')' }; }
+
+  let hr = 0, hc = 0, lc = 0;
+  for (let r = 0; r < vals.length && !hr; r++) {
+    for (let c = 0; c < vals[r].length; c++) {
+      if (NG(vals[r][c]) === '담당부서') { hr = r + 1; hc = c + 1; break; }
+    }
+  }
+  if (!hr) return { ok: false, why: "머리글에서 '담당부서'를 찾지 못했습니다" };
+
+  for (let c = hc; c < vals[hr - 1].length; c++) {
+    if (NG(vals[hr - 1][c]) === '비고') { lc = c + 1; break; }
+  }
+  if (!lc) return { ok: false, why: "머리글에서 '비고'를 찾지 못했습니다 (담당부서는 " + hc + '열)' };
+  if (lc <= hc) return { ok: false, why: "'비고'가 '담당부서'보다 왼쪽입니다" };
+
+  /* 본문 첫 줄 — 머리글 셀이 세로로 병합돼 있으면 그 끝 다음 줄이다 */
+  let row0 = hr + 1;
+  try {
+    const mrs = sh.getRange(hr, hc, 1, 1).getMergedRanges();
+    if (mrs.length) row0 = mrs[0].getRow() + mrs[0].getNumRows();
+  } catch (e) { /* 병합을 못 읽으면 머리글 바로 다음 줄로 본다 */ }
+
+  /* 표 끝 — 요약의 =COUNTA(...) 가 알고 있다. ★못 읽으면 열지 않는다★
+     (종전에는 getMaxRows()로 벌려서 표 아래 이월 메모와 우측 '차기 월 목표'까지 열렸다) */
+  const endRow = tableEndRow(sh);
+  if (!endRow) return { ok: false, why: '표 끝을 못 읽었습니다 (요약의 COUNTA 수식 확인 필요)' };
+  if (endRow < row0) return { ok: false, why: '표 끝(' + endRow + ')이 본문 시작(' + row0 + ')보다 앞입니다' };
+
+  return {
+    ok: true, row0: row0, col0: hc, cols: lc - hc + 1, endRow: endRow,
+    a1: sh.getRange(row0, hc, endRow - row0 + 1, lc - hc + 1).getA1Notation(),
+  };
+}
+
+/* 한 탭의 보호를 전부 지운다. ★SHEET·RANGE 둘 다★ — 사람 손으로 걸린 옛 RANGE 보호가 남으면
+   "걸었다는데 점장이 여전히 못 쓴다"가 된다. 지운 것의 설명을 돌려주어 로그에 남긴다.
+   못 지운 것이 하나라도 있으면 그 사실을 숨기지 않는다(부르는 쪽이 ✗로 처리한다). */
+function clearProtections(sh) {
+  const TYPES = [SpreadsheetApp.ProtectionType.SHEET, SpreadsheetApp.ProtectionType.RANGE];
+  let gone = 0, left = 0;
+  const desc = [];
+  TYPES.forEach(function (t) {
+    let list = [];
+    try { list = sh.getProtections(t); } catch (e) { return; }
+    list.forEach(function (x) {
+      let d = '';
+      try { d = String(x.getDescription() || '').trim(); } catch (e) { }
+      try { x.remove(); gone++; if (d) desc.push(d); } catch (e) { left++; }
+    });
+  });
+  return { gone: gone, left: left, desc: desc };
+}
+
+/* ---------- 매장 월 탭 보호 ----------
+
+   ★목표★ 점장이 시트를 직접 열어도 '개선요청에 대한 답변'만 쓸 수 있게 한다.
+     매장 몫 = 담당부서~비고, 본문 줄만  ·  본사 몫 = 그 밖 전부(요약·머리글·개선요청 본문·차기 월 목표)
+
+   ★반드시 스크립트 계정을 편집자로 남긴다★ — 빠뜨리면 10/1에 STORE_FILE_WRITE를 켰을 때
+     게이트·락·검증을 다 통과한 뒤 마지막 setValues 한 줄에서 죽는다.
+
+   ★찍은 ✓는 전부 '다시 읽어서 확인한' 것이다★ (2026-08-20)
+     종전의 '스크립트 편집가능=true'는 방금 자기가 만든 보호에게 물은 것이라 늘 참이었다.
+     지금은 보호를 건 뒤 시트에서 ①보호 개수 ②열린 범위 ③스크립트 편집 가능 여부를
+     ★다시 읽어★ 기대와 맞는지 대조한다. 하나라도 어긋나면 ✗다. */
 function protectMonthTabsIn(ss) {
   const me = (function () { try { return Session.getEffectiveUser().getEmail(); } catch (e) { return ''; } })();
   const out = [];
   const tabs = monthTabs(ss);
   for (let i = 0; i < tabs.length; i++) {
-    const sh = ss.getSheetByName(tabs[i]);
+    const tab = tabs[i];
+    const sh = ss.getSheetByName(tab);
     if (!sh) continue;
+
+    /* ① 자리부터 알아낸다. 모르면 ★아무것도 건드리지 않고★ 넘어간다 —
+          보호를 먼저 지웠다가 실패하면 그 탭이 무방비로 남는다(지적 17·18). */
+    const box = storeCellsIn(sh);
+    if (!box.ok) { out.push('✗ ' + tab + ' : ' + box.why + ' — 손대지 않았습니다'); continue; }
+
+    /* ② 옛 보호 정리. 못 지운 것이 있으면 새로 걸지 않는다 —
+          걸어 봐야 그 옛 보호가 점장을 계속 막는다(지적 2·13·14). */
+    const cl = clearProtections(sh);
+    if (cl.left) {
+      out.push('✗ ' + tab + ' : 못 지운 보호 ' + cl.left + '건 — 이 탭은 시트에서 직접 풀어야 합니다' +
+        (cl.desc.length ? ' [지운 것: ' + cl.desc.join(' / ') + ']' : ''));
+      continue;
+    }
+
+    let pr = null;
     try {
-      /* 이미 걸린 보호는 지우고 다시 건다 — 예외 범위가 옛 기준(K~O 등)일 수 있고,
-         두 번 돌려도 같은 결과가 나와야 한다(월 탭이 늘어날 때마다 다시 돌릴 함수다). */
-      sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (x) {
-        try { x.remove(); } catch (e) { }
-      });
-
-      const endRow = tableEndRow(sh) || sh.getMaxRows();
-      const lastCol = sh.getMaxColumns();
-      if (lastCol < 16) { out.push('✗ ' + tabs[i] + ' : P열이 없음(열 ' + lastCol + '개) — 건너뜀'); continue; }
-      const rows = Math.max(1, endRow - 11);
-
-      const pr = sh.protect().setDescription('QSC — 매장은 K~P(답변)만 편집');
-      pr.setUnprotectedRanges([sh.getRange(12, 11, rows, 6)]);   // K12:P{endRow}
+      pr = sh.protect().setDescription('QSC — 매장은 답변 칸만 편집 (' + box.a1 + ')');
+      pr.setUnprotectedRanges([sh.getRange(box.row0, box.col0, box.endRow - box.row0 + 1, box.cols)]);
       try { pr.setWarningOnly(false); } catch (e) { }
       try { pr.setDomainEdit(false); } catch (e) { /* 도메인 공유 파일이 아닐 때 던진다 */ }
-
-      /* 편집자를 스크립트 계정만 남긴다 — 그래야 링크로 들어온 사람이 보호 범위를 못 고친다.
-         소유자는 애초에 제거되지 않는다(구글이 막는다). */
       if (me) { try { pr.addEditor(me); } catch (e) { } }
       try {
         const others = pr.getEditors().map(function (u) { return u.getEmail(); })
           .filter(function (e) { return e && e !== me; });
         if (others.length) pr.removeEditors(others);
-      } catch (e) { /* 소유자 제거 시도 등 — 무시 */ }
-
-      out.push('✓ ' + tabs[i] + ' : 보호함 · 예외 K12:P' + endRow +
-        ' · 스크립트 편집가능=' + pr.canEdit());
+      } catch (e) { /* 소유자는 제거되지 않는다 — 무시 */ }
     } catch (e) {
-      out.push('✗ ' + tabs[i] + ' : ' + String(e).slice(0, 90));
+      /* ★반쯤 걸린 보호는 반드시 되돌린다★ — 그대로 두면 그 탭은 답변 칸까지 전면 잠긴다(지적 4) */
+      if (pr) { try { pr.remove(); } catch (e2) { } }
+      out.push('✗ ' + tab + ' : ' + String(e).slice(0, 80) + ' — 건 보호는 되돌렸습니다');
+      continue;
+    }
+
+    /* ③ ★다시 읽어서 확인한다★ (지적 2·3·7·8) */
+    const v = (function () {
+      try {
+        const sp = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+        const rp = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE);
+        if (sp.length !== 1) return '시트 보호가 ' + sp.length + '건 (1건이어야 합니다)';
+        if (rp.length) return '범위 보호가 ' + rp.length + '건 남아 있습니다';
+        const open = sp[0].getUnprotectedRanges().map(function (r) { return r.getA1Notation(); });
+        if (open.length !== 1 || open[0] !== box.a1) {
+          return '열린 칸이 ' + (open.join(',') || '없음') + ' — ' + box.a1 + ' 이어야 합니다';
+        }
+        if (!sp[0].canEdit()) return '스크립트 계정이 이 보호를 편집할 수 없습니다';
+        return '';
+      } catch (e) { return '확인 중 오류: ' + String(e).slice(0, 50); }
+    })();
+
+    if (v) {
+      out.push('✗ ' + tab + ' : ' + v);
+    } else {
+      out.push('✓ ' + tab + ' : 답변 칸 ' + box.a1 + ' 만 열림 (확인함)' +
+        (cl.gone ? ' · 옛 보호 ' + cl.gone + '건 지움' +
+          (cl.desc.length ? ' [' + cl.desc.join(' / ') + ']' : '') : ''));
     }
   }
   return out;
@@ -5145,24 +5267,77 @@ function testStoreProtect() {
   return msg;
 }
 
-/* 실전 26곳. ★사본으로 먼저 확인한 뒤에 돌릴 것★. 10곳씩 끊어 돈다(auditStoreFiles와 같은 방식). */
+/* 실전 26곳. ★사본으로 먼저 확인한 뒤에 돌릴 것★. 10곳씩 끊어 돈다(auditStoreFiles와 같은 방식).
+
+   ★한 곳 끝날 때마다 로그를 찍고 진행 상황을 속성에 남긴다★ (2026-08-20)
+     종전에는 Logger.log가 맨 끝 한 번뿐이었다. 앱스 스크립트는 6분에서 실행을 끊는데,
+     그때 반환값도 로그도 없이 사라지므로 ★어디까지 걸었는지 알 방법이 전혀 없었다★.
+     26곳 × 9~10탭이면 6분은 넉넉하지 않다. 끊긴 뒤에는 `protectProgress()` 로 확인한다. */
 function protectStoreTabs(stores, page) {
   const sel = pickPage(stores, page);
+  const t0 = Date.now();
   const out = ['=== 매장 월 탭 보호 ' + (sel.page + 1) + '쪽 · ' + sel.list.length + '곳 (전체 ' + sel.total + '곳) ==='];
-  sel.list.forEach(function (store) {
-    out.push('', '── ' + store + ' ──');
+  const done = [], bad = [];
+
+  const stamp = function (store, note) {
+    try {
+      PROPS.setProperty('PROTECT_PROGRESS', JSON.stringify({
+        page: sel.page, total: sel.total, done: done.length, bad: bad.length,
+        last: store, note: note || '', sec: Math.round((Date.now() - t0) / 1000),
+      }));
+    } catch (e) { /* 진행 기록 실패가 본 작업을 막을 이유는 없다 */ }
+  };
+
+  for (let i = 0; i < sel.list.length; i++) {
+    const store = sel.list[i];
+    const head = '── ' + store + ' (' + (i + 1) + '/' + sel.list.length + ') ──';
+    const lines = [];
     try {
       const id = storeFileId(store);
-      if (!id) { out.push('✗ 파일 ID 없음'); return; }
-      const ss = SpreadsheetApp.openById(id);
-      out.push.apply(out, protectMonthTabsIn(ss));
-    } catch (e) { out.push('✗ ' + String(e).slice(0, 90)); }
-  });
-  out.push(sel.left ? '\n★ ' + sel.left + '곳 남음 — 다음: protectStoreTabs(null, ' + (sel.page + 1) + ')'
-                    : '\n✓ 전부 끝났습니다.');
+      if (!id) {
+        lines.push('✗ 파일 ID 없음');
+      } else {
+        lines.push.apply(lines, protectMonthTabsIn(SpreadsheetApp.openById(id)));
+      }
+    } catch (e) { lines.push('✗ ' + String(e).slice(0, 90)); }
+
+    const failed = lines.some(function (l) { return l.charAt(0) === '✗'; });
+    (failed ? bad : done).push(store);
+    out.push('', head);
+    out.push.apply(out, lines);
+
+    /* ★한 곳마다 찍는다★ — 다음 매장에서 6분에 걸려 죽어도 여기까지는 로그에 남는다 */
+    Logger.log(head + '\n' + lines.join('\n'));
+    stamp(store, failed ? '실패' : '성공');
+
+    /* 남은 시간이 한 매장 몫도 안 되면 스스로 멈춘다 — 반쯤 걸다 끊기는 것보다 낫다 */
+    if (Date.now() - t0 > 4.5 * 60 * 1000 && i + 1 < sel.list.length) {
+      out.push('', '★시간이 부족해 ' + (i + 1) + '곳에서 멈췄습니다★ (6분 한도)');
+      out.push('   남은 곳: ' + sel.list.slice(i + 1).join(', '));
+      out.push('   이어서: protectStoreTabs(' + JSON.stringify(sel.list.slice(i + 1)) + ')');
+      break;
+    }
+  }
+
+  out.push('');
+  out.push('성공 ' + done.length + '곳 · 실패 ' + bad.length + '곳' +
+    (bad.length ? ' — ★' + bad.join(', ') + '★' : ''));
+  if (bad.length) {
+    out.push('  실패한 곳은 위 로그에서 ✗ 줄을 보십시오. 되돌리려면 unprotectStoreTabs([\'매장명\'])');
+  }
+  out.push(sel.left ? '★ ' + sel.left + '곳 남음 — 다음: protectStoreTabs(null, ' + (sel.page + 1) + ')'
+                    : '✓ 이 쪽은 끝났습니다.');
   const msg = out.join('\n');
   Logger.log(msg);
   return msg;
+}
+
+/* 6분에 걸려 끊겼을 때 어디까지 갔는지 본다. 인자 없이 실행. */
+function protectProgress() {
+  const raw = prop('PROTECT_PROGRESS', '');
+  const m = raw ? ('마지막 기록: ' + raw) : '기록이 없습니다 (아직 한 번도 안 돌렸거나 속성이 지워졌습니다)';
+  Logger.log(m);
+  return m;
 }
 
 /* ── 보호 되돌리기 (2026-08-18) ──────────────────────────────
@@ -5239,6 +5414,212 @@ function unprotectStoreTabs(stores, page) {
   return msg;
 }
 
+
+/* ══════════════════════════════════════════════════════════════
+   새 월별 양식 v2 — 2026-10월부터 (2026-08-20 사용자와 설계)
+
+   ★이 시트가 하는 일은 하나다★
+     본사가 "이거 고쳐 주세요"를 적고, 매장이 "이렇게 고쳤습니다"를 적는다.
+     그 둘이 맞물려 요청·진행·완료·개선율이 저절로 나오고, 개선율은 종합점수의 10%가 된다.
+
+   ★왜 새로 만드는가 — 옛 양식은 사람이 지켜야 하는 규칙이 있었다★
+     '진행 내용'과 '완료 내용' 칸이 따로 있어서 "아직이면 왼쪽, 다 됐으면 오른쪽"을 지켜야 했다.
+     26개 매장 × 여러 담당자에게 이 규칙은 반드시 깨진다 — 실제로 미착수인데 완료 칸에 적는
+     일이 있었다. ★그래서 칸을 합쳤다.★ 틀릴 칸이 없으면 틀릴 수 없다.
+
+   ★상태는 매장이 고르지 않는다. 시트가 스스로 안다★
+       완료일 있음            → 완료
+       '본사 협의' 체크        → 본사 확인 대기   (개선율 분모에서 빠진다)
+       예정일 있음            → n/n 예정
+       조치 내용만 있음        → 진행중
+       아무것도 없음          → 미착수
+
+   ★개선율 = 완료 ÷ (전체 − 본사협의)★ (사용자 결정)
+     본사가 결정해 줘야 하는 건은 매장 책임이 아니므로 분모에서 뺀다.
+     요청이 없거나 전부 본사협의면 빈칸이고, 종합점수 산식이 빈칸을 만점(1)으로 본다.
+
+   ★열 배치 — 본사 몫과 매장 몫이 한 번에 갈린다★
+     A NO. · B 구분 · C 문항 · D 개선요청사항 · E 개선 전 · F 상태(수식)   ← 본사 몫
+     G 담당부서 · H 담당자 · I 조치 내용 · J 예정일 · K 완료일 · L 본사협의 · M 개선 후 · N 비고  ← 매장 몫
+     보호는 'G11:N{끝}만 열기' 한 구간으로 끝난다 — 열을 세다 틀릴 자리가 없다.
+     ★머리글에 '담당부서'와 '비고'가 있어야 한다★ — storeCellsIn 이 그 둘로 매장 칸을 찾는다.
+   ══════════════════════════════════════════════════════════════ */
+
+const V2_ROW0 = 11;      // 본문 첫 줄
+const V2_ROWS = 50;      // 표 줄 수 (11~60)
+const V2_HEAD = 10;      // 머리글 줄
+
+/* 점수 → 등급. 엑셀 채점기준과 같은 경계(전부 '이상'). */
+function v2GradeFormula(cell) {
+  return '=IF(' + cell + '="","",IFS(' + cell + '>=93,"우수",' + cell + '>=85,"양호",' +
+    cell + '>=76,"보통",' + cell + '>=66,"미흡",' + cell + '>=55,"주의",TRUE,"부적합"))';
+}
+
+/* 한 탭을 새 양식으로 그린다. 빈 시트를 받아 채운다. */
+function buildV2Tab(sh, ym, storeName) {
+  const R0 = V2_ROW0, RN = V2_ROWS, END = R0 + RN - 1, H = V2_HEAD;
+  sh.clear();
+  try { sh.clearConditionalFormatRules(); } catch (e) { }
+  if (sh.getMaxColumns() > 14) sh.deleteColumns(15, sh.getMaxColumns() - 14);
+  if (sh.getMaxColumns() < 14) sh.insertColumnsAfter(sh.getMaxColumns(), 14 - sh.getMaxColumns());
+  if (sh.getMaxRows() < END + 2) sh.insertRowsAfter(sh.getMaxRows(), END + 2 - sh.getMaxRows());
+
+  const title = (storeName || '') + '  ' + ymLabel(ym) + ' QSC 현황';
+  sh.getRange('A1:N1').merge().setValue(title)
+    .setFontSize(15).setFontWeight('bold').setVerticalAlignment('middle');
+  sh.setRowHeight(1, 38);
+
+  /* ── 요약 (2~8행) ──────────────────────────────────────────
+     ★라벨 글자를 바꾸지 말 것★ — 앱(labelMap/labelValue)이 이 글자로 값 칸을 찾는다. */
+  const put = function (r, c, v) { sh.getRange(r, c).setValue(v); };
+  const lab = function (r, c, v) {
+    sh.getRange(r, c).setValue(v).setFontWeight('bold').setBackground('#f1f3f4')
+      .setHorizontalAlignment('right');
+  };
+
+  lab(3, 1, '방문일');       put(3, 2, '');
+  lab(3, 4, '점검자');       put(3, 5, '');
+  lab(4, 1, '위생점수');     lab(4, 4, '위생등급');
+  lab(5, 1, 'CS점수');       lab(5, 4, 'CS등급');
+  sh.getRange(4, 5).setFormula(v2GradeFormula('$B$4'));
+  sh.getRange(5, 5).setFormula(v2GradeFormula('$B$5'));
+  sh.getRange('B4:B5').setNumberFormat('0.0');
+
+  lab(6, 1, '개선요청');   lab(6, 3, '개선완료');
+  lab(6, 5, '개선예정/진행'); lab(6, 7, '본사협의');
+  /* ★개선요청 칸은 반드시 =COUNTA(D…) 형태로 둔다★ — tableEndRow 가 이 수식에서 표 끝 줄을 읽는다.
+     그 값이 곧 보호 예외 범위의 끝이 된다. 손으로 숫자를 적으면 표 끝을 아무도 모르게 된다. */
+  sh.getRange(6, 2).setFormula('=COUNTA(D' + R0 + ':D' + END + ')');
+  sh.getRange(6, 4).setFormula('=COUNTA(K' + R0 + ':K' + END + ')');
+  sh.getRange(6, 6).setFormula('=MAX(0,$B$6-$D$6-$H$6)');
+  sh.getRange(6, 8).setFormula('=COUNTIF(L' + R0 + ':L' + END + ',TRUE)');
+
+  lab(7, 1, '개선율');
+  /* 완료 ÷ (전체 − 본사협의). 분모가 0이면 빈칸 — 종합 산식이 빈칸을 만점으로 본다. */
+  sh.getRange(7, 2).setFormula('=IF($B$6-$H$6<=0,"",$D$6/($B$6-$H$6))').setNumberFormat('0%');
+  sh.getRange('C7:N7').merge()
+    .setValue('완료 ÷ (개선요청 − 본사협의).  본사가 결정해 줘야 하는 건은 매장 몫이 아니므로 빼고 셉니다.')
+    .setFontSize(10).setFontColor('#666666');
+
+  lab(8, 1, '종합점수');   lab(8, 4, '종합등급');
+  sh.getRange(8, 2).setFormula('=IF(COUNT($B$4,$B$5)=0,"",$B$4*0.6+$B$5*0.3+IF($B$7="",1,$B$7)*100*0.1)')
+    .setNumberFormat('0.0');
+  sh.getRange(8, 5).setFormula(v2GradeFormula('$B$8'));
+  sh.getRange('A8:N8').setBackground('#fff8e1');
+  sh.getRange(8, 1, 1, 5).setFontWeight('bold');
+
+  /* ── 표 머리글 (10행) ─────────────────────────────────── */
+  const HEAD = ['NO.', '구분', '문항', '개선요청사항', '개선 전',
+    '상태', '담당부서', '담당자', '조치 내용', '예정일', '완료일', '본사협의', '개선 후', '비고'];
+  sh.getRange(H, 1, 1, 14).setValues([HEAD])
+    .setFontWeight('bold').setHorizontalAlignment('center')
+    .setVerticalAlignment('middle').setWrap(true);
+  sh.getRange(H, 1, 1, 6).setBackground('#e8eaed');    // 본사 몫
+  sh.getRange(H, 7, 1, 8).setBackground('#e6f4ea');    // 매장 몫
+  sh.setRowHeight(H, 34);
+  sh.getRange(9, 1, 1, 6).merge().setValue('▼ 본사가 적습니다')
+    .setFontSize(10).setFontColor('#5f6368');
+  sh.getRange(9, 7, 1, 8).merge().setValue('▼ 매장이 적습니다')
+    .setFontSize(10).setFontColor('#137333').setFontWeight('bold');
+
+  /* ── 본문 ─────────────────────────────────────────────── */
+  const nos = [];
+  for (let i = 0; i < RN; i++) nos.push(['=IF($D' + (R0 + i) + '="","",ROW()-' + (R0 - 1) + ')']);
+  sh.getRange(R0, 1, RN, 1).setFormulas(nos).setHorizontalAlignment('center');
+
+  /* 상태 — ★매장이 고르지 않는다★ */
+  const st = [];
+  for (let i = 0; i < RN; i++) {
+    const r = R0 + i;
+    st.push(['=IF($D' + r + '="","",' +
+      'IF($K' + r + '<>"","완료",' +
+      'IF($L' + r + '=TRUE,"본사 확인 대기",' +
+      'IF($J' + r + '<>"",TEXT($J' + r + ',"m/d")&" 예정",' +
+      'IF($I' + r + '<>"","진행중","미착수")))))']);
+  }
+  sh.getRange(R0, 6, RN, 1).setFormulas(st).setHorizontalAlignment('center').setFontWeight('bold');
+
+  sh.getRange(R0, 12, RN, 1).insertCheckboxes();                      // 본사협의
+  const onlyDate = SpreadsheetApp.newDataValidation().requireDate()
+    .setAllowInvalid(false)
+    .setHelpText('날짜만 넣을 수 있습니다. 「완료」·「O」 같은 글자는 들어가지 않습니다.').build();
+  sh.getRange(R0, 10, RN, 2).setDataValidation(onlyDate).setNumberFormat('yyyy-mm-dd');  // 예정일·완료일
+
+  const kind = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['위생', '매장관리', '서류'], true).setAllowInvalid(false).build();
+  sh.getRange(R0, 2, RN, 1).setDataValidation(kind);
+
+  sh.getRange(R0, 1, RN, 14).setVerticalAlignment('top').setWrap(true);
+  sh.getRange(R0, 1, RN, 14).setBorder(true, true, true, true, true, true,
+    '#dadce0', SpreadsheetApp.BorderStyle.SOLID);
+
+  /* ── 눈에 띄게 ─────────────────────────────────────────
+     ★막는 것이 아니라 알아채게 하는 장치다★ — 막는 일은 위의 '칸 합치기'와 날짜 유효성이 한다. */
+  const rules = [];
+  const body = sh.getRange(R0, 1, RN, 14);
+  rules.push(SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=AND($D' + R0 + '<>"",$K' + R0 + '<>"",$I' + R0 + '="")')
+    .setBackground('#fce8e6')     // 완료일은 있는데 조치 내용이 비었다
+    .setRanges([body]).build());
+  rules.push(SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=AND($D' + R0 + '<>"",$K' + R0 + '<>"")')
+    .setBackground('#e6f4ea')     // 완료
+    .setRanges([body]).build());
+  rules.push(SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=AND($D' + R0 + '<>"",$L' + R0 + '=TRUE)')
+    .setBackground('#e8f0fe')     // 본사 확인 대기
+    .setRanges([body]).build());
+  sh.setConditionalFormatRules(rules);
+
+  const W = [46, 90, 110, 320, 90, 110, 90, 80, 300, 96, 96, 76, 90, 160];
+  for (let c = 0; c < W.length; c++) sh.setColumnWidth(c + 1, W[c]);
+  sh.setFrozenRows(H);
+  sh.setFrozenColumns(4);
+  return sh;
+}
+
+/* ★새 양식 견본을 하나 만든다★ — 인자 없이 편집기에서 실행한다.
+   실매장 파일에 닿지 않는다. 새 스프레드시트를 만들어 그 안에만 그린다. */
+function makeV2Sample() {
+  const ss = SpreadsheetApp.create('[새 양식 v2] 매장 월별 QSC현황 — 구조확인용');
+  const sh = ss.getSheets()[0];
+  sh.setName('2610');
+  buildV2Tab(sh, '2610', '금종제과 익산');
+
+  /* 눈으로 보기 좋게 예시를 몇 줄 넣는다 — 상태 칸이 스스로 바뀌는 것을 보여 준다 */
+  sh.getRange(3, 2).setValue(new Date());
+  sh.getRange(3, 5).setValue('문수');
+  sh.getRange(4, 2).setValue(88);
+  sh.getRange(5, 2).setValue(92);
+  const R0 = V2_ROW0;
+  sh.getRange(R0, 2, 5, 3).setValues([
+    ['위생', 'A-05', '원산지 표시, 알레르기표시 미게시 (고객이 잘 보이는 위치)'],
+    ['위생', 'C-03', '소비기한 경과 제품 진열'],
+    ['매장관리', 'F-15', '홀 체류 쾌적성 미흡 — 냉방 온도 관리'],
+    ['서류', 'A-01', '인허가 서류 미비치 (자가품질검사 성적서)'],
+    ['매장관리', 'D-07', '집기 파손 — 교체 필요'],
+  ]);
+  sh.getRange(R0, 7, 5, 5).setValues([
+    ['홀', '김OO', '게시물 새로 출력해 부착 완료', '', new Date()],
+    ['주방', '이OO', '전 품목 소비기한 재점검, 폐기 처리', '', new Date()],
+    ['홀', '박OO', '냉방 설정 조정 중, 서큘레이터 추가 검토', new Date(new Date().getTime() + 7 * 864e5), ''],
+    ['관리', '최OO', '', '', ''],
+    ['홀', '정OO', '본사 승인 필요 — 집기 교체 예산', '', ''],
+  ]);
+  sh.getRange(R0 + 4, 12).setValue(true);   // 마지막 건 = 본사 협의 필요
+
+  const url = ss.getUrl();
+  const msg = ['=== 새 양식 v2 견본을 만들었습니다 ===', url, '',
+    '보실 것:',
+    '  · F열 상태 — 아무도 안 적었는데 완료/진행중/예정/미착수/본사 확인 대기가 나옵니다',
+    '  · B7 개선율 — 완료 2 ÷ (요청 5 − 본사협의 1) = 50%',
+    '  · B8 종합 — 88×0.6 + 92×0.3 + 50%×0.1',
+    '  · K열(완료일)에 「완료」라고 적어 보십시오 — 시트가 거부합니다',
+    '  · 4번째 줄은 아무것도 안 적어서 미착수, 5번째 줄은 본사협의 체크',
+  ].join('\n');
+  Logger.log(msg);
+  return msg;
+}
 
 function testStoreCopy(srcId, ym) {
   const SRC = srcId || '1mUSyz0ItpTa5HsUKVHWqxhD3wTobdP9xJO4NdNQ0InE'; // 금종제과_익산 (원본 — 읽기만)
