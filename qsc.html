@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=47">
+<link rel="stylesheet" href="css/app.css?v=48">
 </head>
 <body>
 <header class="topbar">
@@ -41,7 +41,7 @@
       <tbody id="sumBody"></tbody>
     </table>
     <div class="sumFinal" id="sumFinal">—</div>
-    <p class="note"><span id="wLine"></span>QSC 점수 = 100 − 일반 문항 감점 (하한 0) · ★/★★는 최종점수에서 직접 차감 / 등급 기준: 우수 93점 이상 · 양호 85 이상 · 보통 76 이상 · 미흡 66 이상 · 주의 55 이상 · 부적합 55 미만 / NA 문항은 채점 제외 / 최종점수 = QSC×60% + 쇼퍼×30% + 개선현황×10% − 중대 차감 (통합시트에서 산출)</p>
+    <p class="note"><span id="wLine"></span>QSC 점수 = 100 − 일반 문항 감점 − 중대 차감 (하한 0) · ★/★★도 이 점수에서 바로 빠집니다 / 등급 기준: 우수 93점 이상 · 양호 85 이상 · 보통 76 이상 · 미흡 66 이상 · 주의 55 이상 · 부적합 55 미만 / NA 문항은 채점 제외 / 최종점수 = QSC×60% + 쇼퍼×30% + 개선현황×10% (통합시트에서 산출)</p>
     <h2>세부 영역 (참고)</h2>
     <table class="sumTable">
       <thead><tr><th>영역</th><th class="r">감점</th><th class="r">문항</th><th class="r">개선 필요</th></tr></thead>
@@ -65,12 +65,12 @@
      ★이 화면에서는 auth.js의 guard()를 절대 부르지 않는다 — 리다이렉트는 금지다.
        앱 주소가 공개라 언젠가 AUTH_ENFORCE를 켜야 하는데, 이때 이 화면이 토큰을 못 붙이면
        관리자 본인의 제출까지 막힌다. 그래서 '싣되 튕기지는 않는' 절충이 이 구조다. -->
-<script src="js/auth.js?v=47"></script>
-<script src="js/scoring.js?v=47"></script>
-<script src="js/api.js?v=47"></script>
-<script src="js/ui-time.js?v=47"></script>
-<script src="js/ui-photo.js?v=47"></script>
-<script src="js/qsc-app.js?v=47"></script>
+<script src="js/auth.js?v=48"></script>
+<script src="js/scoring.js?v=48"></script>
+<script src="js/api.js?v=48"></script>
+<script src="js/ui-time.js?v=48"></script>
+<script src="js/ui-photo.js?v=48"></script>
+<script src="js/qsc-app.js?v=48"></script>
 <script>
 /* 부드러운 가드 — 제출 버튼만 잠그고, 작성은 그대로 둔다.
    ★js/qsc-app.js는 한 줄도 고치지 않는다. 그 파일은 제출을 시도한 뒤에만 disabled를 되돌리므로,

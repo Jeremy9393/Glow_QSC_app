@@ -1,6 +1,6 @@
 /* QSC 점검 앱 화면 로직 (담당자용) — v3.7 절대 감점제
    입력: 이상 없음 0 / 개선 필요 건수 / 해당 없음 NA
-   ★(S2)·★★(S1)는 QSC 평균에 넣지 않고 차감액만 집계 → 대시보드 최종점수에서 차감 */
+   ★(S2)·★★(S1)는 QSC 점수에서 바로 차감한다 (2026-08-18 변경 · 하한 0) */
 (async function () {
   // cache:'no-store' — 데이터 파일은 항상 서버 최신본 (오프라인이면 SW 캐시 폴백)
   const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
@@ -263,7 +263,9 @@
     renderSummary(res);
   }
 
-  // 하단 결과 요약: 엑셀 '항목별 집계' 블록과 같은 구성 (감점 3층 + QSC + 중대 차감) + 개선 필요 목록
+  /* 하단 결과 요약: 엑셀 '항목별 집계' 블록과 같은 구성 (감점 3층 + QSC + 중대 차감) + 개선 필요 목록
+     ★2026-08-18★ 중대 차감이 QSC 점수 안으로 들어왔다. 마지막 줄은 이제 '또 빠질 점수'가 아니라
+     '이미 빠진 내역'이다 — 문구를 그대로 두면 점검자가 두 번 빠지는 것으로 읽는다. */
   function renderSummary(res) {
     const body = $('#sumBody');
     body.innerHTML = '';
@@ -277,7 +279,7 @@
       ['★★ 즉시위해 (문항당 −' + R.S1.first + ' · 추가 건당 −' + R.S1.more + ' · 상한 −' + R.S1.cap + ')',
         res.s1.items + '문항 / ' + res.s1.cases + '건' + (res.s1.capHit ? ' · 상한 도달(원값 ' + res.s1.raw + ')' : ''),
         fmtM(res.s1.capped)],
-      ['중대 차감 합계 — 대시보드 최종점수에서 직접 차감', '★★ ' + res.s1.cases + '건 / ★ ' + res.s2.cases + '건' +
+      ['중대 차감 합계 — QSC 점수에 이미 반영됨', '★★ ' + res.s1.cases + '건 / ★ ' + res.s2.cases + '건' +
         (res.naCritical ? ' · ⚠NA ' + res.naCritical + '문항' : ''), fmtM(res.criticalDeduct)],
     ];
     rows.forEach(function (r, i) {
@@ -302,7 +304,7 @@
     $('#sumFinal').innerHTML = res.qsc == null
       ? 'QSC — <span style="font-size:12px;color:var(--sub)">(미확인 ' + res.blank + '건 — 전 문항 확인 후 산출)</span>'
       : 'QSC <b>' + res.qsc.toFixed(1) + '점</b> · <b>' + (res.grade || '') + '</b>' +
-        (res.criticalDeduct ? ' <span style="font-size:12px;color:var(--sub)">최종점수에서 중대 ' + res.criticalDeduct + '점 추가 차감</span>' : '');
+        (res.criticalDeduct ? ' <span style="font-size:12px;color:var(--sub)">중대 ' + res.criticalDeduct + '점이 위 점수에 이미 빠져 있습니다</span>' : '');
 
     const list = $('#offList');
     list.innerHTML = '';
@@ -350,7 +352,7 @@
     const res = res0;
     let msg = '개선 필요 ' + (res.genCases + res.s1.cases + res.s2.cases) + '건 · NA ' + res.na + '개' +
       '\nQSC ' + res.qsc.toFixed(1) + '점 · ' + res.grade;
-    if (res.criticalDeduct) msg += '\n중대 차감 ' + res.criticalDeduct + '점 (최종점수에서 차감)';
+    if (res.criticalDeduct) msg += '\n중대 차감 ' + res.criticalDeduct + '점 (위 QSC 점수에 이미 반영)';
     if (!confirm(msg + '\n제출할까요?')) return;
     const payload = {
       store: $('#store').value.trim(), date: $('#date').value, time: TimePick.get('time'),
@@ -388,7 +390,7 @@
         localStorage.setItem(NA_KEY, JSON.stringify(presets));
         let done = '저장 완료' + (r.mock ? ' (모의 저장 — 구글 연동 전)' : '') +
           '\nQSC ' + res.qsc.toFixed(1) + '점 · ' + res.grade +
-          (res.criticalDeduct ? ' · 중대 차감 ' + res.criticalDeduct + '점' : '');
+          (res.criticalDeduct ? ' · 중대 차감 ' + res.criticalDeduct + '점 반영됨' : '');
         // 통합시트에 자동 기입하지 않는 운영(개인 계정 스크립트)에서는 옮겨 적을 숫자를 바로 알려준다
         if (r.dashboard && r.dashboard.skipped) {
           done += '\n\n▶ 통합시트 위생 칸에 입력\n   ' + res.qsc.toFixed(1) + '%';
