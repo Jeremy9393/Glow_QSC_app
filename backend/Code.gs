@@ -311,6 +311,12 @@ function actionTable() {
     'audit.list':         { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnAuditList },
     /* codes.* 는 '게이트 예약'이다 — 화면(codes.html)은 있지만 서버 기능층은 아직 없다.
        미리 등록해 두어야 나중에 함수를 붙일 때 권한 줄을 빠뜨릴 수 없다. */
+    /* 제출 코드 — 발급·취소는 ★반드시 관리자 인증★ (설계 §5-3).
+       무인증이면 남이 스스로 코드를 뽑을 수 있어 검표 자체가 무의미해진다. */
+    'codes.list':         { menu: 'codes', act: '읽기', scope: 'none', max: 1 * KB, fn: fnCodesList },
+    'codes.issue':        { menu: 'codes', act: '쓰기', scope: 'none', max: 2 * KB, fn: fnCodesIssue },
+    'codes.revoke':       { menu: 'codes', act: '쓰기', scope: 'none', max: 2 * KB, fn: fnCodesRevoke },
+    /* 위에 없는 codes.* 는 아직 없는 기능이다 (예: codes.delete — 제출분 삭제, 설계 §5-2) */
     'codes.*':            { menu: 'codes', act: '읽기', scope: 'none', idem: true, max: 2 * KB, fn: fnNotReady }
   };
 }
@@ -2594,6 +2600,238 @@ function fnQscSubmit(ctx, payload) {
 function fnShopperSubmit(ctx, payload) {
   return saveShopper(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx, false);
 }
+/* ══════════════════════════════════════════════════════════════
+   미스터리쇼퍼 제출 코드 (검표) — 설계: `_보관/설계/쇼퍼_제출코드_설계.md`
+
+   ★막으려는 것은 하나다★ — 설문 링크가 퍼져도 아무나 제출하지 못하게.
+     링크는 막지 않는다. 작성은 누구나 하고, ★제출 순간에만★ 코드를 검사한다.
+
+       QR 스캔 → 설문 작성(코드 없이 자유롭게) → [제출] → 팝업 "제출 코드"
+                                                    → 서버 판정 → 저장 + 그 코드 즉시 소멸
+
+   ★시트가 원장이다★ — `쇼퍼_코드` 탭. 화면은 그 시트를 보여 주는 창이고, 충돌하면 시트가 이긴다.
+     발급 건마다 1행이 남고(취소·재발급 이력이 전부 보인다), 화면은 매장별 최신 1건만 보여 준다.
+
+   ★시도 횟수 제한은 선택이 아니라 필수다★ — 6자리(100만 조합)에 활성 코드가 26개면
+     무작위 1회 적중률이 2.6/10만이다. 자동화로 초당 수십 번 두드리면 뚫린다.
+     앱스 스크립트는 접속자 IP를 볼 수 없으므로 IP별 제한이 불가능하다 → 전역 실패 카운터를 쓴다.
+     ⚠설계가 적어 둔 보조 방어("영수증 사진이 필수라 코드를 뚫어도 제출이 안 된다")는
+       2026-08-20에 영수증 첨부를 없애면서 사라졌다. ★지금은 이 카운터가 유일한 방어다.★
+   ══════════════════════════════════════════════════════════════ */
+
+const CODE_SHEET = '쇼퍼_코드';
+const CODE_HEADER = ['회차', '매장', '코드', '발급시각', '만료시각', '상태', '사용시각', '메모'];
+const CODE_TTL = { '3h': 3 * 3600e3, 'today': -1, '15d': 15 * 86400e3 };   // -1 = 그날 23:59:59
+const CODE_FAIL_MAX = 15;      // 10분 안에 이만큼 틀리면 잠근다
+const CODE_FAIL_MIN = 10;
+
+function codeSheet(ss) {
+  return sheet(ss, CODE_SHEET, CODE_HEADER);
+}
+
+/* 회차 = YYMM. 방문날짜가 있으면 그 달, 없으면 이번 달. */
+function codeCycle(dateStr) {
+  if (dateStr && validYm(yymm(dateStr))) return yymm(dateStr);
+  return curYymm();
+}
+
+/* 시트를 통째로 읽어 '매장 → 최신 1건'으로 접는다.
+   ★뒤에 있는 행이 이긴다★ — 발급 건마다 1행이 쌓이므로 마지막 줄이 지금 상태다. */
+function codesMap(ss, cycle) {
+  const sh = codeSheet(ss);
+  const last = sh.getLastRow();
+  const out = {};
+  if (last < 2) return out;
+  const n = Math.min(4000, last - 1);
+  const rng = grid(sh, last - n + 1, 1, n, CODE_HEADER.length);
+  const vals = rng ? rng.getValues() : [];
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]).trim() !== cycle) continue;
+    const store = String(vals[i][1] || '').trim();
+    if (!store) continue;
+    out[normStore(store)] = {
+      store: store,
+      code: String(vals[i][2] || '').trim(),
+      issuedAt: msOf(vals[i][3]),
+      expiresAt: msOf(vals[i][4]),
+      state: String(vals[i][5] || '').trim() || '미사용',
+      usedAt: msOf(vals[i][6]),
+      note: String(vals[i][7] || '').trim(),
+      row: last - n + 1 + i,
+    };
+  }
+  return out;
+}
+
+function msOf(v) {
+  try {
+    if (v instanceof Date) return v.getTime();
+    if (typeof v === 'number' && v > 0) return v;
+    const t = String(v || '').trim();
+    if (!t) return null;
+    const d = new Date(t);
+    return isNaN(d.getTime()) ? null : d.getTime();
+  } catch (e) { return null; }
+}
+
+/* 화면이 쓰는 말로 바꾼다. 만료 판정은 ★읽는 시점★에 한다 — 시트에 '만료'를 적어 두지 않는다.
+   적어 두면 그 줄을 누가 언제 갱신하느냐는 문제가 새로 생긴다. */
+function codeView(rec) {
+  if (!rec) return null;
+  let state = 'unused';
+  if (rec.state === '사용됨') state = 'used';
+  else if (rec.state === '취소됨' || rec.state === '삭제됨') state = 'none';
+  else if (rec.expiresAt && rec.expiresAt <= Date.now()) state = 'expired';
+  return {
+    code: rec.code, issuedAt: rec.issuedAt, expiresAt: rec.expiresAt,
+    state: state, usedAt: rec.usedAt, note: rec.note,
+  };
+}
+
+function newCode() {
+  /* 6자리. 앞자리 0을 피한다 — 복사·구두 전달에서 자꾸 사라진다 */
+  return String(100000 + Math.floor(Math.random() * 900000));
+}
+
+function codeExpiry(ttl, tz) {
+  const now = Date.now();
+  if (ttl === 'today') {
+    const end = Utilities.formatDate(new Date(now), tz, 'yyyy-MM-dd') + ' 23:59:59';
+    const d = new Date(end.replace(/-/g, '/'));
+    return isNaN(d.getTime()) ? now + 12 * 3600e3 : d.getTime();
+  }
+  const ms = CODE_TTL[ttl];
+  return now + (typeof ms === 'number' && ms > 0 ? ms : CODE_TTL['3h']);
+}
+
+/* ---------- 화면용 액션 (전부 관리자 인증) ---------- */
+
+function fnCodesList(ctx, payload) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const cycle = codeCycle(payload && payload.ym);
+  const raw = codesMap(ss, cycle);
+  const map = {};
+  let issued = 0, used = 0;
+  Object.keys(raw).forEach(function (k) {
+    const v = codeView(raw[k]);
+    if (!v) return;
+    map[raw[k].store] = v;
+    if (v.state !== 'none') issued++;
+    if (v.state === 'used') used++;
+  });
+  return { ok: true, cycle: cycle, map: map, issued: issued, used: used, fetchedAt: nowIso() };
+}
+
+function fnCodesIssue(ctx, payload) {
+  const store = normStore(payload && payload.store);
+  const ttl = String((payload && payload.ttl) || '3h');
+  if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
+  if (!CODE_TTL.hasOwnProperty(ttl)) return err('BAD_REQUEST', '유효시간이 올바르지 않습니다.');
+
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const tz = ss.getSpreadsheetTimeZone();
+  const cycle = codeCycle(payload && payload.ym);
+
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
+  try {
+    /* ★같은 회차·매장에 살아 있는 코드가 있으면 막는다★ (설계 §3)
+       두 장이 돌아다니면 어느 것이 유효한지 아무도 모르게 된다. 취소하고 다시 내야 한다. */
+    const cur = codeView(codesMap(ss, cycle)[store]);
+    if (cur && cur.state === 'unused') {
+      return err('CONFLICT', '이 매장에 아직 살아 있는 코드가 있습니다. 취소한 뒤 다시 발급해 주세요.');
+    }
+    if (cur && cur.state === 'used') {
+      return err('CONFLICT', '이 매장은 이번 회차 제출이 끝났습니다.');
+    }
+    const code = newCode();
+    const now = new Date();
+    const exp = new Date(codeExpiry(ttl, tz));
+    codeSheet(ss).appendRow(safeRow([cycle, store, code, now, exp, '미사용', '',
+      '발급: ' + (ctx ? ctx.id : '')]));
+    return {
+      ok: true, cycle: cycle, store: store,
+      rec: { code: code, issuedAt: now.getTime(), expiresAt: exp.getTime(), state: 'unused', usedAt: null },
+    };
+  } finally { try { lock.releaseLock(); } catch (e) { } }
+}
+
+function fnCodesRevoke(ctx, payload) {
+  const store = normStore(payload && payload.store);
+  if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const cycle = codeCycle(payload && payload.ym);
+
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
+  try {
+    const rec = codesMap(ss, cycle)[store];
+    if (!rec || !rec.row) return err('NOT_FOUND', '취소할 코드가 없습니다.');
+    if (rec.state === '사용됨') return err('CONFLICT', '이미 제출에 사용된 코드입니다.');
+    const sh = codeSheet(ss);
+    const c = grid(sh, rec.row, 6, 1, 3);   // 상태 · 사용시각 · 메모
+    if (!c) return err('SERVER_ERROR', '코드 시트 칸을 찾지 못했습니다.');
+    c.setValues([['취소됨', '', safe('취소: ' + (ctx ? ctx.id : ''))]]);
+    return { ok: true, cycle: cycle, store: store };
+  } finally { try { lock.releaseLock(); } catch (e) { } }
+}
+
+/* ---------- 제출 검표 ---------- */
+
+/* ★전역 실패 카운터★ — IP를 못 보므로 이것이 유일한 무작위 대입 방어다.
+   정상 사용자의 오타는 1~2회라 걸릴 일이 없다(10분에 15회). */
+function codeFailOk() {
+  try {
+    const k = 'codefail:' + Math.floor(Date.now() / (CODE_FAIL_MIN * 60000));
+    return Number(CacheService.getScriptCache().get(k) || 0) < CODE_FAIL_MAX;
+  } catch (e) { return true; }
+}
+function codeFailBump() {
+  try {
+    const c = CacheService.getScriptCache();
+    const k = 'codefail:' + Math.floor(Date.now() / (CODE_FAIL_MIN * 60000));
+    c.put(k, String(Number(c.get(k) || 0) + 1), CODE_FAIL_MIN * 60 + 60);
+  } catch (e) { }
+}
+
+/* 검사 → 소진 → 저장을 한 덩어리로 (설계 §5-2).
+   ★저장이 끝난 뒤에 소진 표시를 한다★ — 순서를 뒤집으면 저장이 실패했을 때
+   쇼퍼는 코드를 잃고 응답도 잃는다. 반대로 두면 최악이 '코드가 한 번 더 쓰일 수 있음'이다. */
+function submitWithCode(ss, p, ctx) {
+  const code = String((p && p.code) || '').replace(/\D/g, '');
+  if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
+  if (!codeFailOk()) {
+    return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
+  }
+  const store = normStore(p && p.store);
+  const cycle = codeCycle(p && p.date);
+
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(25000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
+  try {
+    const rec = codesMap(ss, cycle)[store];
+    /* ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
+       다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
+    if (!rec || rec.code !== code) { codeFailBump(); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
+    if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
+    if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
+    if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');
+
+    const saved = saveShopper(ss, p, ctx, true);
+    if (!saved || saved.ok !== true) return saved;
+
+    try {
+      const c = grid(codeSheet(ss), rec.row, 6, 1, 2);   // 상태 · 사용시각
+      if (c) c.setValues([['사용됨', new Date()]]);
+    } catch (e) {
+      /* 소진 표시만 실패했다. 응답은 이미 저장됐으므로 되돌리지 않는다 —
+         최악이 '그 코드가 한 번 더 쓰일 수 있음'이고, 그건 담당자가 시트에서 닫으면 된다. */
+      Logger.log('코드 소진 표시 실패(응답은 저장됨): ' + String(e));
+    }
+    return { ok: true };
+  } finally { try { lock.releaseLock(); } catch (e) { } }
+}
+
 /* ★익명 경로도 이제 같은 일을 한다★ (2026-08-20 사용자 결정 — 본사가 채운 것과 고객이 낸 것은
    같은 미스터리쇼퍼다). 그래서 점수에서 두 경로를 구별하지 않는다.
    서버가 여전히 다르게 하는 것은 하나뿐이다: 시트 '입력경로' 칸을 '고객 직접'으로 ★강제★한다
@@ -2604,7 +2842,9 @@ function fnShopperSubmit(ctx, payload) {
      (설계: `_보관/설계/쇼퍼_제출코드_설계.md`). 그때까지는 담당자가 `쇼퍼_응답` 시트를 보고
      이상한 건을 지우거나 고친다 — 평균은 시트를 다시 읽어 계산하므로 그 편집이 곧 반영된다. */
 function fnSurveySubmit(ctx, payload) {
-  return saveShopper(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx, true);
+  /* ★익명 제출은 반드시 검표를 지난다★ — submitWithCode 가 검사·소진·저장을 한 덩어리로 한다.
+     관리자(shopper.submit)는 로그인으로 이미 신원이 확인되므로 코드를 묻지 않는다. */
+  return submitWithCode(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx);
 }
 function fnNotReady() {
   return err('NOT_FOUND', '아직 준비되지 않은 기능입니다.');
