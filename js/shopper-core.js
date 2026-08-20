@@ -128,7 +128,11 @@ async function initShopperForm(opts) {
     { id: 'staff', label: '응대직원 설명' },
     { id: 'order', label: '주문내역' },
     { id: 'demo', label: '연령대·성별' },
-    // 영수증은 방문 증빙이라 고객 화면에서는 필수. 종이 응답을 옮겨 적는 관리자만 확인 후 건너뛸 수 있다
+    /* 영수증은 방문 증빙이라 고객 화면에서는 필수.
+       ★관리자 화면은 '평가표 그 자체'다★ — 담당자가 매장에서 이 화면을 보며 직접 채운다.
+         종이는 어쩔 수 없을 때만 쓰는 예비 수단이고, 그때도 결국 이 화면에 옮겨 적는다.
+         그래서 건너뛰기를 허용하는 이유는 '종이라서'가 아니라 ★영수증을 받지 못했을 때★다
+         (현금 결제·영수증 미발행 등은 종이와 무관하게 생긴다). */
     { id: 'receipt', label: '영수증 사진', verb: '첨부해', focus: 'receiptBtn', adminSkip: true,
       get: function () { return receipt.count() ? 'ok' : ''; } },
   ];
@@ -300,7 +304,7 @@ async function initShopperForm(opts) {
       const val = f.get ? f.get() : $('#' + f.id).value.trim();
       if (!val) {
         if (f.adminSkip && ADMIN) {
-          if (confirm('영수증 사진이 없습니다.\n종이 응답이라 영수증을 받지 못한 경우에만 그대로 저장하세요.\n계속할까요?')) continue;
+          if (confirm('영수증 사진이 없습니다.\n영수증을 받지 못한 경우에만 그대로 저장해 주세요.\n계속할까요?')) continue;
           $('#' + (f.focus || f.id)).focus();
           return;
         }
@@ -316,7 +320,7 @@ async function initShopperForm(opts) {
     if (missing > 0) {
       // 완료 게이트: 답변 또는 비고 중 하나는 반드시 — 미완료 상태로는 제출 불가
       alert(ADMIN
-        ? '입력하지 않은 문항이 ' + missing + '개 있습니다.\n종이에 미기재된 관찰 문항은 NA로 처리해 주세요. (만족도 문항은 1~5 필수)'
+        ? '입력하지 않은 문항이 ' + missing + '개 있습니다.\n확인하지 못한 관찰 문항은 NA로 처리해 주세요. (만족도 문항은 1~5 필수)'
         : '아직 답변하지 않은 문항이 ' + missing + '개 있습니다.\n답을 선택하거나, 판단이 어려우면 비고에 상황을 적어 주세요.');
       return;
     }
