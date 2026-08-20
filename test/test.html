@@ -5,7 +5,7 @@
 <h1 style="font-size:18px">채점 엔진 검증 — v3.7 74문항 · 절대 감점제 (★★4 · ★12 · 일반58)</h1>
 <p style="font-size:12px;color:#999">기대값은 엑셀 'QSC 평가 체계 개편_v3.xlsx' 실계산(2026-08-13 전수검사)과 동일해야 한다.</p>
 <pre id="out"></pre>
-<script src="../js/scoring.js?v=30"></script>
+<script src="../js/scoring.js"></script>
 <script>
 const out = [];
 let pass = 0, fail = 0;
@@ -67,7 +67,7 @@ ok('등급: 55 = 주의 / 54.99 = 부적합', Scoring.grade(55) === '주의' && 
 })();
 (function () {
   const r = Scoring.evaluate(build([], [1]));
-  ok('★ 1문항 1건 → 차감 8 · QSC 100', r.criticalDeduct === 8 && near(r.qsc, 100), r);
+  ok('★ 1문항 1건 → 차감 8 · QSC 92 (중대가 QSC에 바로 반영)', r.criticalDeduct === 8 && near(r.qsc, 92), r);
 })();
 (function () {
   const r = Scoring.evaluate(build([], [1, 1, 1, 1, 1, 1]));
@@ -91,7 +91,23 @@ ok('등급: 55 = 주의 / 54.99 = 부적합', Scoring.grade(55) === '주의' && 
 })();
 (function () {
   const r = Scoring.evaluate(build(genN(10), [1], [1]));
-  ok('일반10 + ★★1 + ★1 → QSC 90 · 차감 20', near(r.qsc, 90) && r.criticalDeduct === 20, r);
+  ok('일반10 + ★★1 + ★1 → QSC 70 · 차감 20', near(r.qsc, 70) && r.criticalDeduct === 20, r);
+})();
+(function () {
+  const r = Scoring.evaluate(build([], [], [1]));
+  ok('★★ 1문항 1건 → QSC 88 (우수에 닿지 않는다)', near(r.qsc, 88) && r.grade === '양호', r);
+})();
+(function () {
+  const r = Scoring.evaluate(build(genN(5), [], [1]));
+  ok('일반 5건 + ★★ 1건 → QSC 83 (총 17점 감점)', near(r.qsc, 83) && r.criticalDeduct === 12, r);
+})();
+(function () {
+  const r = Scoring.evaluate(build([], genN(12), genN(4)));
+  ok('★·★★ 전부 → QSC 7 (상한 45+48=93)', near(r.qsc, 7) && r.criticalDeduct === 93, r);
+})();
+(function () {
+  const r = Scoring.evaluate(build(genN(20), genN(12), genN(4)));
+  ok('★·★★ 전부 + 일반 20건 → QSC 0 (음수로 내려가지 않는다)', near(r.qsc, 0), r);
 })();
 (function () {
   const gen = genN(10); gen[57] = null;                 // 1문항 미확인
@@ -103,9 +119,9 @@ ok('등급: 55 = 주의 / 54.99 = 부적합', Scoring.grade(55) === '주의' && 
   ok('중대 NA → 경고 카운트 2 · 차감 0', r.naCritical === 2 && r.criticalDeduct === 0, r);
 })();
 (function () {
-  ok('최종 미리보기: QSC 100 · 차감 12 · 쇼퍼/개선 100 → 88',
-    near(Scoring.finalPreview(100, 12, 100, 100), 88));
-  ok('최종 미리보기 하한 0: QSC 0 · 차감 93 → 0',
+  ok('최종 미리보기: 중대를 두 번 빼지 않는다 (QSC 88 · 쇼퍼/개선 100 → 92.8)',
+    near(Scoring.finalPreview(88, 12, 100, 100), 92.8));
+  ok('최종 미리보기 하한 0: QSC 0 · 쇼퍼/개선 0 → 0',
     near(Scoring.finalPreview(0, 93, 0, 0), 0));
 })();
 
