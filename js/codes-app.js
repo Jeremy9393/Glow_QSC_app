@@ -2,12 +2,12 @@
    규칙: 매장 1곳 = 코드 1개 = 월 1회(회차 YYMM) · 6자리 숫자 · 1회성 소진
    유효시간: 3시간 / 당일(23:59) / 15일
 
-   ※ 지금은 미리보기(모의) — 발급·상태가 이 기기 localStorage에만 쌓인다.
-     구글 연동 후 아래 Store 객체만 Apps Script 호출로 바꾸면 화면은 그대로 쓴다.
-     실제 판정(유효·소진)은 반드시 서버에서 한다 — 화면 상태는 표시용일 뿐. */
+   ★2026-08-20부터 실제로 동작한다★ — 발급·취소는 서버(`codes.issue`/`codes.revoke`)가 하고,
+     원장은 구글시트 `쇼퍼_코드` 탭이다. 이 화면은 그 시트를 보여 주는 창일 뿐이다.
+     ★판정과 소진은 100% 서버에서 한다★ — 여기 보이는 상태는 표시용이고, 제출 순간의 진짜 판정은
+     `submitWithCode`가 LockService 안에서 한다. 화면 값을 고쳐도 제출은 통과되지 않는다. */
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
-  const KEY = 'qsc-codes-mock';
   const BASE = 'https://jeremy9393.github.io/Glow_QSC_app/';
   const TTL = { '3h': '3시간', 'today': '당일', '15d': '15일' };
   let ttl = '3h';
@@ -16,12 +16,7 @@
     d = d || new Date();
     return String(d.getFullYear()).slice(2) + String(d.getMonth() + 1).padStart(2, '0');
   }
-  function expiryOf(kind, from) {
-    const d = new Date(from);
-    if (kind === '3h') return d.getTime() + 3 * 3600 * 1000;
-    if (kind === 'today') { d.setHours(23, 59, 59, 0); return d.getTime(); }
-    return d.getTime() + 15 * 86400 * 1000;
-  }
+  /* 만료 시각은 ★서버가 정한다★ — 화면 시계로 계산하면 기기 시간을 바꾸는 것만으로 늘릴 수 있다. */
   function fmt(ts) {
     const d = new Date(ts);
     return (d.getMonth() + 1) + '/' + d.getDate() + ' ' +
@@ -37,16 +32,22 @@
     return Math.floor(h / 24) + '일 남음';
   }
 
-  // ---------- 저장소 (연동 후 이 부분만 서버 호출로 교체) ----------
-  const Store = {
-    all: function () { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { return {}; } },
-    cur: function () { return this.all()[cycle()] || {}; },
-    put: function (map) {
-      const a = this.all();
-      a[cycle()] = map;
-      localStorage.setItem(KEY, JSON.stringify(a));
-    },
-  };
+  /* ---------- 저장소 — 서버가 원장이다 ----------
+     화면은 서버가 준 map을 그대로 들고 그린다. 무엇을 바꾸든 ★서버에 먼저 시키고 다시 받아온다★ —
+     화면에서 먼저 고치고 나중에 맞추면, 실패했을 때 화면만 바뀐 채로 남는다. */
+  let curMap = {};
+  const Store = { cur: function () { return curMap; } };
+
+  async function reload(quiet) {
+    const r = await Api.call('codes.list', {}).catch(function () { return null; });
+    if (!(r && r.ok)) {
+      if (!quiet) alert('코드 현황을 불러오지 못했습니다.\n' + ((r && r.error) || '잠시 후 다시 시도해 주세요.'));
+      return false;
+    }
+    curMap = r.map || {};
+    render();
+    return true;
+  }
   function stateOf(rec) {
     if (!rec) return 'none';
     if (rec.state === 'used') return 'used';
@@ -78,15 +79,6 @@
   });
   $('#cycleInfo').textContent = cycle() + ' 회차';
 
-  // 미리보기 첫 실행 — 네 가지 상태가 한눈에 보이도록 예시를 깔아둔다
-  if (!Object.keys(Store.cur()).length && stores.length >= 3) {
-    const now = Date.now();
-    const seed = {};
-    seed[stores[0]] = { code: '504118', issuedAt: now - 2 * 86400000, expiresAt: now + 13 * 86400000, state: 'used', usedAt: now - 86400000, ttl: '15d' };
-    seed[stores[1]] = { code: '382917', issuedAt: now - 3600000, expiresAt: now + 2 * 3600000 + 47 * 60000, state: 'unused', ttl: '3h' };
-    seed[stores[2]] = { code: '996031', issuedAt: now - 5 * 3600000, expiresAt: now - 2 * 3600000, state: 'unused', ttl: '3h' };
-    Store.put(seed);
-  }
 
   // ---------- 유효시간 선택 ----------
   $('#ttl').querySelectorAll('button').forEach(function (b) {
@@ -98,15 +90,8 @@
   $('#ttl').querySelector('button').className = 'on';
 
   // ---------- 발급 ----------
-  function gen6(map) {
-    const used = {};
-    Object.keys(map).forEach(function (k) { used[map[k].code] = 1; });
-    for (let i = 0; i < 200; i++) {
-      const c = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
-      if (!used[c]) return c;
-    }
-    return String(Date.now()).slice(-6);
-  }
+  /* 코드는 ★서버가 만든다★ — 화면이 만들면 두 사람이 같은 코드를 받을 수 있고,
+     무엇보다 서버가 모르는 코드는 제출 때 통과되지 않는다. */
   function msgFor(store, rec) {
     return '[GLOW SEOUL 미스터리쇼퍼]\n' + store + ' 방문 후 아래 링크에서 설문을 작성해 주세요.\n' +
       BASE + 'survey.html?store=' + encodeURIComponent(store) +
@@ -124,22 +109,30 @@
     setTimeout(function () { btn.textContent = old; }, 1200);
   }
 
-  $('#issueBtn').onclick = function () {
+  $('#issueBtn').onclick = async function () {
     const store = $('#store').value;
     if (!store) { alert('매장을 선택해 주세요.'); return; }
     const map = Store.cur();
+    /* 아래 두 검사는 ★서버도 똑같이 한다★ — 여기서는 왕복 한 번을 아끼려고 미리 볼 뿐이다 */
     if (stateOf(map[store]) === 'unused') {
-      alert(store + '\n이번 회차에 아직 쓰지 않은 코드가 있습니다 (' + map[store].code + ').\n다시 발급하려면 기존 코드를 먼저 취소해 주세요.');
+      alert(store + '\n이번 회차에 아직 쓰지 않은 코드가 있습니다 (' + map[store].code +
+        ').\n다시 발급하려면 기존 코드를 먼저 취소해 주세요.');
       return;
     }
     if (stateOf(map[store]) === 'used') {
-      if (!confirm(store + '\n이번 회차 설문이 이미 제출되었습니다.\n\n다시 조사하시려면 새 코드를 발급합니다.\n(이미 들어온 응답은 지워지지 않습니다 — 지우려면 쇼퍼_응답 시트에서)\n\n계속할까요?')) return;
+      alert(store + '\n이번 회차 설문이 이미 제출되었습니다.\n\n' +
+        '다시 조사하시려면 그 제출분을 먼저 지워야 합니다 — 아직 만들지 않은 기능입니다.');
+      return;
     }
-    const now = Date.now();
-    map[store] = { code: gen6(map), issuedAt: now, expiresAt: expiryOf(ttl, now), state: 'unused', ttl: ttl };
-    Store.put(map);
-    showIssued(store, map[store]);
-    render();
+    const btn = this;
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = '발급 중…';
+    const r = await Api.call('codes.issue', { store: store, ttl: ttl }).catch(function () { return null; });
+    btn.disabled = false; btn.textContent = label;
+    if (!(r && r.ok)) { alert('발급하지 못했습니다.\n' + ((r && r.error) || '잠시 후 다시 시도해 주세요.')); return; }
+    await reload(true);
+    const rec = Store.cur()[store] || r.rec;
+    showIssued(store, Object.assign({ ttl: ttl }, rec));
   };
 
   function showIssued(store, rec) {
@@ -204,22 +197,22 @@
           if (a === 'qr') { showQr(store, m[store].code); return; }
           if (a === 'copy') { copy(msgFor(store, m[store]), b); return; }
           if (a === 'del') {
-            const why = prompt(store + ' — ' + fmt(m[store].usedAt) + ' 제출분을 삭제합니다.\n\n' +
-              '· 응답과 비고가 시트에서 지워집니다\n' +
-              '· 이 달 CS 점수에서 빠지고 통합시트가 다시 계산됩니다\n' +
-              '· 삭제 후 이 매장에 코드를 다시 발급할 수 있습니다\n\n삭제 사유를 적어 주세요', '');
-            if (why === null) return;
-            if (!confirm(store + ' — ' + fmt(m[store].usedAt) + ' 제출분\n\n정말 삭제할까요? 되돌릴 수 없습니다.')) return;
-            m[store] = {
-              state: 'deleted', deletedFrom: m[store].usedAt, deletedAt: Date.now(),
-              deleteReason: (why || '').trim() || '사유 미기재', code: m[store].code,
-            };
-            Store.put(m); render(); return;
+            /* 제출분 삭제(설계 §5-2)는 아직 서버에 없다 — 응답·비고 행을 지우고 CS를 다시 계산하는 일이다.
+               ★화면에서만 지운 척하지 않는다★ — 그러면 시트에는 남은 채 담당자만 지웠다고 믿는다. */
+            alert(store + '\n\n제출분 삭제는 아직 만들지 않은 기능입니다.\n' +
+              '지금은 구글시트 「쇼퍼_응답」·「쇼퍼_비고」에서 그 줄을 직접 지워 주세요.\n' +
+              'CS 평균은 시트를 다시 읽어 계산하므로 곧 반영됩니다.');
+            return;
           }
           if (a === 'cancel') {
             if (!confirm(store + ' 코드 ' + m[store].code + '\n지금 무효로 만들까요?')) return;
-            m[store].state = 'cancelled';
-            Store.put(m); render(); return;
+            b.disabled = true;
+            Api.call('codes.revoke', { store: store }).then(function (r) {
+              b.disabled = false;
+              if (!(r && r.ok)) { alert('취소하지 못했습니다.\n' + ((r && r.error) || '')); return; }
+              reload(true);
+            }).catch(function () { b.disabled = false; alert('취소하지 못했습니다.'); });
+            return;
           }
           if (a === 'issue') { $('#store').value = store; $('#issueBtn').click(); }
         };
@@ -232,6 +225,9 @@
       '';
   }
 
-  render();
-  setInterval(render, 30000); // 남은 시간·만료 자동 갱신
+  /* ★첫 화면은 서버에서 받아 그린다★ — render()만 부르면 빈 map을 그려 '전부 미발급'으로 보인다.
+     30초마다 다시 그리는 것은 남은 시간·만료 표시를 위한 것이고, 서버를 다시 부르지는 않는다
+     (부르면 화면을 열어 둔 동안 계속 왕복한다 — 갱신은 [발급]·[취소] 때 알아서 일어난다). */
+  await reload();
+  setInterval(render, 30000); // 남은 시간·만료 표시만 자동 갱신
 })();

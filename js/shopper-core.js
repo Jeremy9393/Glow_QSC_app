@@ -320,7 +320,21 @@ async function initShopperForm(opts) {
     if (ADMIN && res.score != null &&
         !confirm('응답 ' + answered + '/' + allQs.length + '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade + '\n제출할까요?')) return;
 
+    /* ★익명 제출은 제출 코드가 있어야 한다★ (설계: 제출 순간에만 검사한다)
+       작성은 코드 없이 자유롭게 하고, 여기서 한 번 묻는다.
+       ★취소하거나 틀려도 작성 내용은 그대로 남는다★ — 다시 [제출]을 누르면 된다.
+       관리자는 로그인으로 신원이 확인되므로 묻지 않는다. */
+    let code = '';
+    if (!ADMIN) {
+      code = (prompt('제출 코드를 입력해 주세요 (6자리)\n\n담당자에게 받으신 번호입니다.\n작성하신 내용은 그대로 남아 있습니다.', '') || '').trim();
+      /* 화면이 코드를 '382 917'처럼 띄어 보여 주므로 그대로 옮겨 적는 사람이 많다.
+         숫자만 남긴다 — 서버도 같은 일을 하지만, 여기서 걸러야 오타가 아닌 것으로 실패하지 않는다. */
+      code = code.replace(/[^0-9]/g, '');
+      if (!code) return;
+    }
+
     const payload = {
+      code: code,
       store: $('#store').value.trim(), date: $('#date').value, time: TimePick.get('time'),
       staff: $('#staff').value.trim(), order: $('#order').value.trim(), demographic: $('#demo').value.trim(),
       submittedAt: new Date().toISOString(),
@@ -362,7 +376,12 @@ async function initShopperForm(opts) {
         }
         return;
       }
-      alert(ADMIN ? '저장되지 않았습니다: ' + (r.error || '원인을 알 수 없습니다') : '전송되지 않았습니다. 잠시 후 다시 시도해 주세요.');
+      /* ★고객에게도 사유를 보여 준다★ — '전송되지 않았습니다'만으로는 코드를 다시 받아야 하는지,
+         그냥 다시 누르면 되는지 알 수 없다. 서버가 사유를 구분해 보내 준다. */
+      alert(ADMIN
+        ? '저장되지 않았습니다: ' + (r.error || '원인을 알 수 없습니다')
+        : (r.error || '전송되지 않았습니다. 잠시 후 다시 시도해 주세요.') +
+          '\n\n작성하신 내용은 그대로 있습니다. [제출]을 다시 눌러 주세요.');
     } catch (e) {
       alert(ADMIN ? '저장되지 않았습니다: ' + e.message : '전송되지 않았습니다. 네트워크 연결을 확인해 주세요.');
     }
