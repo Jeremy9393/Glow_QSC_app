@@ -132,25 +132,61 @@ _note_row = next((r for r in range(Q_MAX + 1, Q_MAX + 30)
                   if str(sh.cell(r, 1).value or '').strip() == '비고'), None)
 shopper_note = sh.cell(_note_row, 3).value if _note_row else None
 
-# 매장 목록: 통합시트의 표시 행만 (숨김 행 = 폐점·검사 제외 매장)
-DASH = Path(SRC).parent / '[감사총무팀_QSC] 통합시트_대시보드' / '[감사총무팀_QSC] 통합시트.xlsx'
-stores = []
-if DASH.exists():
-    dws = openpyxl.load_workbook(DASH, data_only=True)['데이터']
-    for r in range(6, 60):
-        name = dws[f'E{r}'].value
-        if not name:
-            continue
-        rd = dws.row_dimensions.get(r)
-        if rd and rd.hidden:
-            continue
-        stores.append(str(name).strip())
-else:
-    raise SystemExit('★중단★ 통합시트를 찾지 못했습니다: %s' % DASH)
-assert len(stores) >= 20, ('★중단★ 매장이 %d곳뿐입니다 — 통합시트 매장명 열을 확인하십시오. '
-                           '로컬 사본은 E열, 실물 구글시트는 D열이라 어긋난 적이 있습니다.' % len(stores))
-assert len(stores) >= 20, ('★중단★ 매장이 %d곳뿐입니다 — 통합시트 매장명 열을 확인하십시오. '
-                           '로컬 사본은 E열, 실물 구글시트는 D열이라 어긋난 적이 있습니다.' % len(stores))
+# 매장 목록: 구글 통합시트에서 **직접** 읽는다 (2026-08-20).
+#
+# ★ 왜 바꿨는가
+#   전에는 로컬 폴더의 `[감사총무팀_QSC] 통합시트.xlsx` 를 읽었다. 그런데 그 파일은
+#   **참고용으로 받아둔 사본**이지 원본이 아니다. 원본은 항상 구글 스프레드시트다.
+#   사본이 낡으면 옛 매장 목록이 조용히 배포됐다 — 실제로 '창창족발 (창창 창신)' 이
+#   구글에서 '창창 창신' 으로 바뀐 뒤 10일간 앱에 옛 이름이 나갔다.
+#   매장 수(26)는 그대로여서 아래 개수 검사에도 걸리지 않았다.
+#
+# ★ 왜 CSV 인가 (xlsx 내려받기 대신)
+#   gviz CSV 는 파일을 만들지 않고 값만 받는다(17KB vs 679KB). 무엇보다
+#   **숨김 행을 구글이 알아서 걸러서** 보내준다 — 숨김 = 폐점·검사 제외라는 규칙이
+#   시트 쪽에 있으니, 그 판정을 여기서 다시 하지 않는 편이 어긋날 여지가 없다.
+#   (2026-08-20 대조: CSV 26곳 = xlsx 표시행 26곳 = 당시 앱 26곳, 완전 일치)
+#
+# ★ 못 받으면 멈춘다
+#   낡은 목록이 조용히 나가는 것보다 배포가 막히는 편이 낫다. 지금까지의 사고가
+#   전부 '틀린 게 조용히 나가는 것' 이었다.
+import csv as _csv, io as _io, urllib.parse as _up, urllib.request as _ur
+
+SHEET_URL = 'https://docs.google.com/spreadsheets/d/1FSlYCWz4zNToV1hkPUQJvv4RYCBfc1ecf5l46YFD4Qk/edit?gid=448253562#gid=448253562'
+_SHEET_TAB = '데이터'
+_STORE_COL = '매장명'
+
+def _fetch_stores():
+    m = re.search(r'/spreadsheets/d/([A-Za-z0-9_-]+)', SHEET_URL)
+    if not m:
+        raise SystemExit('★중단★ SHEET_URL 에서 시트 ID를 찾지 못했습니다.')
+    url = ('https://docs.google.com/spreadsheets/d/%s/gviz/tq?tqx=out:csv&sheet=%s'
+           % (m.group(1), _up.quote(_SHEET_TAB)))
+    try:
+        req = _ur.Request(url, headers={'User-Agent': 'qsc-extract'})
+        raw = _ur.urlopen(req, timeout=30).read().decode('utf-8')
+    except Exception as e:
+        raise SystemExit('★중단★ 구글 통합시트를 읽지 못했습니다 (%s). '
+                         '인터넷 연결과, 시트 공유가 "링크가 있는 사람은 볼 수 있음" 인지 '
+                         '확인해 주세요.' % e)
+    rows = list(_csv.reader(_io.StringIO(raw)))
+    if not rows:
+        raise SystemExit('★중단★ 구글 통합시트가 비어 있습니다.')
+    hdr = [(h or '').strip() for h in rows[0]]
+    if _STORE_COL not in hdr:
+        raise SystemExit("★중단★ '%s' 열을 찾지 못했습니다. 머리글: %s"
+                         % (_STORE_COL, ', '.join(h for h in hdr[:8] if h)))
+    ci = hdr.index(_STORE_COL)
+    out = []
+    for r in rows[1:]:
+        if len(r) > ci and (r[ci] or '').strip():
+            out.append(r[ci].strip())
+    return out
+
+stores = _fetch_stores()
+print('매장 %d 개 (구글 통합시트 직독 · 숨김 행은 구글이 제외)' % len(stores))
+assert len(stores) >= 20, ('★중단★ 매장이 %d곳뿐입니다 — 구글 통합시트 「%s」 탭의 '
+                           "'%s' 열을 확인하십시오." % (len(stores), _SHEET_TAB, _STORE_COL))
 
 master = {
     'version': XLSX_VERSION,          # 화면에 '평가표 … 기준'으로 뜬다
@@ -186,5 +222,4 @@ with open(OUT, 'w', encoding='utf-8') as f:
 print('QSC', item_no, '문항 /', len(qsc_groups), '그룹 / ★★', sev_count['S1'], '· ★', sev_count['S2'])
 print('쇼퍼', q_no, '문항 /', len(shopper_cats), '카테고리 / 관찰', len(YN_ROWS),
       '· 5점 척도', n_likert, '(행 %d~%d)' % (Q_MIN, Q_MAX))
-print('매장', len(stores), '개 (통합시트 표시 행만, 숨김 = 관리 제외)')
 print('저장:', OUT)
