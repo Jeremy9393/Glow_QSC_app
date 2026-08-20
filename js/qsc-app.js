@@ -117,7 +117,10 @@
       '<div class="seg"><button data-v="0">이상 없음</button><button data-v="NA">NA</button></div>' +
       '<div class="counter"><button class="minus">−</button><span class="cnt empty">–</span><button class="plus">＋</button><span class="cl">건</span></div>' +
       '</div>' +
-      '<div class="meta-row"><span class="score-chip">미확인</span><input type="text" class="memo" placeholder="비고"><button class="photoBtn">사진</button></div>' +
+      /* ★이 칸이 매장에 전달되는 유일한 글이다★ (2026-08-20) — 문항 본문·코드·심각도·건수는
+         매장 시트에 가지 않는다. 그래서 이름이 '비고'가 아니라 '개선요청 내용'이다.
+         건수를 1 이상 넣으면 제출 전에 반드시 채워야 한다(아래 submit 검사). */
+      '<div class="meta-row"><span class="score-chip">미확인</span><input type="text" class="memo" placeholder="개선요청 내용 — 매장에 이 글만 전달됩니다"><button class="photoBtn">사진</button></div>' +
       '<div class="thumbs"></div>';
     $('.q .txt', card).textContent = it.text;
 
@@ -368,6 +371,27 @@
       alert('미확인 문항이 ' + res0.blank + '개 있습니다.\n모든 문항을 확인해 주세요. (해당 없는 문항은 NA)');
       return;
     }
+    /* ★개선 필요 건이 있는 문항은 개선요청 문장이 있어야 한다★ (2026-08-20 사용자 결정)
+       매장 시트에는 문항 본문이 가지 않는다. 이 문장이 비면 매장은 사진만 받고
+       무엇을 고쳐야 하는지 알 길이 없다 — 그래서 제출을 막는다. */
+    const noText = allItems.filter(function (it) {
+      const v = state.values[it.no];
+      return typeof v === 'number' && v >= 1 && !String(state.memos[it.no] || '').trim();
+    });
+    if (noText.length) {
+      alert('개선요청 내용을 적지 않은 문항이 ' + noText.length + '개 있습니다.\n\n' +
+        noText.slice(0, 6).map(function (it) { return '· ' + (it.code ? it.code + ' ' : '') + it.text; }).join('\n') +
+        (noText.length > 6 ? '\n· 외 ' + (noText.length - 6) + '개' : '') +
+        '\n\n매장에는 이 글만 전달됩니다. 무엇을 어떻게 고쳐야 하는지 적어 주세요.');
+      const card = cardEls[noText[0].no];
+      if (card) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const box = card.querySelector('.memo');
+        if (box) box.focus();
+      }
+      return;
+    }
+
     const res = res0;
     let msg = '개선 필요 ' + (res.genCases + res.s1.cases + res.s2.cases) + '건 · NA ' + res.na + '개' +
       '\nQSC ' + res.qsc.toFixed(1) + '점 · ' + res.grade;

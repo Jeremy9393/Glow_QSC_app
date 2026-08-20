@@ -4081,24 +4081,44 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
       (headRow + 1) + '~' + lastRow + '행)에 빈 행이 모자랍니다');
   }
 
+  /* ★매장에 가는 것은 '사진 + 개선요청 문장' 둘뿐이다★ (2026-08-20 사용자 결정)
+
+     종전에는 이렇게 썼다:  [★★ 중대] A-05 원산지 표시… (2건)
+     여기에는 ★채점 근거가 그대로 들어 있었다★ — 심각도 딱지 · 문항 코드 · 문항 본문 · 건수 ·
+     대분류. 매장이 이 한 줄만 보고 "이 문항에서 ★★로 몇 건 걸려 몇 점 깎였구나"를 읽는다.
+
+     ★매장은 QSC 질문지를 알 수 없어야 한다★ — 그래서 전부 뺐다.
+     문항 본문도 뺀다(그 자체가 질문지다). 대분류도 뺀다.
+     매장이 받는 글은 ★점검자가 그 자리에서 직접 쓴 개선요청 문장 하나★뿐이다.
+     그래서 그 문장이 비면 전달이 성립하지 않는다 — 점검 화면이 비운 채로는 제출을 막고,
+     그래도 빈 것이 오면 아래에서 눈에 띄게 적어 담당자가 알아채게 한다.
+
+     채점 근거는 전부 `QSC_회차`·`QSC_상세`(개인 계정 응답 원본)에 그대로 남는다.
+     매장은 그 파일에 접근 자체가 없다. */
   const bc = [], d = [], j = [], imgCells = [];   // imgCells[i] = 그 행에 넣을 사진 파일 ID ('' = 없음)
+  const noText = [];
   list.forEach(function (it) {
     no += 1;
     const photos = photoMap[it.no] || [];
-    const cnt = (typeof it.value === 'number' && it.value > 0) ? ' (' + it.value + '건)' : '';
-    const sev = it.severity === 'S1' ? '[★★ 중대] ' : it.severity === 'S2' ? '[★ 중대] ' : '';
-    // 비고와 2번째 이후 사진은 갈 칸이 없다(표가 O열에서 끝남) → 본문 뒤에 붙인다
-    const tail = (it.memo ? '\n· ' + it.memo : '') +
-      (photos.length > 1 ? '\n· 사진 ' + photos.length + '장: ' +
-        photos.map(function (x) { return x.url; }).join(' ') : '');
-    bc.push([no, safe(it.group || '')]);
+    /* 2번째 이후 사진은 갈 칸이 없다(표가 O열에서 끝남) → 본문 뒤에 붙인다 */
+    const tail = photos.length > 1
+      ? '\n· 사진 ' + photos.length + '장: ' + photos.map(function (x) { return x.url; }).join(' ')
+      : '';
+    const body = String(it.memo == null ? '' : it.memo).trim();
+    if (!body) noText.push(it.code || ('문항 ' + it.no));
+    bc.push([no, '']);   // ★구분(대분류)도 비운다★ — 평가체계의 구조를 드러내지 않는다
     /* ★사진 칸은 여기서 비워 두고 아래에서 따로 넣는다★ — 셀 내 이미지는 setValue로만
        넣는 것이 문서화된 경로다. setValues(2차원 배열)에 객체를 섞는 것은 보장되지 않는다.
        PHOTO_EMBED=false(링크만)이면 종전대로 여기서 문자열로 채운다. */
     d.push([(photos.length && !PHOTO_EMBED) ? photos[0].url : '']);
     imgCells.push(photos.length && PHOTO_EMBED ? photos[0].id : '');
-    j.push([safe(sev + (it.code ? it.code + ' ' : '') + it.text + cnt + tail)]);
+    j.push([safe((body || '(개선요청 내용이 비어 있습니다 — 점검자에게 확인해 주세요)') + tail)]);
   });
+  if (noText.length) {
+    warn.push('개선요청 문장이 비어 있는 항목이 ' + noText.length + '건입니다 (' +
+      noText.slice(0, 5).join(', ') + (noText.length > 5 ? ' 외' : '') +
+      ') — 매장에는 그 자리가 빈 채로 전달됩니다. 시트에서 채워 주세요.');
+  }
 
   /* ⚠B~P를 한 번에 쓰면 안 된다. 데이터 행마다 D:I가 병합돼 있어 E~I 값은 조용히 버려지고,
      무엇보다 **O열(매장이 올린 개선 후 사진)이 빈 값으로 덮여 지워진다.**
