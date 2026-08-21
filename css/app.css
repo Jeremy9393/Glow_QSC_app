@@ -447,6 +447,9 @@ details[open] > .foldHead::before { content: '▾ '; }
 .stTag.done { color: var(--ok); }                            /* 개선 완료 */
 .stTag.prog { color: var(--amber); }                         /* 진행 중 */
 .stTag.todo { color: var(--red); }                           /* 미조치 */
+/* [월 채점 확정] 줄 */
+.closeRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
 /* 검수 줄 — ★본사에게만 만들어진다★(매장 화면에는 이 요소 자체가 없다) */
 .auditRow { display: flex; align-items: center; justify-content: space-between; gap: 8px;
             flex-wrap: wrap; margin-top: 10px; padding-top: 9px; border-top: 1px dashed #333; }

@@ -300,6 +300,12 @@ function actionTable() {
     /* 검수(개선확정·보완 요청) — menu:ADMIN_MENU라 `역할` 탭이 관리자에게만 열어 준다.
        쓰기라 감사로그에 자동으로 남는다 — 설계가 말한 '사유 칸 없이 기록만 남긴다'가 이것이다. */
     'improve.audit':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnImproveAudit },
+    /* 새 서식 원본 탭 만들기 — 10/1 전에 준비해 두는 도구. 기본이 미리보기다. */
+    'store.template':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnStoreTemplate },
+    /* 월 탭 미리 만들기 — 평소엔 점검 제출이 알아서 만든다. 이건 미리 만들거나 다시 만들 때 쓴다. */
+    'store.makeTab':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnStoreMakeTab },
+    /* [월 채점 확정] — 그 달을 닫는다. 기본이 미리보기다. */
+    'month.close':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMonthClose },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -3361,6 +3367,9 @@ function fnStoreGet(ctx, payload, target) {
      readOnly는 권한이, isNew는 그 계정의 최근접속이 정한다. 캐시에 담으면 먼저 연 사람의
      권한·기준선이 다음 사람에게 그대로 간다. */
   out.readOnly = !(prop('STORE_IMPROVE_WRITE', 'false') === 'true' && can(ctx.role, 'store', '쓰기').allow);
+  /* 확정된 달인지 화면이 알아야 [월 채점 확정] 버튼과 검수 버튼을 감출 수 있다.
+     ★캐시 뒤에 붙인다★ — 확정은 캐시(60초)보다 늦게 바뀌면 안 되는 정보다. */
+  try { out.closedAt = monthClosedAt(store, ym) || null; } catch (e) { out.closedAt = null; }
   markNewItems(out.items, store, ym, seenBaseline(ctx.id));
   return out;
 }
@@ -3592,11 +3601,11 @@ function readStoreTab(ss, sh, store, ym) {
     return r;
   }
   const vDate = pick(['방문일', '방문일자', '점검일', '점검일자'], '방문일');
-  const vHyg = pick(['위생점수', 'QSC점수', '위생'], '위생점수');
-  const vCs = pick(['CS점수', 'CS'], 'CS점수');
-  const vTot = pick(['종합점수', '종합'], '종합점수');
-  const vHygG = labelValue(lm, ['위생등급']);
-  const vCsG = labelValue(lm, ['CS등급']);
+  const vHyg = pick(L_QSC, 'QSC점수');
+  const vCs = pick(L_MS, 'MS점수');
+  const vTot = pick(L_TOT, '종합점수');
+  const vHygG = labelValue(lm, L_QSC_G);
+  const vCsG = labelValue(lm, L_MS_G);
   const vTotG = labelValue(lm, ['종합등급', '등급']);
   /* ★별칭 목록에 시트 실물 라벨을 반드시 넣어 둔다★ — labelMap은 완전일치로 찾는다.
      실물 월 탭의 라벨은 '개선요청사항'·'개선예정/진행'인데 종전 목록에는 둘 다 없었다.
@@ -3650,6 +3659,7 @@ function readStoreTab(ss, sh, store, ym) {
         state: jd.state, planDate: jd.planDate || null,
         due: dateOfCell(at(v, g.due), tz) || null,
         waive: at(v, g.waive) === true,
+        rolledOnce: Number(at(v, g.roll) || 0) >= 1,
       });
     }
     cReq++;
@@ -4163,6 +4173,7 @@ function recountSummary(sh, tz) {
         state: jd.state, planDate: jd.planDate || null,
         due: dateOfCell(at(v, g.due), tz) || null,
         waive: at(v, g.waive) === true,
+        rolledOnce: Number(at(v, g.roll) || 0) >= 1,
       });
       if (jd.state === '확정' || jd.state === '완료(검수 전)') done++;
       else if (jd.state === '진행중' || jd.state === '반려' || jd.state === '재제출기한 지남') prog++;
@@ -4319,11 +4330,24 @@ function writeStoreQsc(p, photoMap) {
    여기서 storeFileId를 부르지 않는 것이 그 조건이다. */
 function writeStoreQscInto(ss, p, photoMap, tab) {
   photoMap = photoMap || {};
-  const sh = ss.getSheetByName(tab);
-  if (!sh) return { ok: false, error: '월 탭 없음: ' + tab };
-
   /* 라벨을 못 찾아도 조용히 "저장 완료"가 뜨면 안 된다 — 반환값을 모아 warn으로 올린다 (§9-7) */
   const warn = [];
+
+  /* ★그 달 탭이 없으면 여기서 만든다★ (2026-08-21 사용자 확인)
+     종전에는 '월 탭 없음'으로 되돌아갔고, 담당자가 앱스 스크립트 편집기를 열어
+     makeMonthTabs를 돌려야 했다. 점검을 막 끝내고 현장에 서 있는 사람에게
+     "편집기를 여세요"는 성립하지 않는 안내다.
+     ★만든 사실을 반드시 알린다★ — 조용히 생기면 원본이 잘못 잡혔을 때 아무도 모른다. */
+  let sh = ss.getSheetByName(tab);
+  if (!sh) {
+    let made;
+    try { made = makeMonthTabIn(ss, tab); }
+    catch (e) { return { ok: false, error: tab + ' 탭을 만들지 못했습니다: ' + String(e).slice(0, 80) }; }
+    sh = ss.getSheetByName(tab);
+    if (!sh) return { ok: false, error: tab + ' 탭을 만들지 못했습니다 — ' + made.msg };
+    if (made.mark === '✗') return { ok: false, error: tab + ' 탭을 만들다 실패했습니다 — ' + made.msg };
+    warn.push(tab + ' 탭이 없어 새로 만들었습니다 (' + made.msg + ')');
+  }
   /* ★재제출은 덮어쓴다★ (2026-08-18 사용자 결정)
      종전에는 무조건 이어 붙였다. 그래서 실수로 한 번 더 제출하면 개선요청이 두 벌 쌓이고,
      =COUNTA가 두 벌을 세어 개선율이 반토막 났다.
@@ -4342,8 +4366,8 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
 
   if (!setByLabel(sh, '방문일', p.date)) warn.push("'방문일' 라벨을 찾지 못했습니다");
   if (p.time) setByLabel(sh, '방문시간', p.time); // 월 탭에 라벨이 없으면 조용히 건너뜀
-  if (p.result.final != null && !setByLabel(sh, '위생점수', p.result.final / 100)) {
-    warn.push("'위생점수' 라벨을 찾지 못했습니다");
+  if (p.result.final != null && !setByLabelAny(sh, L_QSC, p.result.final / 100)) {
+    warn.push("'QSC점수'(옛 '위생점수') 라벨을 찾지 못했습니다");
   }
 
   // 개선요청 표: B열에서 'NO.' 헤더 행을 찾고, J열 첫 빈 행부터 개선 필요 문항(1건 이상)을 추가
@@ -4522,13 +4546,23 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
 function writeStoreShopper(store, dateStr, frac) {
   const id = storeFileId(store);
   if (!id) return { ok: false, error: STORE_MAP_SHEET + '에 매장 없음: ' + store };
-  const sh = SpreadsheetApp.openById(id).getSheetByName(yymm(dateStr));
-  if (!sh) return { ok: false, error: '월 탭 없음: ' + yymm(dateStr) };
+  /* ★탭이 없으면 만든다★ — 쇼퍼가 점검보다 먼저 올 수 있다(CS도 그 달 점수의 일부다).
+     writeStoreQscInto와 같은 이유다: 담당자에게 "편집기를 여세요"라고 할 수 없다. */
+  const ss0 = SpreadsheetApp.openById(id);
+  const tab0 = yymm(dateStr);
+  let sh = ss0.getSheetByName(tab0);
+  if (!sh) {
+    let made0;
+    try { made0 = makeMonthTabIn(ss0, tab0); }
+    catch (e) { return { ok: false, error: tab0 + ' 탭을 만들지 못했습니다: ' + String(e).slice(0, 80) }; }
+    sh = ss0.getSheetByName(tab0);
+    if (!sh || made0.mark === '✗') return { ok: false, error: tab0 + ' 탭을 만들지 못했습니다 — ' + made0.msg };
+  }
   /* 라벨을 못 찾았을 때 { ok:false } 만 돌려주면 화면에는 아무것도 안 뜬다(§9-7).
      QSC 쪽과 같은 모양으로 warn을 실어 프론트가 그대로 보여줄 수 있게 한다. */
-  if (!setByLabel(sh, 'CS점수', frac)) {
-    return { ok: false, error: "'CS점수' 라벨을 찾지 못해 매장 파일에 기록하지 못했습니다.",
-      warn: ["'CS점수' 라벨을 찾지 못했습니다"] };
+  if (!setByLabelAny(sh, L_MS, frac)) {
+    return { ok: false, error: "'MS점수'(옛 'CS점수') 라벨을 찾지 못해 매장 파일에 기록하지 못했습니다.",
+      warn: ["'MS점수'(옛 'CS점수') 라벨을 찾지 못했습니다"] };
   }
   return { ok: true, warn: [] };
 }
@@ -5148,8 +5182,13 @@ function impRate(recs) {
     issued++;
     if (r.waive) { waived++; return; }
     if (r.state === '확정' || r.state === '완료(검수 전)') { done++; return; }
+    /* ★진행중·보완 요청은 그 달 분모에서 빼고 다음 달로 넘긴다★ (설계 §4 · §1-7 ⑥)
+       ★단 한 사이클만이다★ — 이미 한 번 이월된 건(T열≥1)은 더 미루지 않고 분모에 남긴다.
+       그러지 않으면 '진행중'이라고만 적어 두면 영원히 점수에서 빠지는 길이 생긴다.
+       (예정일이 지나면 impJudge가 이미 '미조치'로 가르므로 여기까지 오지 않는다) */
+    if (r.rolledOnce) return;                       // 두 번째부터는 분모에 남는다
     if (r.state === '반려' || r.state === '재제출기한 지남') { rolled++; return; }
-    if (r.state === '진행중' && r.planDate && r.due && r.planDate > r.due) { rolled++; return; }
+    if (r.state === '진행중') { rolled++; return; }
   });
   const denom = issued - waived - rolled;
   return {
@@ -5360,10 +5399,11 @@ function upgradeMonthTab(sh, dry) {
 
 function makeMonthTabIn(ss, ym) {
   if (ss.getSheetByName(ym)) return { mark: '·', msg: '이미 있음' };
-  const tabs = monthTabs(ss).filter(function (t) { return t < ym; });
-  if (!tabs.length) return { mark: '✗', msg: '복제할 직전 월 탭 없음' };
-  const src = ss.getSheetByName(tabs[0]);
-  const sh = src.copyTo(ss);          // 이름이 "2608의 사본"이 된다
+  const pick = tabSourceFor(ss, ym);
+  if (!pick.sh) return { mark: '✗', msg: pick.why };
+  const src = pick.sh;
+  const srcName = src.getName();
+  const sh = src.copyTo(ss);          // 이름이 "…의 사본"이 된다
   sh.setName(ym);                     // ★setName 필수★
   /* ★여기부터 끝까지를 한 덩어리로 묶는다★ (지적 1 · 2026-08-20)
      copyTo + setName 까지는 끝났으므로 이 시점에 예외가 나면 ym 탭은 ★직전 달 데이터를
@@ -5387,22 +5427,8 @@ function makeMonthTabIn(ss, ym) {
        복제 원본이 9월 탭이면 옛 수식이 그대로 따라오므로 여기서 갈아 끼운다.
        ★칸을 라벨로 찾는다★ — 파일마다 열이 다를 수 있다(위생 E3·CS G3·종합 I3·개선율 H9가 실물). */
     if (ym >= '2610') {
-      try {
-        const lmF = labelMap(sh);
-        const cH = labelValue(lmF, ['위생점수', 'QSC점수', '위생']);
-        const cC = labelValue(lmF, ['CS점수', 'CS']);
-        const cT = labelValue(lmF, ['종합점수', '종합']);
-        const cR = labelValue(lmF, ['개선율']);
-        if (cH.found && cC.found && cT.found && cR.found) {
-          const a1 = function (pv) { return grid(sh, pv.row, pv.col, 1, 1).getA1Notation(); };
-          /* ★개선율이 비면 1(100%)로 본다★ — 개선율은 완료÷요청이라 ★요청이 0건이면 빈칸★이다.
-             그때 0으로 치면 지적이 하나도 없는 매장이 10%를 통째로 못 받아 오히려 손해를 본다.
-             개선할 것이 없었다는 뜻이므로 만점이 맞다. (통합시트 CA열 수식도 같은 규칙이다) */
-          const f = '=IF(COUNT(' + a1(cH) + ',' + a1(cC) + ')=0,"",' +
-            a1(cH) + '*0.6+' + a1(cC) + '*0.3+IF(' + a1(cR) + '="",1,' + a1(cR) + ')*0.1)';
-          grid(sh, cT.row, cT.col, 1, 1).setFormula(f);
-        }
-      } catch (e) { /* 못 바꿔도 탭 생성 자체는 성공시킨다 — 수식은 눈으로 고칠 수 있다 */ }
+      renameScoreLabels(sh);   // 원본이 이미 새 이름이면 아무 일도 안 한다
+      setTotalFormula(sh);     // 못 바꿔도 탭 생성 자체는 성공시킨다 — 수식은 눈으로 고칠 수 있다
     }
 
     /* ★제목을 이번 달로 고쳐 쓴다★ — D2가 고정 텍스트라 복제하면 "8월 QSC 현황"이 그대로
@@ -5415,31 +5441,7 @@ function makeMonthTabIn(ss, ym) {
         t2.setValue(cur2.replace(/^\s*\d{1,2}\s*월/, Number(ym.slice(2, 4)) + '월'));
       }
     } catch (e) { }
-    /* ① 개선요청 표 본문
-       ★지우는 폭을 시트에 물어서 정한다★ — 종전에는 B부터 14칸(B~O)으로 박혀 있었다.
-         2611을 2610에서 복제하면 새로 붙인 검수·재제출기한·감점제외·이월이 그 폭 밖이라
-         ★지난 달 검수 결과를 그대로 안은 채 새 달이 태어난다★. 아무도 눈치채지 못한다. */
-    const c0 = impCols(sh);
-    const wipeLast = c0.ok ? Math.max(c0.memo, c0.roll || 0) : 15;   // 못 읽으면 종전대로 O열까지
-    const bodyRng = grid(sh, 12, 2, sh.getMaxRows() - 11, Math.max(1, wipeLast - 1));
-    if (bodyRng) bodyRng.clearContent();
-    // ② 라벨 옆 값 칸 중 수식이 아닌 것
-    const lm = labelMap(sh);
-    /* ★요약 건수 칸을 반드시 함께 지운다★ — 종전 목록에는 방문일·점수·등급만 있어서,
-       I5~I8이 수기인 파일은 10월 탭이 8월의 '요청 5 / 완료 4'를 안고 태어난다. 개선요청
-       표(B12 이하)는 비었는데 요약은 값이 있으므로 readStoreTab의 폴백(라벨을 못 찾을 때만
-       작동)도 걸리지 않는다 → 매장 화면에 "개선율 80%", 표는 빈 상태.
-       수식이면 아래 getFormula 검사가 어차피 건너뛴다. */
-    ['방문일', '방문일자', '점검일', '방문시간', '위생점수', 'CS점수', '종합점수',
-      '위생등급', 'CS등급', '종합등급',
-      '개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수',
-      '개선예정/진행', '개선예정', '개선진행', '진행중', '진행',
-      '개선완료', '조치완료', '완료', '미조치', '미이행'].forEach(function (label) {
-        const p = labelValue(lm, [label]);
-        if (!p.found || !p.row) return;
-        const c = grid(sh, p.row, p.col, 1, 1);
-        if (c && String(c.getFormula() || '') === '') c.clearContent();
-      });
+    clearMonthBody(sh);
     /* ★서식을 새 것으로 올린다 (2610~)★ — 반드시 본문을 지운 다음이다.
        위 clearContent가 상태 수식까지 지우므로 여기서 다시 깔아 준다(upgradeMonthTab은 몇 번을
        돌려도 같은 결과가 되게 만들어 두었다). 실패하면 위 catch로 던져 ★탭을 통째로 되돌린다★ —
@@ -5463,7 +5465,7 @@ function makeMonthTabIn(ss, ym) {
       const bad = pr.filter(function (x) { return !x.canEdit(); });
       if (bad.length) { mark = '✗'; note = '  ★보호 ' + bad.length + '건 — 이 매장은 저장되지 않습니다★'; }
     } catch (e2) { note = '  (보호 확인 실패)'; }
-    return { mark: mark, msg: tabs[0] + ' → ' + ym + upNote + note };
+    return { mark: mark, msg: srcName + '(' + pick.why + ') → ' + ym + upNote + note };
   } catch (e) {
     let removed = false;
     try { ss.deleteSheet(sh); removed = true; } catch (e2) { }
@@ -5480,6 +5482,497 @@ function makeMonthTabIn(ss, ym) {
      사라진다. 지워야 하는 것은 '데이터'이므로 ① 개선요청 표 본문(B12 이하)과 ② 라벨 옆
      값 칸 중 수식이 아닌 것만 지운다. 수식(개선율 등)은 그대로 두어야 새 달에도 계산된다.
    파일당 3~6초라 반드시 10곳씩. makeMonthTabs(['금종제과'], '2610') 으로 1곳 선검증할 것. */
+/* ---------- 새 서식 원본 탭 (2026-08-21) ----------
+
+   ★왜 필요한가★ — 10/1에 앱이 만드는 10월 탭은 ★직전 달 탭★을 복제한다(makeMonthTabIn).
+   원본은 안 쓴다. 그런데 사람이 손으로 만들 때(앱이 안 될 때·새 매장이 생길 때)는 원본을 쓴다.
+   그때 옛 원본을 쓰면 ★기한·상태·검수 칸이 없는 탭★이 태어나고, 그 매장만 조용히 어긋난다.
+   개선율도 안 맞게 된다. 그래서 새 서식 원본을 미리 만들어 두고 10월부터 그것을 쓴다.
+
+   ★옛 원본은 지우지 않는다★ — 9월까지의 탭은 옛 서식이고, 그 달을 손볼 일이 남아 있다.
+   쓰지 않고 그대로 둔다.
+
+   ⚠새 원본도 ★숨긴 채★ 만든다(옛 원본과 같다). 숨긴 탭을 복사하면 새 탭도 숨겨진 채 태어나므로,
+     손으로 만든 뒤에는 반드시 숨김을 풀어야 한다 — 안 그러면 매장이 시트를 열었을 때
+     그 달이 통째로 안 보인다. (자동 경로는 makeMonthTabIn이 showSheet()로 막아 둔다) */
+const TPL_NEW = '0QSC현황(원본_2610~)';
+
+/* ---------- 점수 라벨 (2026-08-21 사용자 결정) ----------
+
+   10월 탭부터 이름을 바꾼다:  위생점수 → **QSC점수**  ·  CS점수 → **MS점수**
+                              위생등급 → **QSC등급**  ·  CS등급 → **MS등급**
+
+   ★1~9월 탭은 건드리지 않는다★ — 이미 확정된 기록이고, 되돌리기 어렵다.
+   그래서 코드는 ★두 이름을 다 알아본다★. 별칭 목록에서 새 이름을 앞에 둔다(먼저 찾는다).
+   한 곳에 모아 두는 이유는, 읽는 곳·쓰는 곳·지우는 곳이 따로 목록을 들고 있으면
+   한 군데만 고쳐져 "읽기는 되는데 쓰기는 안 되는" 상태가 되기 때문이다. */
+const L_QSC = ['QSC점수', '위생점수', '위생'];
+const L_MS = ['MS점수', 'CS점수', 'CS'];
+const L_QSC_G = ['QSC등급', '위생등급'];
+const L_MS_G = ['MS등급', 'CS등급'];
+const L_TOT = ['종합점수', '종합'];
+const L_RATE = ['개선율'];
+const SCORE_RENAME = [
+  ['위생점수', 'QSC점수'], ['CS점수', 'MS점수'],
+  ['위생등급', 'QSC등급'], ['CS등급', 'MS등급'],
+];
+
+/* 라벨을 새 이름으로 바꾼다. ★옛 이름이 있을 때만★ 손대므로 몇 번 돌려도 같은 결과다. */
+function renameScoreLabels(sh) {
+  const done = [];
+  const lm = labelMap(sh);
+  SCORE_RENAME.forEach(function (pair) {
+    const at = lm.at[pair[0]];
+    if (!at) return;
+    if (lm.at[pair[1]]) return;                 // 새 이름이 이미 있으면 건드리지 않는다
+    try {
+      grid(sh, at.row, at.col, 1, 1).setValue(pair[1]);
+      done.push(pair[0] + '→' + pair[1]);
+    } catch (e) { }
+  });
+  return done;
+}
+
+/* 종합점수 = QSC×0.6 + MS×0.3 + 개선율×0.1  (2026-08-21 사용자 확인)
+
+   ★개선율이 비면 1(100%)로 본다★ — 개선율은 완료÷요청이라 요청이 0건이면 빈칸이다.
+   그때 0으로 치면 지적이 하나도 없는 매장이 10%를 통째로 못 받아 오히려 손해를 본다.
+   (통합시트 CA열·impRate도 같은 규칙이다 — 세 곳이 갈라지면 안 된다)
+
+   ★칸을 라벨로 찾는다★ — 파일마다 열이 다를 수 있다. 하나라도 못 찾으면 손대지 않는다. */
+function setTotalFormula(sh) {
+  try {
+    const lmF = labelMap(sh);
+    const cH = labelValue(lmF, L_QSC);
+    const cC = labelValue(lmF, L_MS);
+    const cT = labelValue(lmF, L_TOT);
+    const cR = labelValue(lmF, L_RATE);
+    if (!(cH.found && cC.found && cT.found && cR.found)) return false;
+    const a1 = function (pv) { return grid(sh, pv.row, pv.col, 1, 1).getA1Notation(); };
+    const f = '=IF(COUNT(' + a1(cH) + ',' + a1(cC) + ')=0,"",' +
+      a1(cH) + '*0.6+' + a1(cC) + '*0.3+IF(' + a1(cR) + '="",1,' + a1(cR) + ')*0.1)';
+    grid(sh, cT.row, cT.col, 1, 1).setFormula(f);
+    return true;
+  } catch (e) { return false; }
+}
+
+/* 별칭 중 먼저 찾은 라벨 옆에 쓴다 — setByLabel의 별칭판 */
+function setByLabelAny(sh, names, value) {
+  for (let i = 0; i < names.length; i++) {
+    if (setByLabel(sh, names[i], value)) return true;
+  }
+  return false;
+}
+
+/* 월 탭을 만들 때 ★어느 탭을 복제할 것인가★ (2026-08-21 사용자 확인)
+
+   ★원본을 뜬다★ — 문수가 실제로 그렇게 해 왔다(보호·숨김해 둔 원본을 복사해 이름만 바꾼다).
+   직전 달을 복제하면 지난 달의 보호 설정·행 높이·남은 서식이 그대로 딸려 오고,
+   지우는 코드가 놓친 것은 조용히 새 달에 남는다.
+
+     ym >= 2610 → 새 원본(0QSC현황(원본_2610~))  · 없으면 옛 원본
+     ym <  2610 → 옛 원본
+     원본이 아예 없으면 → ★직전 달 탭★ (종전 방식. 없는 것보다는 낫다)
+
+   ★원본은 숨김이다★ — 복제하면 새 탭도 숨겨진 채 태어난다. 부르는 쪽에서 showSheet()를
+   반드시 해야 한다(makeMonthTabIn이 조건 없이 부른다). */
+/* 월 탭 하나를 ★빈 상태로★ 만든다 — 복제 직후에 부른다.
+   makeMonthTabIn(새 달)과 templateTabIn(새 원본)이 이 함수 하나를 같이 쓴다.
+   두 벌로 두면 한쪽만 고쳐져 "원본은 깨끗한데 새 달은 아니다"가 된다. */
+function clearMonthBody(sh) {
+  /* ① 개선요청 표 본문
+     ★지우는 자리와 폭을 시트에 물어서 정한다★ — 종전에는 '12행부터 B~O 14칸'으로 박혀 있었다.
+       ·폭: 2611을 2610에서 복제하면 새로 붙인 검수·재제출기한·감점제외·이월이 그 폭 밖이라
+            ★지난 달 검수 결과를 그대로 안은 채 새 달이 태어난다★.
+       ·행: 머리글 줄 수가 다른 탭(옛 원본은 두 줄 짧다)에서는 12행이 본문 첫 줄이 아니다. */
+  const c0 = impCols(sh);
+  const row0 = c0.ok ? c0.row0 : 12;
+  const wipeLast = c0.ok ? Math.max(c0.memo, c0.roll || 0) : 15;   // 못 읽으면 종전대로 O열까지
+  const bodyRng = grid(sh, row0, 2, Math.max(1, sh.getMaxRows() - row0 + 1), Math.max(1, wipeLast - 1));
+  if (bodyRng) bodyRng.clearContent();
+
+  // ② 라벨 옆 값 칸 중 수식이 아닌 것
+  const lm = labelMap(sh);
+  /* ★요약 건수 칸을 반드시 함께 지운다★ — 종전 목록에는 방문일·점수·등급만 있어서,
+     I5~I8이 수기인 파일은 10월 탭이 8월의 '요청 5 / 완료 4'를 안고 태어난다. 개선요청
+     표는 비었는데 요약은 값이 있으므로 readStoreTab의 폴백(라벨을 못 찾을 때만 작동)도
+     걸리지 않는다 → 매장 화면에 "개선율 80%", 표는 빈 상태.
+     수식이면 아래 getFormula 검사가 어차피 건너뛴다. */
+  ['방문일', '방문일자', '점검일', '방문시간',
+    'QSC점수', 'MS점수', '위생점수', 'CS점수', '종합점수',
+    'QSC등급', 'MS등급', '위생등급', 'CS등급', '종합등급',
+    '개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수',
+    '개선예정/진행', '개선예정', '개선진행', '진행중', '진행',
+    '개선완료', '조치완료', '완료', '미조치', '미이행'].forEach(function (label) {
+      const p = labelValue(lm, [label]);
+      if (!p.found || !p.row) return;
+      const c = grid(sh, p.row, p.col, 1, 1);
+      if (c && String(c.getFormula() || '') === '') c.clearContent();
+    });
+}
+
+function tabSourceFor(ss, ym) {
+  const shs = ss.getSheets();
+  const isTpl = function (n) { return !/^\d{4}$/.test(n) && n.indexOf('원본') >= 0; };
+  let neo = null, old = null;
+  shs.forEach(function (x) {
+    const n = x.getName().trim();
+    if (!isTpl(n)) return;
+    if (n === TPL_NEW) neo = x; else if (!old) old = x;
+  });
+  if (neo) return { sh: neo, why: '새 원본' };
+  /* ★옛 원본은 뒤로 미룬다★ (2026-08-21 확인) — 지금 쓰는 월 탭보다 오래된 서식이다.
+     점수 라벨이 `QSC`·`MS`(월 탭은 `위생점수`·`CS점수`)이고 머리글이 두 줄 짧다.
+     그것을 복제하면 앱이 점수를 적을 자리를 못 찾아 ★점수 칸이 빈 채로 남는다★.
+     직전 달 탭이 있으면 그쪽이 훨씬 낫다. */
+  const tabs = monthTabs(ss).filter(function (t) { return t < ym; });
+  if (tabs.length) return { sh: ss.getSheetByName(tabs[0]), why: '직전 달 ' + tabs[0] };
+  if (old) return { sh: old, why: '★옛 원본★(직전 달 탭이 없습니다 — 점수 라벨을 확인하십시오)' };
+  return { sh: null, why: '복제할 탭이 없습니다 — 직전 달 탭도 원본도 못 찾았습니다' };
+}
+
+function templateTabIn(ss, dry, rebuild) {
+  const names = ss.getSheets().map(function (x) { return x.getName().trim(); });
+
+  /* 이미 만들어 두었으면 서식만 다시 깔아 끼운다 — 몇 번을 돌려도 같은 결과가 되게.
+     rebuild=true 면 지우고 처음부터 다시 만든다(잘못된 원본에서 뜬 것을 고칠 때). */
+  const exist = ss.getSheetByName(TPL_NEW);
+  if (exist && !rebuild) {
+    if (dry) return { mark: '·', msg: '이미 있습니다 — 서식만 다시 확인합니다', tabs: names };
+    const up2 = upgradeMonthTab(exist);
+    return up2.ok
+      ? { mark: '·', msg: '이미 있어 서식만 다시 맞췄습니다', tabs: names }
+      : { mark: '✗', msg: '이미 있는데 서식을 못 맞췄습니다: ' + up2.why, tabs: names };
+  }
+
+  /* ★최신 월 탭에서 뜬다★ (2026-08-21 확인) — 옛 원본은 지금 쓰는 월 탭보다 오래된 서식이다.
+     점수 라벨이 `QSC`·`MS`이고 머리글이 두 줄 짧아서, 그것을 복제하면 앱이 위생점수·CS점수를
+     적을 자리를 못 찾는다. 새 원본은 ★지금 쓰는 서식의 빈 탭★이어야 한다.
+     그래서 최신 월 탭을 복제하고 내용만 비운다(clearMonthBody). */
+  const tabs2 = monthTabs(ss);
+  if (!tabs2.length) return { mark: '✗', msg: '월 탭이 하나도 없어 원본을 뜰 수 없습니다', tabs: names };
+  const src = ss.getSheetByName(tabs2[0]);
+  if (dry) {
+    return { mark: '·', tabs: names,
+      msg: (exist ? '다시 만듭니다 — ' : '') + src.getName() + '(최신 월 탭) → ' + TPL_NEW + ' · 내용은 비웁니다' };
+  }
+  if (exist) {
+    try { ss.deleteSheet(exist); }
+    catch (e) { return { mark: '✗', msg: '옛 것을 지우지 못했습니다: ' + String(e).slice(0, 60), tabs: names }; }
+  }
+
+  const sh = src.copyTo(ss);
+  sh.setName(TPL_NEW);
+  try {
+    clearMonthBody(sh);
+    /* ★원본 단계에서 이름과 산식을 바꿔 둔다★ — 그래야 이 원본에서 뜨는 10월 이후 탭이
+       처음부터 QSC점수·MS점수와 새 종합 산식을 갖고 태어난다. 1~9월 탭은 손대지 않는다. */
+    const ren = renameScoreLabels(sh);
+    const tot = setTotalFormula(sh);
+    const up = upgradeMonthTab(sh);
+    if (!up.ok) throw new Error(up.why);
+    try { sh.hideSheet(); } catch (e) { }
+    return {
+      mark: tot ? '✓' : '✗', tabs: names.concat([TPL_NEW]),
+      msg: src.getName() + '(최신 월 탭) → ' + TPL_NEW +
+        (ren.length ? ' · ' + ren.join(', ') : ' · 이름은 이미 새 것') +
+        (tot ? ' · 종합 산식 ✓' : ' ★종합 산식을 못 넣었습니다 — 라벨을 확인하십시오★'),
+    };
+  } catch (e) {
+    /* ★반쯤 만든 탭을 남기지 않는다★ — 다음에 돌리면 '이미 있음'으로 건너뛰어 영영 옛 서식으로 남는다 */
+    let removed = false;
+    try { ss.deleteSheet(sh); removed = true; } catch (e2) { }
+    return {
+      mark: '✗', tabs: names,
+      msg: (removed ? '실패해서 되돌렸습니다: ' : '★실패했는데 되돌리지도 못했습니다 — 시트에서 「' + TPL_NEW + '」 탭을 지워 주세요★ ')
+        + String(e.message || e).slice(0, 80),
+    };
+  }
+}
+
+/* ---------- 월 채점 확정 (2026-08-21) ----------
+
+   [월 채점 확정]을 누르면 그 달이 닫힌다:
+
+     ① 미검수 건 일괄 자동확정   — 완료 보고가 있는데 검수를 안 한 건은 '확정'으로 본다
+                                   (설계 §4: 검수는 의무가 아니다. 안 누른 건은 확정으로 친다)
+     ② 상태를 ★값으로 굳힌다★   — 수식은 TODAY()를 보므로 그냥 두면 지난 달을 열 때마다 바뀐다
+     ③ 미조치 확정               — '기한 지남'·'예정일 지남'이 이때 '미조치'가 된다
+     ④ 이월 표시(T열)            — 분모에서 뺀 건은 다음 달로 넘어간다. ★한 사이클만★
+     ⑤ 개선율 계산 → 요약에 기입
+     ⑥ 잠금                      — ★이월된 줄의 매장 칸만 열어 둔다★
+                                   안 그러면 이월 건은 영원히 답할 수 없다(§1-8)
+
+   ★확정 후 점수는 불변이다★ (§1-7 ⑪) — 늦은 완료 보고는 점수에 반영되지 않고,
+   그 건은 다음 점검에서 확인한다.
+
+   확정 사실은 ★스크립트 속성★에 남긴다(`MC:<매장>:<ym>`). 시트에 칸을 새로 만들지 않는 이유는,
+   26개 파일의 요약 서식이 조금씩 다른데 없는 자리를 억지로 만들면 그 파일만 어긋나기 때문이다. */
+const MC_PREFIX = 'MC:';
+
+function monthClosedAt(key, ym) {
+  try { return prop(MC_PREFIX + key + ':' + ym, ''); } catch (e) { return ''; }
+}
+
+/* 그 달 탭을 잠근다. openRows = 열어 둘 본문 행 번호(이월된 줄).
+   ★protectMonthTabsIn과 같은 규율을 따른다★ — 자리를 모르면 손대지 않고, 옛 보호를 못 지우면
+   새로 걸지 않고, 걸고 나서 다시 읽어 확인한다. 반쯤 걸린 보호는 되돌린다. */
+function lockMonthTab(sh, openRows) {
+  const box = storeCellsIn(sh);
+  if (!box.ok) return { ok: false, why: box.why + ' — 손대지 않았습니다' };
+  const cl = clearProtections(sh);
+  if (cl.left) return { ok: false, why: '못 지운 보호 ' + cl.left + '건 — 시트에서 직접 풀어야 합니다' };
+
+  const me = (function () { try { return Session.getEffectiveUser().getEmail(); } catch (e) { return ''; } })();
+  const rows = (openRows || []).filter(function (r) { return r >= box.row0 && r <= box.endRow; });
+  let pr = null;
+  try {
+    pr = sh.protect().setDescription('QSC — 월 채점 확정 (이월 ' + rows.length + '건만 열림)');
+    pr.setUnprotectedRanges(rows.map(function (r) { return sh.getRange(r, box.col0, 1, box.cols); }));
+    try { pr.setWarningOnly(false); } catch (e) { }
+    try { pr.setDomainEdit(false); } catch (e) { }
+    if (me) { try { pr.addEditor(me); } catch (e) { } }
+    try {
+      const others = pr.getEditors().map(function (u) { return u.getEmail(); })
+        .filter(function (e) { return e && e !== me; });
+      if (others.length) pr.removeEditors(others);
+    } catch (e) { }
+  } catch (e) {
+    if (pr) { try { pr.remove(); } catch (e2) { } }
+    return { ok: false, why: String(e).slice(0, 80) + ' — 건 보호는 되돌렸습니다' };
+  }
+
+  /* ★다시 읽어 확인한다★ — 방금 만든 객체에게 묻지 않는다 */
+  try {
+    const sp = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+    const rp = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE);
+    if (sp.length !== 1) return { ok: false, why: '시트 보호가 ' + sp.length + '건입니다' };
+    if (rp.length) return { ok: false, why: '범위 보호가 ' + rp.length + '건 남았습니다' };
+    const open = sp[0].getUnprotectedRanges().map(function (r) { return r.getA1Notation(); });
+    if (open.length !== rows.length) {
+      return { ok: false, why: '열린 칸이 ' + open.length + '개 — ' + rows.length + '개여야 합니다' };
+    }
+    if (!sp[0].canEdit()) return { ok: false, why: '스크립트 계정이 이 보호를 편집할 수 없습니다' };
+    return { ok: true, open: open };
+  } catch (e) {
+    return { ok: false, why: '확인 중 오류: ' + String(e).slice(0, 50) };
+  }
+}
+
+function fnMonthClose(ctx, payload) {
+  const p = payload || {};
+  const ym = String(p.ym || '').trim();
+  const apply = p.apply === true;
+  if (!validYm(ym)) return err('BAD_REQUEST', 'ym 형식이 올바르지 않습니다 (예: 2610)');
+
+  let ss, key;
+  if (p.fileId) {
+    try { ss = SpreadsheetApp.openById(String(p.fileId)); }
+    catch (e) { return err('BAD_REQUEST', '그 ID로 파일을 열지 못했습니다'); }
+    if (String(ss.getName()).indexOf('_연동테스트') < 0) {
+      return err('FORBIDDEN', '파일 ID로는 이름에 _연동테스트가 있는 사본만 다룰 수 있습니다: ' + ss.getName());
+    }
+    key = ss.getName();
+  } else {
+    const store = normStore(p.store || '');
+    if (!store) return err('BAD_REQUEST', '매장을 지정해 주세요');
+    const id = storeFileId(store);
+    if (!id) return err('NOT_FOUND', '매장 파일을 찾지 못했습니다.');
+    ss = SpreadsheetApp.openById(id);
+    key = store;
+  }
+
+  const sh = ss.getSheetByName(ym);
+  if (!sh) return err('NOT_FOUND', ym + ' 탭이 없습니다.');
+  const g = impGeo(sh);
+  if (!g.isNew) return err('CONFLICT', '이 달 탭은 아직 새 서식이 아닙니다 — 확정할 수 없습니다.');
+
+  const already = monthClosedAt(key, ym);
+  if (already && !p.again) {
+    return err('CONFLICT', ym + '은 이미 ' + already + '에 확정했습니다. 다시 확정하려면 again:true 를 주십시오.');
+  }
+
+  const tz = fileTz(ss);
+  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const n = g.endRow - g.row0 + 1;
+  if (n <= 0) return err('CONFLICT', '표 본문이 비어 있습니다');
+
+  const rng = grid(sh, g.row0, 2, n, Math.max(14, g.last - 1));
+  if (!rng) return err('SERVER_ERROR', '표를 읽지 못했습니다');
+  const vals = rng.getValues();
+  const at = function (row, col) { return row[col - 2]; };
+
+  const judged = [], plan = [], openRows = [];
+  const auditCol = [], stateCol = [], rollCol = [];
+  for (let i = 0; i < vals.length; i++) {
+    const v = vals[i];
+    const row = g.row0 + i;
+    const body = String(at(v, g.body) == null ? '' : at(v, g.body)).trim();
+    if (!body) { auditCol.push([at(v, g.audit)]); stateCol.push(['']); rollCol.push([at(v, g.roll)]); continue; }
+
+    let audit = String(at(v, g.audit) == null ? '' : at(v, g.audit)).trim();
+    const doneNote = String(at(v, g.done) == null ? '' : at(v, g.done)).trim();
+    /* ① 미검수 자동확정 — 완료 보고가 있는데 검수를 안 한 건 */
+    if (!audit && doneNote) { audit = '확정'; plan.push(row + '행 자동확정'); }
+
+    const jd = impJudge({
+      audit: audit, redo: at(v, g.redo), doneNote: doneNote,
+      plan: at(v, g.plan), planRaw: at(v, g.plan), due: at(v, g.due),
+    }, today, tz, ym, true);
+
+    const rolledOnce = Number(at(v, g.roll) || 0) >= 1;
+    const rec = {
+      state: jd.state, planDate: jd.planDate || null,
+      due: dateOfCell(at(v, g.due), tz) || null,
+      waive: at(v, g.waive) === true, rolledOnce: rolledOnce,
+    };
+    judged.push(rec);
+
+    /* ④ 이월 — 분모에서 빠지는 건만. 한 사이클만이므로 이미 이월된 건은 더 늘리지 않는다 */
+    const rolls = !rec.waive && !rolledOnce &&
+      (jd.state === '반려' || jd.state === '재제출기한 지남' || jd.state === '진행중');
+    rollCol.push([rolls ? 1 : (rolledOnce ? Number(at(v, g.roll)) : '')]);
+    if (rolls || rolledOnce) { openRows.push(row); plan.push(row + '행 이월 — 매장 칸을 열어 둡니다'); }
+
+    auditCol.push([audit]);
+    stateCol.push([jd.state]);   // ② 상태를 값으로
+  }
+
+  const calc = impRate(judged);
+  plan.push('개선율 ' + (calc.rate == null ? '—' : Math.round(calc.rate * 100) + '%') +
+    ' (발행 ' + calc.issued + ' · 완료 ' + calc.done + ' · 제외 ' + calc.waived + ' · 이월 ' + calc.rolled + ' · 분모 ' + calc.denom + ')');
+  plan.push('이월 ' + openRows.length + '건의 매장 칸만 열고 나머지는 잠급니다');
+
+  if (!apply) return { ok: true, dry: true, store: key, ym: ym, plan: plan, rate: calc, closedAt: already || null };
+
+  const lock = LockService.getScriptLock();
+  let got = false;
+  try { got = lock.tryLock(25000); } catch (e) { got = false; }
+  if (!got) return err('CONFLICT', '다른 처리가 진행 중입니다. 잠시 후 다시 시도해 주세요.');
+  try {
+    /* ★잠그기 전에 쓴다★ — 순서를 뒤집으면 보호가 걸린 뒤라 스크립트가 자기 글을 못 쓴다.
+       (스크립트는 보호 편집자로 들어가지만, 그 등록이 실패하는 파일이 하나라도 있으면
+       그 매장만 조용히 빈 채로 확정된다) */
+    grid(sh, g.row0, g.audit, n, 1).setValues(auditCol);
+    grid(sh, g.row0, g.state, n, 1).setValues(stateCol);
+    grid(sh, g.row0, g.roll, n, 1).setValues(rollCol);
+
+    const lm = labelMap(sh);
+    const pr = labelValue(lm, L_RATE);
+    if (pr.found && pr.row) {
+      try { grid(sh, pr.row, pr.col, 1, 1).setValue(calc.rate); } catch (e) { }
+    }
+    SpreadsheetApp.flush();
+
+    const lk = lockMonthTab(sh, openRows);
+    PROPS.setProperty(MC_PREFIX + key + ':' + ym, today);
+    if (!p.fileId) dropStoreCache(key, ym);
+
+    return {
+      ok: true, dry: false, store: key, ym: ym, closedAt: today,
+      rate: calc, rolled: openRows.length, plan: plan,
+      lock: lk.ok ? '잠금 ✓' : ('★잠그지 못했습니다 — ' + lk.why + '★'),
+    };
+  } finally {
+    try { lock.releaseLock(); } catch (e) { }
+  }
+}
+
+/* 월 탭을 만든다 — ★관리자 전용 · 기본은 미리보기 · 10곳씩★.
+
+   `makeMonthTabs`(편집기 전용)와 같은 일을 앱에서 부를 수 있게 한 것이다.
+   앱스 스크립트 편집기의 함수 선택 드롭다운이 자동화에 몹시 저항해서(2026-08-20 기록)
+   10/1에 26곳 탭을 만드는 일을 편집기에 맡겨 둘 수 없다.
+
+   ★평소에는 부를 일이 없다★ — 점검을 제출하면 writeStoreQscInto가 알아서 만든다.
+   이것은 ①미리 만들어 두고 싶을 때 ②한 곳이 실패해 다시 만들 때 쓰는 도구다.
+
+   ⚠한 곳당 3~6초라 10곳이면 웹앱 호출이 45초에서 끊길 수 있다.
+     ★서버는 계속 돌아 끝까지 만든다★ — 다시 누르지 말고 미리보기로 상태를 확인할 것. */
+function fnStoreMakeTab(ctx, payload) {
+  const p = payload || {};
+  const ym = String(p.ym || '').trim();
+  const apply = p.apply === true;
+  if (!validYm(ym)) return err('BAD_REQUEST', 'ym 형식이 올바르지 않습니다 (예: 2610)');
+
+  const one = function (ss, name) {
+    if (ss.getSheetByName(ym)) return { mark: '·', msg: '이미 있습니다' };
+    const pick = tabSourceFor(ss, ym);
+    if (!pick.sh) return { mark: '✗', msg: pick.why };
+    if (!apply) return { mark: '·', msg: pick.sh.getName() + '(' + pick.why + ') → ' + ym + ' 를 만듭니다' };
+    const r = makeMonthTabIn(ss, ym);
+    return { mark: r.mark, msg: r.msg };
+  };
+
+  if (p.fileId) {
+    let ss;
+    try { ss = SpreadsheetApp.openById(String(p.fileId)); }
+    catch (e) { return err('BAD_REQUEST', '그 ID로 파일을 열지 못했습니다'); }
+    if (String(ss.getName()).indexOf('_연동테스트') < 0) {
+      return err('FORBIDDEN', '파일 ID로는 이름에 _연동테스트가 있는 사본만 다룰 수 있습니다: ' + ss.getName());
+    }
+    return { ok: true, dry: !apply, ym: ym, file: ss.getName(), result: one(ss, ss.getName()) };
+  }
+
+  const sel = pickPage(p.stores, p.page);
+  const out = [];
+  sel.list.forEach(function (raw) {
+    const store = normStore(raw);
+    try {
+      const id = storeFileId(store);
+      if (!id) { out.push({ mark: '✗', store: store, msg: STORE_MAP_SHEET + '에 매장 없음' }); return; }
+      const r = one(SpreadsheetApp.openById(id), store);
+      out.push({ mark: r.mark, store: store, msg: r.msg });
+    } catch (e) {
+      out.push({ mark: '✗', store: store, msg: String(e).slice(0, 100) });
+    }
+  });
+  return {
+    ok: true, dry: !apply, ym: ym, page: sel.page, total: sel.total, left: sel.left,
+    next: sel.left ? (sel.page + 1) : null, results: out,
+  };
+}
+
+/* 새 서식 원본 탭을 매장 파일들에 만든다 — ★관리자 전용 · 기본은 미리보기★.
+
+   ★STORE_FILE_WRITE 스위치를 타지 않는다★ — 그 스위치는 '점검 결과를 매장 파일에 자동 기록'을
+   여는 것이고 10/1에 켠다. 원본 탭은 그 전에 미리 만들어 두는 것이 목적이므로 여기서 막으면
+   기능 자체가 성립하지 않는다. 대신 ①관리자 인증 ②기본 미리보기 ③한 번에 10곳으로 좁혀 둔다. */
+function fnStoreTemplate(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+
+  if (p.fileId) {
+    let ss;
+    try { ss = SpreadsheetApp.openById(String(p.fileId)); }
+    catch (e) { return err('BAD_REQUEST', '그 ID로 파일을 열지 못했습니다'); }
+    if (String(ss.getName()).indexOf('_연동테스트') < 0) {
+      return err('FORBIDDEN', '파일 ID로는 이름에 _연동테스트가 있는 사본만 다룰 수 있습니다: ' + ss.getName());
+    }
+    const r = templateTabIn(ss, !apply, p.rebuild === true);
+    return { ok: true, dry: !apply, file: ss.getName(), result: r };
+  }
+
+  const sel = pickPage(p.stores, p.page);
+  const out = [];
+  sel.list.forEach(function (raw) {
+    const store = normStore(raw);
+    try {
+      const id = storeFileId(store);
+      if (!id) { out.push({ mark: '✗', store: store, msg: STORE_MAP_SHEET + '에 매장 없음' }); return; }
+      const r = templateTabIn(SpreadsheetApp.openById(id), !apply, p.rebuild === true);
+      out.push({ mark: r.mark, store: store, msg: r.msg, tabs: r.tabs });
+    } catch (e) {
+      out.push({ mark: '✗', store: store, msg: String(e).slice(0, 100) });
+    }
+  });
+  return {
+    ok: true, dry: !apply, page: sel.page, total: sel.total, left: sel.left,
+    next: sel.left ? (sel.page + 1) : null,
+    results: out,
+  };
+}
+
 /* 검수 — [개선확정] · [보완 요청] (설계 §4 · 작업재개.md §1-7 ⑩)  ★관리자 전용★
 
    ★검수는 의무가 아니다★ — 제출하면 그 순간 '완료(검수 전)'로 확정된다(월 56~280건이라 전건
