@@ -447,6 +447,16 @@ details[open] > .foldHead::before { content: '▾ '; }
 .stTag.done { color: var(--ok); }                            /* 개선 완료 */
 .stTag.prog { color: var(--amber); }                         /* 진행 중 */
 .stTag.todo { color: var(--red); }                           /* 미조치 */
+/* 검수 줄 — ★본사에게만 만들어진다★(매장 화면에는 이 요소 자체가 없다) */
+.auditRow { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            flex-wrap: wrap; margin-top: 10px; padding-top: 9px; border-top: 1px dashed #333; }
+.auditRow .auditNote { font-size: 11.5px; color: var(--sub); }
+.auditRow .auditBtns { display: flex; gap: 6px; flex-wrap: wrap; }
+.miniBtn.ok { color: var(--ok); border-color: var(--ok); }
+.miniBtn.warn { color: var(--amber); border-color: var(--amber); }
+
+/* 조치기한 — 상태 옆에 붙는 작은 날짜. 회색이라 상태 색을 흐리지 않는다 (2026-08-21) */
+.dueTag { font-size: 11px; color: var(--sub); background: #262626; border-radius: 6px; padding: 3px 7px; line-height: 1.25; font-variant-numeric: tabular-nums; }
 .msHead b.done { color: var(--ok); }                         /* 미제출 현황 — 전 매장 완료 */
 
 /* ---------- v33: 뒤로가기 ---------- */

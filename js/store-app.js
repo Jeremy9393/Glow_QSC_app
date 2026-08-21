@@ -313,6 +313,13 @@
     sel.value = curYm;
   }
 
+  /* ★검수는 본사만 한다★ — improve.audit의 서버 권한(menu:'accounts')과 ★같은 어휘★를 쓴다.
+     여기서 역할 이름('관리자')을 비교하지 않는다. 두 곳이 다른 근거로 판정하면, 시트에서
+     권한을 거둔 뒤에도 버튼은 남아 눌리고 서버에서만 막히는 상태가 된다. */
+  function canAudit() {
+    try { return !!(Auth.can('accounts', '쓰기') && !maint && online()); } catch (e) { return false; }
+  }
+
   function writable() {
     // 하나라도 아니면 저장할 수 없다: 점검 아님 · 역할 권한 · 서버 조회전용 아님 · 실데이터 · 온라인
     return !!(!maint && Auth.can('store', '쓰기') && data && !data.readOnly && !fromSnap && online());
@@ -471,6 +478,37 @@
   const STATE_LABEL = { '미조치': '시작 전', '미이행': '시작 전' };   // 시트가 두 라벨을 같은 뜻으로 쓴다
   function stateLabel(v) { return STATE_LABEL[v] || v; }
 
+  /* ---------- 새 서식(2610~)의 상태 ----------
+     서버(impJudge)가 판정해 `it.status`로 내려준다. 옛 달에는 null이라 위 STATE_* 를 그대로 쓴다.
+
+     ★말을 고르는 규칙★ (2026-08-21 확정)
+       · '반려' → **보완 요청** — 무엇을 해야 하는지가 말 안에 있고, 잘못했다는 느낌이 없다
+       · '미조치' → **다음 점검 시 확인** — 끝난 일이 아니라 이어진다는 뜻이 들어간다
+       · '기한 지남'은 그대로 쓴다 — 사람을 탓하는 말이 아니라 날짜를 말하는 말이다
+     ★여기 없는 값은 받은 그대로 적는다★ — 서버에 새 상태가 생겨도 화면이 빈칸이 되지 않는다. */
+  const STATUS_LABEL = {
+    '미착수': '시작 전',
+    '진행중': '진행 중',
+    '완료(검수 전)': '완료 · 확인 대기',
+    '확정': '완료',
+    '반려': '보완 요청',
+    '재제출기한 지남': '보완 기한 지남',
+    '미조치': '다음 점검 시 확인',
+  };
+  const STATUS_CLASS = {
+    '미착수': '',            // 아직 기한 안이다 — 빨강을 붙일 이유가 없다
+    '진행중': 'prog',
+    '완료(검수 전)': 'done',
+    '확정': 'done',
+    '반려': 'prog',          // 할 일이 남았다는 뜻이지 잘못했다는 뜻이 아니다 → 주황
+    '기한 지남': 'todo',
+    '예정일 지남': 'todo',
+    '재제출기한 지남': 'todo',
+    '미조치': 'todo',
+  };
+  /* 카드 왼쪽 빨간 선을 붙일 상태 — 날짜가 지난 것만이다 */
+  const URGENT = { '기한 지남': 1, '예정일 지남': 1, '재제출기한 지남': 1, '미조치': 1 };
+
   function renderItems(items) {
     const box = $('#items');
     box.innerHTML = '';
@@ -487,7 +525,16 @@
        정작 기한이 지난 항목을 못 본 채 앱을 닫는다. 급한 순서를 화면 순서로 만들어 둔다.
        같은 묶음 안에서는 원래 순서(=시트 NO. 순)를 그대로 지킨다 —
        Array.prototype.sort가 안정 정렬이 아닌 브라우저가 아직 있어 원래 위치를 tie-breaker로 넣었다. */
-    function rank(it) { return (it && it.overdue) ? 0 : ((it && it.isNew) ? 1 : 2); }
+    /* 급한 순서: 날짜가 지난 것 → 보완 요청 → NEW → 나머지.
+       ★보완 요청을 위로 올리는 이유★ — 매장이 이미 한 번 올린 건이라 다 끝냈다고 생각하고 있다.
+       목록 아래쪽에 있으면 스크롤을 멈추는 순간 그대로 묻힌다. */
+    function rank(it) {
+      if (!it) return 3;
+      const st = str(it.status);
+      if (st ? !!URGENT[st] : !!it.overdue) return 0;
+      if (st === '반려') return 1;
+      return it.isNew ? 2 : 3;
+    }
     const ordered = items.map(function (it, i) { return { it: it, i: i }; });
     ordered.sort(function (a, b) {
       const d = rank(a.it) - rank(b.it);
@@ -505,6 +552,7 @@
     // 정적 뼈대만 innerHTML로 만든다. 매장명·본문·담당자명은 아래에서 전부 textContent로 넣는다.
     el.innerHTML =
       '<div class="itemTop"><span class="no"></span><span class="stTag"></span>' +
+        '<span class="dueTag" style="display:none"></span>' +
         '<span class="flagTag late" style="display:none">예정일 지남</span>' +
         '<span class="flagTag new" style="display:none">NEW</span></div>' +
       '<p class="hqBody"></p>' +
@@ -520,17 +568,21 @@
           '<textarea class="doneNote" rows="2" placeholder="개선한 내용을 적어 주세요"></textarea></div>' +
         '<div class="full"><div class="savedPhoto" style="display:none"></div><div class="pickBox"></div></div>' +
       '</div>' +
+      '<div class="auditRow" style="display:none">' +
+        '<span class="auditNote"></span><span class="auditBtns"></span></div>' +
       '<div class="itemFoot"><span class="itemNote"></span>' +
         '<button type="button" class="miniBtn saveBtn">저장</button></div>';
 
     const noEl = $('.no', el), stEl = $('.stTag', el), bodyEl = $('.hqBody', el);
     const lateTag = $('.flagTag.late', el), newTag = $('.flagTag.new', el);
+    const dueTag = $('.dueTag', el);
     const lateNote = $('.lateNote', el);
     const thumbs = $('.hqThumbs', el);
     const deptSel = $('.dept', el), ownerIn = $('.owner', el);
     const planIn = $('.plan', el), doneIn = $('.doneNote', el);
     const savedBox = $('.savedPhoto', el), pickBox = $('.pickBox', el);
     const noteEl = $('.itemNote', el), saveBtn = $('.saveBtn', el);
+    const auditRow = $('.auditRow', el), auditNote = $('.auditNote', el), auditBtns = $('.auditBtns', el);
 
     const pick = PhotoPick.mount(pickBox, { id: 'af' + it.no, label: '개선 후 사진', max: 1 });
 
@@ -588,30 +640,124 @@
        ★화면에서 M열(예정일+진행 내용)을 다시 파싱해 추측하지 않는다. 한 번이라도 멀쩡한 항목에
          빨강이 붙으면 매장은 그다음부터 빨강 전체를 무시한다 — 없는 빨강이 틀린 빨강보다 낫다.
        서버가 필드를 안 보내면 undefined → 거짓으로 떨어져 뱃지가 안 붙는다(같은 이유로 이게 맞다). */
+    /* 조치기한 — 새 서식에서만 온다(옛 달은 null이라 칸이 안 뜬다).
+       보완 요청을 받은 건은 ★그 기한이 아니라 보완 기한★을 보여 준다. 원래 기한은 이미 지났고,
+       매장이 봐야 하는 날짜는 '언제까지 다시 올려야 하나'다. */
+    function paintDue() {
+      const st = str(it.status);
+      const redo = str(it.redo);
+      const dl = str(it.deadline);
+      let txt = '';
+      if (st === '반려' || st === '재제출기한 지남') {
+        if (redo) txt = '보완 기한 ' + dueLabel(redo) + '까지';
+      } else if (dl) {
+        txt = '기한 ' + dueLabel(dl) + '까지';
+      }
+      dueTag.textContent = txt;
+      dueTag.style.display = txt ? '' : 'none';
+    }
+
     function paintFlags() {
-      const late = !!it.overdue;
+      const st = str(it.status);
+      const late = st ? !!URGENT[st] : !!it.overdue;
       /* 클래스 이름은 'late'다 — css/app.css의 선택자가 `.storeItem.late`라서,
          여기서 'lateItem'을 붙이면 왼쪽 빨간 선이 영영 안 그려진다(그동안 그랬다). */
       el.className = 'item storeItem' + (late ? ' late' : '');
+      /* 뱃지 글자도 상태에 맞춘다 — '예정일 지남'으로 굳어 있으면 기한이 지난 건에도 그 말이 붙는다 */
+      lateTag.textContent = st ? (STATUS_LABEL[st] || st) : '예정일 지남';
       lateTag.style.display = late ? '' : 'none';
       newTag.style.display = it.isNew ? '' : 'none';
 
       /* '며칠 지났는지'는 날짜가 있어야 쓸 수 있는데, 그 계산도 서버 몫이다(스프레드시트 타임존).
          서버가 예정일(due)이나 지난 일수(overdueDays)를 함께 주면 적고, 없으면 뱃지만 남긴다. */
       const seg = [];
-      if (late && str(it.due)) seg.push('예정일 ' + dueLabel(it.due));
-      if (late && typeof it.overdueDays === 'number' && it.overdueDays > 0) seg.push(it.overdueDays + '일 지남');
+      /* ★왜 그런 상태인지 서버가 한 줄로 말해 준다★ — 화면이 다시 판정하지 않는다.
+         "기한이 지났다는데 왜?"에 답이 없으면 매장은 담당자에게 전화한다. */
+      if (st && str(it.statusWhy)) seg.push(str(it.statusWhy));
+      else {
+        if (late && str(it.due)) seg.push('예정일 ' + dueLabel(it.due));
+        if (late && typeof it.overdueDays === 'number' && it.overdueDays > 0) seg.push(it.overdueDays + '일 지남');
+      }
       lateNote.textContent = seg.join(' · ');   // 서버 문구가 섞이므로 textContent
       lateNote.style.display = seg.length ? '' : 'none';
+      paintDue();
+    }
+
+    /* ----- 검수 (본사만 보인다) -----
+       ★새 서식에서만 나타난다★ — 옛 달 탭에는 검수 칸 자체가 없어서 status가 null이다.
+       ★버튼은 매장에게 아예 만들어지지 않는다★ — 숨기는 것이 아니라 만들지 않는다. */
+    function paintAudit() {
+      if (!canAudit() || !str(it.status)) { auditRow.style.display = 'none'; return; }
+      auditRow.style.display = '';
+      auditBtns.innerHTML = '';
+      const a = str(it.audit);
+
+      const note = a === '확정' ? '개선확정했습니다'
+        : a === '반려' ? ('보완 요청했습니다' + (str(it.redo) ? ' · ' + dueLabel(it.redo) + '까지' : ''))
+        : a === '재반려' ? '보완본을 다시 요청했습니다 — 다음 점검에서 확인합니다'
+        : '아직 검수하지 않았습니다';
+      auditNote.textContent = note;
+
+      function btn(label, kind, fn) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'miniBtn' + (kind ? ' ' + kind : '');
+        b.textContent = label;
+        b.onclick = fn;
+        auditBtns.appendChild(b);
+        return b;
+      }
+      if (a !== '확정') btn('개선확정', 'ok', function () { audit('확정'); });
+      if (a !== '재반려') btn(a === '반려' ? '다시 보완 요청' : '보완 요청', 'warn', function () { audit('반려'); });
+      if (a) btn('검수 취소', '', function () { audit(''); });
+    }
+
+    async function audit(verdict) {
+      /* ★보완 요청만 한 번 더 묻는다★ — 매장 화면의 상태가 바뀌고 기한이 새로 잡히기 때문이다.
+         개선확정과 취소는 되돌릴 수 있으므로 묻지 않는다(누를 때마다 묻는 창은 곧 무시된다). */
+      if (verdict === '반려') {
+        const again = str(it.audit) === '반려';
+        const msg = again
+          ? '보완본을 다시 요청하시겠습니까?\n\n두 번째 요청부터는 이 건이 다음 점검에서 확인하는 것으로 넘어갑니다.'
+          : '이 건에 보완을 요청하시겠습니까?\n\n매장 화면에 「보완 요청」으로 뜨고, 기한이 새로 잡힙니다.';
+        if (!confirm(msg)) return;
+      }
+      const btns = auditBtns.querySelectorAll('button');
+      btns.forEach(function (b) { b.disabled = true; });
+      const r = await Api.call('improve.audit', {
+        store: curStore, ym: curYm, no: it.no, verdict: verdict,
+      }).catch(function () { return null; });
+      btns.forEach(function (b) { b.disabled = false; });
+      if (!(r && r.ok)) {
+        alert('검수를 저장하지 못했습니다.\n' + ((r && r.error) || '잠시 후 다시 시도해 주세요.'));
+        return;
+      }
+      /* ★서버가 돌려준 값만 반영한다★ — 화면에서 다음 상태를 추측하면 시트와 갈라진다
+         (예: 반려 → 재반려로 넘어가는 판정은 시트의 현재 값을 봐야 안다). */
+      it.audit = str(r.audit);
+      it.redo = r.redo || null;
+      it.status = str(r.status) || it.status;
+      it.statusWhy = str(r.statusWhy);
+      fill(it);
     }
 
     // ----- 카드 내용 채우기 (최초·저장 후·CONFLICT 후 모두 이 함수 하나를 쓴다) -----
     function fill(next) {
       it = next;
       pendingClear = false;
-      const st = str(it.state) || '미조치';   // 시트 값 그대로 (색 판정·비교에 쓴다)
-      stEl.textContent = stateLabel(st);      // 화면에 적을 때만 바꿔 적는다
-      stEl.className = 'stTag ' + (STATE_CLASS[st] || 'todo');
+      /* ★새 서식이면 서버 판정(status)을 쓴다★ — 시트의 state(완료/진행/미조치)는 완료일이
+         찼는지만 보는 옛 값이라 '보완 요청'·'기한 지남'을 구별하지 못한다.
+         옛 달에는 status가 null이라 종전 그대로 그린다. */
+      const sv = str(it.status);
+      if (sv) {
+        stEl.textContent = STATUS_LABEL[sv] || sv;
+        const cls = STATUS_CLASS[sv];
+        stEl.className = 'stTag' + (cls ? ' ' + cls : '');
+      } else {
+        const st = str(it.state) || '미조치';   // 시트 값 그대로 (색 판정·비교에 쓴다)
+        stEl.textContent = stateLabel(st);      // 화면에 적을 때만 바꿔 적는다
+        stEl.className = 'stTag ' + (STATE_CLASS[st] || 'todo');
+      }
       fillDept(str(it.dept));
       ownerIn.value = str(it.owner);
       planIn.value = str(it.plan);
@@ -619,6 +765,7 @@
       pick.set([]);
       paintPhoto();
       paintFlags();
+      paintAudit();
       applyMode();
     }
 

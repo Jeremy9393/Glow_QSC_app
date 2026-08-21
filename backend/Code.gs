@@ -294,6 +294,12 @@ function actionTable() {
     'dashboard.get':      { menu: 'dashboard', act: '읽기', scope: 'list', max: 2 * KB, fn: fnDashboard },
     'store.get':          { menu: 'store', act: '읽기', scope: 'target', max: 2 * KB, fn: fnStoreGet },
     'store.saveImprove':  { menu: 'store', act: '쓰기', scope: 'target', idem: true, max: 400 * KB, fn: fnStoreSave },
+    /* 월 탭 서식 올리기 — menu:ADMIN_MENU라 `역할` 탭이 관리자에게만 열어 준다.
+       scope:'none'이라 매장 권한 검사를 타지 않는다(매장은 이 메뉴 자체가 없다). */
+    'store.upgrade':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnStoreUpgrade },
+    /* 검수(개선확정·보완 요청) — menu:ADMIN_MENU라 `역할` 탭이 관리자에게만 열어 준다.
+       쓰기라 감사로그에 자동으로 남는다 — 설계가 말한 '사유 칸 없이 기록만 남긴다'가 이것이다. */
+    'improve.audit':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnImproveAudit },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -3601,10 +3607,13 @@ function readStoreTab(ss, sh, store, ym) {
   const vDone = labelValue(lm, ['개선완료', '조치완료', '완료']);
   const vTodo = labelValue(lm, ['미조치', '미이행']);
 
-  // 개선요청 표: B~O를 값과 수식 둘 다 읽는다 (=IMAGE() 셀은 getValues()가 ''를 준다)
-  /* 표 끝을 시트에서 읽어 그만큼만 훑는다 — 못 읽으면 종전처럼 200줄 (tableEndRow 주석) */
-  const endRow = tableEndRow(sh, lm);
-  const rng = grid(sh, 12, 2, endRow ? Math.max(0, endRow - 11) : 200, 14);
+  /* 개선요청 표를 값과 수식 둘 다 읽는다 (=IMAGE() 셀은 getValues()가 ''를 준다)
+     표 끝을 시트에서 읽어 그만큼만 훑는다 — 못 읽으면 종전처럼 200줄 (tableEndRow 주석)
+     ★자리는 impGeo가 정한다★ — 옛 서식이면 종전과 똑같은 B~O 14칸이다 */
+  const g = impGeo(sh);
+  const at = function (row, col) { return row[col - 2]; };
+  const endRow = g.endRow;
+  const rng = grid(sh, g.row0, 2, endRow ? Math.max(0, endRow - g.row0 + 1) : 200, Math.max(14, g.last - 1));
   const vals = rng ? rng.getValues() : [];
   const fmls = rng ? rng.getFormulas() : [];
   const items = [];
@@ -3612,34 +3621,62 @@ function readStoreTab(ss, sh, store, ym) {
   /* '오늘'은 ★매장 파일의★ 타임존으로 잡는다 (§9-4). toISOString()(UTC)을 쓰면 KST 자정이
      하루 앞으로 밀려, 매달 1일 아침에 전월 마감분이 통째로 '지연'으로 빨갛게 뜬다. */
   const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const judged = [];   // 개선율 계산용 — 아래 impRate가 받는다
   for (let i = 0; i < vals.length; i++) {
     const v = vals[i], f = fmls[i];
-    const bodyText = String(v[8] == null ? '' : v[8]).trim();   // J열
+    const bodyText = String(at(v, g.body) == null ? '' : at(v, g.body)).trim();
     if (!bodyText) continue;
-    const no = Number(v[0]);
-    const m = String(v[11] == null ? '' : v[11]).trim();        // M열 진행
-    const n = String(v[12] == null ? '' : v[12]).trim();        // N열 완료
+    /* ★새 서식에서는 번호가 '표에서 몇 번째 줄인가'다★ — B에 숫자가 없기 때문이다.
+       본사가 행을 끼워 넣으면 자리가 밀리는데, 그때는 rev(내용 해시)가 어긋나 저장이
+       CONFLICT로 멈춘다. 조용히 옆 줄에 쓰는 것보다 멈추는 편이 안전하다. */
+    const no = g.isNew ? (i + 1) : Number(at(v, g.due));
+    const m = String(at(v, g.plan) == null ? '' : at(v, g.plan)).trim();
+    const n = String(at(v, g.done) == null ? '' : at(v, g.done)).trim();
     const state = stateOf(m, n);
     /* 지연 = 예정일(M)이 오늘보다 이전인데 완료일(N)이 비어 있음.
        ★날짜를 못 읽으면 지연이 아니다★ — M열은 '예정일 + 진행 내용'이 한 칸에 섞여 있어
        파싱이 빗나갈 수 있고, 틀린 빨강은 없는 빨강보다 나쁘다(매장이 이미 한 일에
        '지연'이 붙으면 그다음부터 배지를 아무도 믿지 않는다). */
-    const due = dueDateOf(v[11], tz, ym);
+    const due = dueDateOf(at(v, g.plan), tz, ym);
     const overdue = !!(due && !n && due < today);
+    /* ★서버 판정★ — 시트 수식이 못 읽는 예정일까지 읽어 한 단계 더 가른다(impJudge 주석).
+       final=false이므로 '미조치'는 아직 나오지 않는다 — 그것은 월 채점 확정의 몫이다. */
+    const jd = g.isNew ? impJudge({
+      audit: at(v, g.audit), redo: at(v, g.redo), doneNote: n, plan: m,
+      planRaw: at(v, g.plan), due: at(v, g.due),
+    }, today, tz, ym, false) : null;
+    if (g.isNew) {
+      judged.push({
+        state: jd.state, planDate: jd.planDate || null,
+        due: dateOfCell(at(v, g.due), tz) || null,
+        waive: at(v, g.waive) === true,
+      });
+    }
     cReq++;
     if (state === '완료') cDone++;
     else if (state === '진행') cProg++;
     items.push({
-      no: (typeof v[0] === 'number' && v[0] >= 1) ? no : null,
-      cat: String(v[1] == null ? '' : v[1]).trim(),
+      /* ★새 서식에서는 이 검사를 타면 안 된다★ — B가 날짜라 `typeof v[0]==='number'`가
+         거짓이 되어 no가 null이 되고, 그러면 매장이 저장을 누를 때 항목 번호가 없어
+         BAD_REQUEST로 막힌다. 새 서식의 번호는 '표에서 몇 번째 줄인가'라 늘 유효하다. */
+      no: g.isNew ? no : ((typeof at(v, g.due) === 'number' && at(v, g.due) >= 1) ? no : null),
+      /* ★새 서식에서 cat(대분류)은 늘 빈칸이다★ — 매장은 평가체계의 구조를 알 수 없어야 한다
+         (2026-08-20 결정). C열은 이제 대분류가 아니라 상태 수식이 들어 있으므로 읽지 않는다. */
+      cat: g.isNew ? '' : String(at(v, g.state) == null ? '' : at(v, g.state)).trim(),
       text: bodyText,
-      beforePhotos: photoUrlsOf(v[2], f[2]),
-      dept: String(v[9] == null ? '' : v[9]).trim(),
-      owner: String(v[10] == null ? '' : v[10]).trim(),
-      plan: String(cell(v[11], tz) == null ? '' : cell(v[11], tz)).trim(),
-      doneNote: String(cell(v[12], tz) == null ? '' : cell(v[12], tz)).trim(),
-      afterPhoto: (function () { const u = photoUrlsOf(v[13], f[13]); return u.length ? u[0] : null; })(),
+      beforePhotos: photoUrlsOf(at(v, g.before), f[g.before - 2]),
+      dept: String(at(v, g.dept) == null ? '' : at(v, g.dept)).trim(),
+      owner: String(at(v, g.owner) == null ? '' : at(v, g.owner)).trim(),
+      plan: String(cell(at(v, g.plan), tz) == null ? '' : cell(at(v, g.plan), tz)).trim(),
+      doneNote: String(cell(at(v, g.done), tz) == null ? '' : cell(at(v, g.done), tz)).trim(),
+      afterPhoto: (function () { const u = photoUrlsOf(at(v, g.after), f[g.after - 2]); return u.length ? u[0] : null; })(),
       state: state,
+      /* ↓ 새 서식에서만 채워진다. 옛 달에는 null이라 화면이 종전대로 그린다 */
+      status: jd ? jd.state : null,
+      statusWhy: jd ? (jd.why || '') : '',
+      deadline: g.isNew ? (dateOfCell(at(v, g.due), tz) || null) : null,
+      audit: g.isNew ? String(at(v, g.audit) == null ? '' : at(v, g.audit)).trim() : '',
+      redo: g.isNew ? (dateOfCell(at(v, g.redo), tz) || null) : null,
       due: due || null,       // 화면이 '10/15까지'를 그릴 수 있게. 못 읽었으면 null
       overdue: overdue,
       /* '5일 지남'을 화면이 그릴 수 있게. 날짜 계산도 서버 몫이다 — 화면이 M열을 다시 파싱하면
@@ -3649,7 +3686,7 @@ function readStoreTab(ss, sh, store, ym) {
          NEW 여부는 '보는 사람의 최근접속'에 달려 있다. 캐시에 담으면 먼저 연 사람의
          기준선이 다음 사람에게 그대로 간다. fnStoreGet이 캐시 뒤에 붙인다(readOnly와 같은 이유). */
       isNew: false,
-      rev: revOf(no, v.slice(8, 14), f.slice(8, 14))
+      rev: revOf(no, v.slice(g.body - 2, g.body + 4), f.slice(g.body - 2, g.body + 4))
     });
   }
 
@@ -3661,7 +3698,15 @@ function readStoreTab(ss, sh, store, ym) {
     req = cReq; prog = cProg; done = cDone; todo = cReq - cDone - cProg;
   }
   if (todo === null) todo = Math.max(0, req - done - prog);
-  const rate = req > 0 ? Math.round((done / req) * 100) / 100 : null;
+  let rate = req > 0 ? Math.round((done / req) * 100) / 100 : null;
+  /* ★새 서식에서는 개선율을 서버가 계산한다★ (§1-8) — 분모에서 감점제외·재작성 중·연장
+     진행중을 뺀다. 시트 수식으로는 이월 때문에 지난 달 탭을 건너다녀야 하고, 그런 수식은
+     26곳 × 12개월에서 깨진다. 적힌 값은 본사가 손으로 고칠 수 있다(보호는 매장만 막는다). */
+  let calc = null;
+  if (g.isNew) {
+    calc = impRate(judged);
+    rate = calc.rate;
+  }
 
   return {
     ok: true, store: store, ym: ym, label: ymLabel(ym), exists: true,
@@ -3673,6 +3718,8 @@ function readStoreTab(ss, sh, store, ym) {
       total: scorePct(vTot.v), totalGrade: str(vTotG.v),
       provisional: isProvisional(ym, tz),
       req: req, prog: prog, done: done, todo: todo, rate: rate,
+      /* 개선율을 어떻게 냈는지 화면이 그대로 보여줄 수 있게 — '왜 90%인가'에 답이 있어야 한다 */
+      rateDetail: calc,
       warn: warn
     },
     deptOptions: deptOptions(sh),
@@ -3767,7 +3814,8 @@ function isProvisional(ym, tz) {
 /* K열 데이터 유효성 목록 → deptOptions. ★하드코딩 금지★ */
 function deptOptions(sh) {
   try {
-    const cellRng = grid(sh, 12, 11, 1, 1);
+    const g0 = impGeo(sh);
+    const cellRng = grid(sh, g0.row0, g0.dept, 1, 1);
     if (!cellRng) return [];
     const rule = cellRng.getDataValidation();
     if (!rule) return [];
@@ -3984,22 +4032,14 @@ function fnStoreSave(ctx, payload, target) {
     const sh = ss.getSheetByName(ym);
     if (!sh) return err('NOT_FOUND', ym + ' 탭이 아직 만들어지지 않았습니다.');
     const tz = fileTz(ss);
+    const g = impGeo(sh);
 
-    // B열 NO 재탐색 — 클라이언트에 행 번호를 내려주지 않는 이유가 이것이다
-    const noRng = grid(sh, 12, 2, 200, 1);
-    const noCol = noRng ? noRng.getValues() : [];
-    let r = -1, dup = false;
-    for (let i = 0; i < noCol.length; i++) {
-      if (String(noCol[i][0]).trim() === '') continue;      // ★Number('')===0 회피★
-      if (Number(noCol[i][0]) === no) { if (r >= 0) { dup = true; break; } r = 12 + i; }
-    }
-    /* 본사가 행을 삽입·정렬해 NO가 중복되면 rev는 내용 변경만 잡고 "같은 NO가 두 행"은 못 잡는다.
-       첫 일치 행에 조용히 쓰는 것보다 멈추는 편이 안전하다. */
-    if (dup) return err('CONFLICT', '같은 번호의 항목이 두 개 있습니다. 담당자에게 문의해 주세요.');
-    if (r < 0) return err('NOT_FOUND', '항목을 찾을 수 없습니다.');
+    const found = impFindRow(sh, g, no);
+    if (!found.ok) return err(found.code, found.error);
+    const r = found.row;
 
-    // 현재 J~O 재읽기 → rev 비교
-    const cur = grid(sh, r, 10, 1, 6);
+    // 현재 개선요청~개선 후 6칸 재읽기 → rev 비교
+    const cur = grid(sh, r, g.body, 1, 6);
     if (!cur) return err('SERVER_ERROR', '시트를 읽지 못했습니다.');
     const curV = cur.getValues()[0];
     const curF = cur.getFormulas()[0];
@@ -4036,17 +4076,17 @@ function fnStoreSave(ctx, payload, target) {
       }
     }
 
-    // K·L·M·N — 시트에 쓰는 모든 문자열은 safe()를 통과한다
-    const wRng = grid(sh, r, 11, 1, 4);
+    // 담당부서·담당자·예정일·완료일 — 시트에 쓰는 모든 문자열은 safe()를 통과한다
+    const wRng = grid(sh, r, g.dept, 1, 4);
     if (!wRng || wRng.getNumColumns() < 4) return err('SERVER_ERROR', '이 월 탭에는 담당부서~완료 칸이 없습니다. 담당자에게 문의해 주세요.');
     wRng.setValues([safeRow([texts.dept, texts.owner, texts.plan, texts.doneNote])]);
     if (photoCell !== null) {
-      const oRng = grid(sh, r, 15, 1, 1);
+      const oRng = grid(sh, r, g.after, 1, 1);
       if (oRng) oRng.setValue(photoCell);
     }
 
     // 재읽기해서 rev·item 구성 — ★쓴 값으로 계산하면 안 된다★ (safe()의 아포스트로피 때문)
-    const after = grid(sh, r, 10, 1, 6);
+    const after = grid(sh, r, g.body, 1, 6);
     const aV = after.getValues()[0];
     const aF = after.getFormulas()[0];
     const item = itemOf(no, aV, aF, tz, ym);
@@ -4099,16 +4139,38 @@ function itemOf(no, v /* J~O */, f, tz, ym) {
 /* 요약 재집계. ★I9(개선율)는 수식이므로 절대 쓰지 않는다★.
    I5~I8이 수식이면 건드리지 않고, 수기면 서버가 세어 다시 쓴다. */
 function recountSummary(sh, tz) {
-  const endRow2 = tableEndRow(sh);   // 표 끝 아래의 안내문까지 세지 않는다
-  const rng = grid(sh, 12, 2, endRow2 ? Math.max(0, endRow2 - 11) : 200, 14);
+  const g = impGeo(sh);
+  const at = function (row, col) { return row[col - 2]; };
+  const endRow2 = g.endRow;   // 표 끝 아래의 안내문까지 세지 않는다
+  const rng = grid(sh, g.row0, 2, endRow2 ? Math.max(0, endRow2 - g.row0 + 1) : 200, Math.max(14, g.last - 1));
   const vals = rng ? rng.getValues() : [];
+  const ym = String(sh.getName() || '');
+  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   let req = 0, prog = 0, done = 0;
+  const judged = [];
   for (let i = 0; i < vals.length; i++) {
-    if (!String(vals[i][8] == null ? '' : vals[i][8]).trim()) continue;   // J열
+    const v = vals[i];
+    if (!String(at(v, g.body) == null ? '' : at(v, g.body)).trim()) continue;
     req++;
-    const s = stateOf(vals[i][11], vals[i][12]);
-    if (s === '완료') done++;
-    else if (s === '진행') prog++;
+    if (g.isNew) {
+      const m = String(at(v, g.plan) == null ? '' : at(v, g.plan)).trim();
+      const n = String(at(v, g.done) == null ? '' : at(v, g.done)).trim();
+      const jd = impJudge({
+        audit: at(v, g.audit), redo: at(v, g.redo), doneNote: n, plan: m,
+        planRaw: at(v, g.plan), due: at(v, g.due),
+      }, today, tz, ym, false);
+      judged.push({
+        state: jd.state, planDate: jd.planDate || null,
+        due: dateOfCell(at(v, g.due), tz) || null,
+        waive: at(v, g.waive) === true,
+      });
+      if (jd.state === '확정' || jd.state === '완료(검수 전)') done++;
+      else if (jd.state === '진행중' || jd.state === '반려' || jd.state === '재제출기한 지남') prog++;
+    } else {
+      const s = stateOf(at(v, g.plan), at(v, g.done));
+      if (s === '완료') done++;
+      else if (s === '진행') prog++;
+    }
   }
   const todo = req - done - prog;
   const lm = labelMap(sh);
@@ -4116,7 +4178,23 @@ function recountSummary(sh, tz) {
   writeCount(sh, lm, ['진행', '개선진행', '진행중', '개선예정'], prog);
   writeCount(sh, lm, ['완료', '조치완료', '개선완료'], done);
   writeCount(sh, lm, ['미조치', '미이행'], todo);
-  return { req: req, prog: prog, done: done, todo: todo, rate: req > 0 ? Math.round((done / req) * 100) / 100 : null };
+
+  /* ★새 서식에서는 개선율을 서버가 값으로 적는다★ (§1-8) — 수식을 덮어쓴다.
+     writeCount는 수식이면 건드리지 않지만 여기서는 일부러 덮는다: 이월 때문에 지난 달 탭을
+     건너다니는 수식은 26곳 × 12개월에서 깨지기 때문이다. 적힌 값은 본사가 고칠 수 있다. */
+  let calc = null;
+  if (g.isNew) {
+    calc = impRate(judged);
+    const pr = labelValue(lm, ['개선율']);
+    if (pr.found && pr.row) {
+      try { grid(sh, pr.row, pr.col, 1, 1).setValue(calc.rate); } catch (e) { }
+    }
+  }
+  return {
+    req: req, prog: prog, done: done, todo: todo,
+    rate: calc ? calc.rate : (req > 0 ? Math.round((done / req) * 100) / 100 : null),
+    rateDetail: calc,
+  };
 }
 
 function writeCount(sh, lm, names, n) {
@@ -4272,13 +4350,27 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   const found = p.items.filter(function (it) { return typeof it.value === 'number' && it.value >= 1; });
   if (!found.length) return { ok: true, tickets: 0, warn: warn };
 
-  const colBRange = grid(sh, 1, 2, 60, 1);
-  const colB = colBRange ? colBRange.getValues() : [];
+  /* ★머리글을 impCols에게 묻는다★ (2026-08-21) — 새 서식은 B가 'NO.'가 아니라 '기한'이라
+     종전의 "B열에서 NO로 시작하는 줄" 스캔이 표를 통째로 못 찾는다. 그러면 개선요청이
+     한 건도 기록되지 않는데, 화면에는 제출 성공으로 보인다.
+     impCols가 못 읽는 손수 만든 탭을 위해 옛 스캔을 폴백으로 남긴다('기한'도 받아 준다). */
+  const IC = impCols(sh);
   let headRow = -1;
-  for (let i = 0; i < colB.length; i++) {
-    if (String(colB[i][0]).trim().toUpperCase().indexOf('NO') === 0) { headRow = i + 1; break; }
+  const newFmt = !!(IC.ok && IC.isNew && IC.audit);
+  /* ★row0 - 1 로 잡는다★ — 아래 모든 계산이 headRow+1을 본문 첫 줄로 쓴다.
+     머리글이 세로로 병합된 파일(2601~2604은 9:10 병합)에서 옛 방식은 병합 첫 줄을
+     머리글로 잡아 본문을 한 줄 앞으로 보고 있었다. storeCellsIn은 병합을 풀어 row0를 준다. */
+  if (IC.ok) headRow = IC.row0 - 1;
+  else {
+    const colBRange = grid(sh, 1, 2, 60, 1);
+    const colB = colBRange ? colBRange.getValues() : [];
+    for (let i = 0; i < colB.length; i++) {
+      const v = String(colB[i][0]).trim();
+      if (v.toUpperCase().indexOf('NO') === 0 || v === '기한') { headRow = i + 1; break; }
+    }
+    warn.push('머리글을 라벨로 읽지 못해 옛 방식으로 찾았습니다 (' + IC.why + ')');
   }
-  if (headRow < 0) return { ok: false, error: "개선요청 표 헤더(B열 'NO.')를 못 찾음: " + tab, warn: warn };
+  if (headRow < 0) return { ok: false, error: '개선요청 표 머리글을 못 찾음: ' + tab, warn: warn };
 
   /* ★표의 끝을 시트에서 읽는다★ — 요약의 =COUNTA(J12:J38)이 알려 준다(tableEndRow 주석).
      종전에는 헤더 아래 200줄을 훑고 남은 칸도 sh.getMaxRows()까지로 봤다. 그래서
@@ -4317,7 +4409,9 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
         warn: warn };
     }
     if (filled > 0) {
-      const bcW = grid(sh, headRow + 1, 2, filled, 2);   // B:C
+      /* ★새 서식에서는 C를 건드리지 않는다★ — 거기엔 상태 수식이 들어 있다.
+         지우면 그 줄만 영원히 빈 상태가 되고, 되살려 주는 코드는 어디에도 없다. */
+      const bcW = grid(sh, headRow + 1, newFmt ? IC.due : 2, filled, newFmt ? 1 : 2);   // 기한 / 옛 B:C
       const dW = grid(sh, headRow + 1, 4, filled, 1);    // D
       const jW = grid(sh, headRow + 1, 10, filled, 1);   // J
       if (bcW) bcW.clearContent();
@@ -4361,6 +4455,9 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
      매장은 그 파일에 접근 자체가 없다. */
   const bc = [], d = [], j = [], imgCells = [];   // imgCells[i] = 그 행에 넣을 사진 파일 ID ('' = 없음)
   const noText = [];
+  /* 새 서식의 B는 번호가 아니라 ★조치기한★이다 (§1-8). 번호는 시트 행이 알려 준다. */
+  const dueVal = newFmt ? impDueOf(p.date, fileTz(ss)) : '';
+  if (newFmt && !dueVal) warn.push('점검일에서 조치기한을 계산하지 못했습니다 — 기한 칸이 빈 채로 갑니다');
   list.forEach(function (it) {
     no += 1;
     const photos = photoMap[it.no] || [];
@@ -4370,7 +4467,7 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
       : '';
     const body = String(it.memo == null ? '' : it.memo).trim();
     if (!body) noText.push(it.code || ('문항 ' + it.no));
-    bc.push([no, '']);   // ★구분(대분류)도 비운다★ — 평가체계의 구조를 드러내지 않는다
+    bc.push([newFmt ? dueVal : no, '']);   // ★구분(대분류)도 비운다★ — 평가체계의 구조를 드러내지 않는다
     /* ★사진 칸은 여기서 비워 두고 아래에서 따로 넣는다★ — 셀 내 이미지는 setValue로만
        넣는 것이 문서화된 경로다. setValues(2차원 배열)에 객체를 섞는 것은 보장되지 않는다.
        PHOTO_EMBED=false(링크만)이면 종전대로 여기서 문자열로 채운다. */
@@ -4394,7 +4491,17 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   const bcR = grid(sh, row, 2, bc.length, 2);
   const dR = grid(sh, row, 4, d.length, 1);
   const jR = grid(sh, row, 10, j.length, 1);
-  if (bcR && bcR.getNumColumns() === 2) bcR.setValues(bc); else warn.push('B:C(번호·구분) 칸이 없어 기록하지 못했습니다');
+  if (newFmt) {
+    /* ★상태(C)는 수식이라 여기서 쓰지 않는다★ — setValues로 덮으면 수식이 값으로 바뀌어
+       그 줄만 상태가 멈춘다. 기한 한 칸만 쓴다. */
+    const dueR = grid(sh, row, IC.due, bc.length, 1);
+    if (dueR) dueR.setValues(bc.map(function (x) { return [x[0]]; }));
+    else warn.push('기한 칸이 없어 기록하지 못했습니다');
+  } else if (bcR && bcR.getNumColumns() === 2) {
+    bcR.setValues(bc);
+  } else {
+    warn.push('B:C(번호·구분) 칸이 없어 기록하지 못했습니다');
+  }
   if (dR) dR.setValues(d); else warn.push('D(사진) 칸이 없어 기록하지 못했습니다');
   /* 사진은 빈 칸으로 한 번 쓴 뒤 한 칸씩 셀 내 이미지로 채운다(cellImageOf 주석 참조).
      한 장이 실패해도 나머지 기록은 남아야 하므로 행마다 따로 감싼다 — 사진은 부가 정보이고
@@ -4920,6 +5027,337 @@ function setMaintenance(msg) {
 /* 월 탭 하나를 만든다. ★스프레드시트 객체를 인자로 받는다★ —
    매장 목록으로 도는 makeMonthTabs와, 사본 하나만 만지는 테스트가 **같은 코드**를 타야
    테스트가 의미를 갖는다. 여기서 storeFileId를 부르지 않는 것이 그 조건이다. */
+/* ---------- 표의 자리 · 상태 판정 · 개선율 (2026-08-21) ----------
+
+   ★열 번호를 박아 쓰던 곳을 전부 여기로 모은다★ — readStoreTab · fnStoreSave · recountSummary가
+   저마다 `grid(sh, 12, 2, …, 14)`(B~O)와 11·15를 박아 두고 있었다. 새 서식은 B가 번호가 아니라
+   기한이라, 그대로 두면 ★매장 저장이 "항목을 찾을 수 없습니다"로 죽는다★ —
+   `Number(B셀) === no` 가 날짜와 숫자를 비교하기 때문이다. 조용히 죽는 것도 아니고,
+   매장이 개선 내용을 다 적고 저장을 누르는 순간에 죽는다.
+
+   옛 서식에서는 지금까지와 ★똑같은 숫자★를 돌려준다(동작 변화 0). */
+function impGeo(sh) {
+  const c = impCols(sh);
+  if (c.ok && c.isNew && c.audit && c.before && c.after && (c.after - c.body === 5)) {
+    return {
+      isNew: true, row0: c.row0, endRow: c.endRow,
+      due: c.due, state: c.state, before: c.before, body: c.body,
+      dept: c.dept, owner: c.dept + 1, plan: c.plan, done: c.done,
+      after: c.after, memo: c.memo,
+      audit: c.audit, redo: c.redo, waive: c.waive, roll: c.roll,
+      last: Math.max(c.memo, c.roll || 0),
+    };
+  }
+  /* 옛 서식(2609 이하) — 종전에 박혀 있던 그 숫자들이다 */
+  return {
+    isNew: false, row0: 12, endRow: tableEndRow(sh),
+    due: 2, state: 3, before: 4, body: 10,
+    dept: 11, owner: 12, plan: 13, done: 14, after: 15, memo: 16,
+    audit: 0, redo: 0, waive: 0, roll: 0, last: 15,
+  };
+}
+
+/* 항목 번호 → 시트 행. ★저장과 미리보기가 이 함수 하나를 같이 쓴다★ —
+   저장 경로는 STORE_IMPROVE_WRITE가 켜지기 전에는 돌려볼 수 없어서, 행 찾기만 따로 떼어
+   store.upgrade(probe)로 확인할 수 있게 했다. 두 벌로 만들면 확인한 쪽과 도는 쪽이 갈라진다. */
+function impFindRow(sh, g, no) {
+  if (g.isNew) {
+    /* ★새 서식에는 번호 칸이 없다★ — B는 기한(날짜)이다. 종전처럼 `Number(B셀) === no`로
+       찾으면 날짜와 숫자를 비교하게 되어 ★영원히 못 찾는다★. 매장이 개선 내용을 다 적고
+       저장을 누르는 순간 "항목을 찾을 수 없습니다"가 뜬다.
+       그래서 새 서식에서는 ★표에서 몇 번째 줄인가★로 찾는다(readStoreTab이 같은 기준으로
+       번호를 매긴다). 본사가 행을 끼워 넣어 자리가 밀리면 그 자리의 내용이 달라지므로
+       rev 검사가 어긋나 CONFLICT로 멈춘다 — 밀린 채 조용히 옆 줄에 쓰는 일은 없다. */
+    const cand = g.row0 + no - 1;
+    if (g.endRow && cand > g.endRow) return { ok: false, code: 'NOT_FOUND', error: '항목을 찾을 수 없습니다.' };
+    const bodyCell = grid(sh, cand, g.body, 1, 1);
+    if (!bodyCell || String(bodyCell.getValue() || '').trim() === '') {
+      return { ok: false, code: 'NOT_FOUND', error: '항목을 찾을 수 없습니다.' };
+    }
+    return { ok: true, row: cand };
+  }
+  // 옛 서식 — B열 NO 재탐색. 클라이언트에 행 번호를 내려주지 않는 이유가 이것이다
+  const noRng = grid(sh, g.row0, 2, 200, 1);
+  const noCol = noRng ? noRng.getValues() : [];
+  let r = -1, dup = false;
+  for (let i = 0; i < noCol.length; i++) {
+    if (String(noCol[i][0]).trim() === '') continue;      // ★Number('')===0 회피★
+    if (Number(noCol[i][0]) === no) { if (r >= 0) { dup = true; break; } r = g.row0 + i; }
+  }
+  /* 본사가 행을 삽입·정렬해 NO가 중복되면 rev는 내용 변경만 잡고 "같은 NO가 두 행"은 못 잡는다.
+     첫 일치 행에 조용히 쓰는 것보다 멈추는 편이 안전하다. */
+  if (dup) return { ok: false, code: 'CONFLICT', error: '같은 번호의 항목이 두 개 있습니다. 담당자에게 문의해 주세요.' };
+  if (r < 0) return { ok: false, code: 'NOT_FOUND', error: '항목을 찾을 수 없습니다.' };
+  return { ok: true, row: r };
+}
+
+/* 상태 판정 — ★서버판★.
+
+   시트의 수식(impStateFormula)은 ★눈에 보이는 것만★ 본다. 예정일 칸은 "10/15 매대 교체"처럼
+   날짜와 글이 한 칸에 섞여 있어서(dueDateOf 주석) 수식이 못 읽기 때문이다.
+   여기서는 dueDateOf로 그 날짜를 읽어 한 단계 더 가른다.
+
+   ★'미조치'는 살아 있는 상태가 아니라 확정된 판정이다★ — 달이 끝나기 전에는 '기한 지남'·
+   '예정일 지남'으로만 적는다. 사람을 탓하는 말이 아니라 날짜를 말하는 말이고, 아직 시간이
+   남아 있는데 '미조치'라고 못박으면 매장이 그 뒤로 아무것도 하지 않는다.
+   final=true(월 채점 확정)일 때만 미조치가 된다. */
+function impJudge(r, today, tz, ym, final) {
+  const S = function (v) { return String(v == null ? '' : v).trim(); };
+  const audit = S(r.audit);
+  const doneNote = S(r.doneNote);
+  const plan = S(r.plan);
+
+  if (audit === '재반려') return { state: '미조치', why: '재제출한 뒤에도 다시 반려되었습니다' };
+  if (audit === '반려') {
+    const redo = r.redo ? dateOfCell(r.redo, tz) : '';
+    if (redo && redo < today) {
+      return { state: final ? '미조치' : '재제출기한 지남', why: '재제출기한 ' + redo + ' 이 지났습니다', redo: redo };
+    }
+    return { state: '반려', why: '', redo: redo || null };
+  }
+  if (audit === '확정') return { state: '확정', why: '' };
+  if (doneNote) return { state: '완료(검수 전)', why: '' };
+
+  if (plan) {
+    const pd = dueDateOf(r.planRaw, tz, ym);
+    if (pd && pd < today) {
+      return { state: final ? '미조치' : '예정일 지남', why: '예정일 ' + pd + ' 이 지났는데 완료 보고가 없습니다', planDate: pd };
+    }
+    return { state: '진행중', why: '', planDate: pd || null };
+  }
+  const due = r.due ? dateOfCell(r.due, tz) : '';
+  if (due && due < today) {
+    return { state: final ? '미조치' : '기한 지남', why: '조치기한 ' + due + ' 이 지났습니다', due: due };
+  }
+  return { state: '미착수', why: '', due: due || null };
+}
+
+/* 개선율 — §1-7 ⑥ 「분모에서 세 가지를 뺀다」
+
+     분모 = 발행 − 감점제외 − 재작성 중(반려) − 연장 진행중(예정일이 이 달 기한을 넘는 건)
+     분자 = 완료(검수 전) + 확정
+
+   ★발행이 0건이면 1(100%)이다★ — 개선할 것이 없었다는 뜻이므로 만점이 맞다.
+     0으로 치면 지적이 하나도 없는 매장이 종합점수 10%를 통째로 못 받아 오히려 손해를 본다.
+     (월 탭의 종합 수식·통합시트 CA열도 같은 규칙이다 — 세 곳이 갈라지면 안 된다)
+
+   ★분모에서 뺀 건은 사라지는 것이 아니라 다음 달로 넘어간다★ — 이월(T)로 표시한다. */
+function impRate(recs) {
+  let issued = 0, done = 0, waived = 0, rolled = 0;
+  recs.forEach(function (r) {
+    issued++;
+    if (r.waive) { waived++; return; }
+    if (r.state === '확정' || r.state === '완료(검수 전)') { done++; return; }
+    if (r.state === '반려' || r.state === '재제출기한 지남') { rolled++; return; }
+    if (r.state === '진행중' && r.planDate && r.due && r.planDate > r.due) { rolled++; return; }
+  });
+  const denom = issued - waived - rolled;
+  return {
+    issued: issued, done: done, waived: waived, rolled: rolled, denom: denom,
+    /* ★발행이 0건이면 null이다★ — '100%'가 아니라 '—'로 보여야 한다. 아직 점검하지 않은 달에
+       개선율 100%가 뜨면 매장은 그것을 성적으로 읽는다. 점수를 낼 때만 1로 친다
+       (월 탭 종합 수식·통합시트 CA열이 이미 `IF(개선율="",1,…)`로 그렇게 한다 — 세 곳이 같아야 한다).
+       분모가 0이면(발행은 있는데 전부 제외·이월) 이 달에 따질 것이 없으므로 만점이 맞다. */
+    rate: issued === 0 ? null : (denom > 0 ? Math.round((done / denom) * 100) / 100 : 1),
+  };
+}
+
+/* ---------- 개선요청 서식 (2610~) ----------  ★작업재개.md §1-8 확정 (2026-08-21)★
+
+   ★칸을 늘린 것이 아니라 자리를 바꿔 끼운 것이다★
+     B  NO.  → 기한   점검일 +15일. 번호는 시트 행이 알려 준다(앱 화면에는 붙인다)
+     C  구분 → 상태   대분류는 2026-08-20에 이미 비우기로 했다(매장은 질문지를 모른다)
+     비고 뒤에 넷  검수 · 재제출기한 · 감점제외 · 이월   ← 뒤 둘은 열째 숨긴다
+   매장이 쓰던 담당부서~비고는 ★자리가 그대로다★ — 보호 범위(storeCellsIn)도 그대로다.
+
+   ★복제가 끝난 다음에 부른다★ — makeMonthTabIn은 지난 달 탭을 그대로 베낀다.
+     9월 탭은 문수가 손으로 8월을 복사해 만드므로 옛 서식이다. 새 칸이 이미 있다고
+     가정하면 9월 → 10월에서 조용히 어긋난다.
+
+   ★머리글을 하나라도 못 읽으면 손대지 않는다★ — 반쯤 바꾼 표가 가장 나쁘다.
+     매장은 기한이 보이는데 서버는 옛 자리로 쓴다. 그러면 아무도 눈치채지 못한다. */
+const IMP_DUE_DAYS = 15;    // 조치기한 = 점검일 +15일 (설계 §3, 전 건 일괄)
+const IMP_REDO_DAYS = 7;    // 재제출기한 = 반려일 +7일 (설계 §4)
+const IMP_TAIL = ['검수', '재제출기한', '감점제외', '이월'];
+
+/* 조치기한 = 점검일 +15일. 못 읽으면 '' — 부르는 쪽은 빈 칸으로 두고 warn에 담는다.
+   ★기한이 비면 상태 수식이 '미착수'에서 멈춘다★(기한 지남 판정을 못 한다). 조용히 넘기지 않는다. */
+function impPlusDays(dateStr, days, tz) {
+  try {
+    const d = dateOfCell(dateStr, tz);
+    if (!d) return '';
+    const p = String(d).split('-');
+    if (p.length !== 3) return '';
+    const dt = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+    if (isNaN(dt.getTime())) return '';
+    dt.setDate(dt.getDate() + days);
+    return Utilities.formatDate(dt, tz || 'Asia/Seoul', 'yyyy-MM-dd');
+  } catch (e) { return ''; }
+}
+
+function impDueOf(dateStr, tz) { return impPlusDays(dateStr, IMP_DUE_DAYS, tz); }
+
+function colLetter(n) {
+  let s = '';
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - 1 - m) / 26; }
+  return s;
+}
+
+/* 모든 칸을 ★머리글 글자로★ 찾는다. 열 번호를 박지 않는 이유는 한 파일 안에 서식이 둘
+   섞여 있기 때문이다(2601~2604는 매장 몫이 F~M, 2605~는 K~P).
+   K12:P 보호 버그가 바로 그 가정에서 나왔다. */
+function impCols(sh) {
+  const box = storeCellsIn(sh);
+  if (!box.ok) return { ok: false, why: box.why };
+  const NG = function (v) { return String(v == null ? '' : v).replace(/\s+/g, ''); };
+  let head = [];
+  try { head = sh.getRange(box.hr, 1, 1, sh.getMaxColumns()).getValues()[0].map(NG); }
+  catch (e) { return { ok: false, why: '머리글 줄을 읽지 못했습니다' }; }
+
+  const eq = function (names) {
+    for (let i = 0; i < head.length; i++) {
+      for (let j = 0; j < names.length; j++) if (head[i] === names[j]) return i + 1;
+    }
+    return 0;
+  };
+  const has = function (frag) {
+    for (let i = 0; i < head.length; i++) if (head[i] && head[i].indexOf(frag) >= 0) return i + 1;
+    return 0;
+  };
+
+  const due = eq(['기한', '조치기한']) || eq(['NO.', 'NO', '번호']);
+  const body = has('개선요청');
+  const plan = has('예정일');
+  const done = has('완료일');
+  const miss = [];
+  if (!due) miss.push("'기한'(옛 'NO.')");
+  if (!body) miss.push("'개선요청사항'");
+  if (!plan) miss.push("'예정일'");
+  if (!done) miss.push("'완료일'");
+  if (miss.length) return { ok: false, why: '머리글에서 ' + miss.join(' · ') + '을(를) 못 찾았습니다' };
+
+  return {
+    ok: true, hr: box.hr, row0: box.row0, endRow: box.endRow,
+    due: due, state: due + 1, body: body, plan: plan, done: done,
+    dept: box.col0, memo: box.col0 + box.cols - 1,
+    before: has('개선전'), after: has('개선후'),
+    isNew: head[due - 1] === '기한',
+    audit: eq(['검수']), redo: eq(['재제출기한']),
+    waive: eq(['감점제외']), roll: eq(['이월']),
+  };
+}
+
+/* 상태 수식. ★수식은 눈으로 보이는 것만 판정한다★ — 예정일 칸은 "10/15 매대 교체"처럼
+   날짜와 글이 한 칸에 섞여 있어(dueDateOf 주석) 수식이 못 읽는다. 그래서 예정일이 적혀
+   있으면 그냥 '진행중'이고, ★'미조치' 판정은 서버가 한다★(그때 이 칸을 값으로 덮어쓴다).
+   기한만 지난 건은 '기한 지남'으로 적는다 — 사람을 탓하는 말이 아니라 날짜를 말하는 말이다. */
+function impStateFormula(c, r) {
+  const A = function (col) { return '$' + colLetter(col) + r; };
+  const B = A(c.due), J = A(c.body), M = A(c.plan), N = A(c.done);
+  const Q = A(c.audit), R = A(c.redo);
+  return '=IF(' + J + '="","",' +
+    'IF(' + Q + '="재반려","미조치",' +
+    'IF(' + Q + '="반려",IF(AND(ISNUMBER(' + R + '),TODAY()>' + R + '),"미조치","반려"),' +
+    'IF(' + Q + '="확정","확정",' +
+    'IF(' + N + '<>"","완료(검수 전)",' +
+    'IF(' + M + '<>"","진행중",' +
+    'IF(AND(ISNUMBER(' + B + '),TODAY()>' + B + '),"기한 지남","미착수")))))))';
+}
+
+/* 한 탭을 새 서식으로 올린다. ★몇 번을 돌려도 같은 결과가 되게 만든다★ —
+   makeMonthTabIn은 본문을 지운(상태 수식도 같이 지워진다) 뒤 이 함수를 부르므로,
+   칸이 이미 있더라도 수식과 서식은 항상 다시 깔아 끼운다.
+   dry=true 면 ★아무것도 쓰지 않고★ 무엇을 할지만 적어 돌려준다. */
+function upgradeMonthTab(sh, dry) {
+  let c = impCols(sh);
+  if (!c.ok) return { ok: false, why: c.why };
+  const n = c.endRow - c.row0 + 1;
+  if (n <= 0) return { ok: false, why: '표 본문이 비어 있습니다(끝 ' + c.endRow + '행)' };
+
+  const have = [c.audit, c.redo, c.waive, c.roll].filter(Boolean).length;
+  if (have && have < 4) {
+    return { ok: false, why: '새 칸이 일부만 있습니다(' + have + '/4) — 시트에서 정리한 뒤 다시 실행하십시오' };
+  }
+
+  const plan = [];
+  if (!c.isNew) {
+    plan.push(colLetter(c.due) + c.hr + " 'NO.' → '기한'  ·  " + colLetter(c.state) + c.hr + " '구분' → '상태'");
+  }
+  if (!have) {
+    plan.push(colLetter(c.memo) + '열 뒤에 빈 칸 4개를 끼우고 ' + IMP_TAIL.join(' · ') +
+      ' 머리글을 단다 (오른쪽 내용은 밀려난다)');
+  }
+  if (!c.isNew) plan.push('본문 ' + c.row0 + '~' + c.endRow + '행의 옛 번호(1,2,3…)를 지운다 — 날짜 서식이 씌워지면 1899-12-31이 된다');
+  plan.push('본문 ' + c.row0 + '~' + c.endRow + '행: 기한 날짜서식 · 상태 수식 · 검수 목록 · 감점제외 체크박스');
+  plan.push('기한 · 상태 칸을 넓힌다 (옛 NO. 칸은 숫자 한 자리용이라 글자가 잘린다)');
+  plan.push('감점제외 · 이월 열을 숨긴다');
+  if (dry) return { ok: true, dry: true, plan: plan, cols: c };
+
+  /* ★insertColumnsAfter로 끼운다★ — 비고 오른쪽에 '차기 월 목표' 같은 내용이 있다.
+     그냥 그 칸에 써버리면 조용히 덮인다. 끼우면 시트가 수식 참조까지 같이 옮겨 준다. */
+  if (!have) {
+    sh.insertColumnsAfter(c.memo, 4);
+    SpreadsheetApp.flush();
+    sh.getRange(c.hr, c.memo + 1, 1, 4).setValues([IMP_TAIL.slice()]);
+    /* 머리글 서식은 기한 칸에서 복사한다 — 본사 몫 칸과 같은 색이 된다 */
+    sh.getRange(c.hr, c.due, 1, 1).copyTo(sh.getRange(c.hr, c.memo + 1, 1, 4), { formatOnly: true });
+    sh.setColumnWidth(c.memo + 1, 74);
+    sh.setColumnWidth(c.memo + 2, 104);
+    sh.setColumnWidth(c.memo + 3, 82);
+    sh.setColumnWidth(c.memo + 4, 62);
+    c = impCols(sh);                       // 끼우고 난 뒤의 열 번호로 다시 읽는다
+    if (!c.ok) return { ok: false, why: '칸을 끼운 뒤 머리글을 다시 읽지 못했습니다: ' + c.why };
+  }
+
+  if (!c.isNew) {
+    sh.getRange(c.hr, c.due, 1, 1).setValue('기한');
+    sh.getRange(c.hr, c.state, 1, 1).setValue('상태');
+    /* ★옛 번호를 반드시 지운다★ — B에는 1,2,3… 이 들어 있다. 그대로 두고 날짜 서식만 씌우면
+       1이 ★1899-12-31★이 되어, 매장 화면에도 시트에도 100년 전 기한이 뜬다.
+       숫자가 날짜로 둔갑하는 것은 경고 하나 없이 일어난다. 번호는 이제 쓰지 않으므로 비운다. */
+    sh.getRange(c.row0, c.due, n, 1).clearContent();
+  }
+
+  /* ★이미 한 번 잘못 바뀐 칸도 되돌린다★ — 위 clearContent는 머리글이 아직 'NO.'일 때만 돈다.
+     이 고침 이전에 올린 탭은 머리글이 '기한'이라 그 길을 타지 않고, 1899-12-31이 그대로 남는다.
+     기한이 2000년보다 앞이면 그것은 날짜가 아니라 ★번호가 둔갑한 것★이다. 조용히 지운다. */
+  try {
+    const dueVals = sh.getRange(c.row0, c.due, n, 1).getValues();
+    const cut = new Date(2000, 0, 1);
+    let bad = 0;
+    for (let i = 0; i < dueVals.length; i++) {
+      const v = dueVals[i][0];
+      const isOld = (v instanceof Date && v < cut) || (typeof v === 'number' && v !== 0);
+      if (isOld) { sh.getRange(c.row0 + i, c.due, 1, 1).clearContent(); bad++; }
+    }
+    if (bad) plan.push('★번호가 날짜로 둔갑한 칸 ' + bad + '개를 지웠습니다★');
+  } catch (e) { }
+
+  sh.getRange(c.row0, c.due, n, 1).setNumberFormat('yyyy-mm-dd').setHorizontalAlignment('center');
+  /* 옛 'NO.' 칸은 숫자 한 자리만 담으면 됐으므로 아주 좁다. 날짜와 상태 글자가 잘려
+     '99-12'·'료(검수 전'처럼 보인다 — 넓혀 준다. */
+  try { if (sh.getColumnWidth(c.due) < 88) sh.setColumnWidth(c.due, 88); } catch (e) { }
+  try { if (sh.getColumnWidth(c.state) < 96) sh.setColumnWidth(c.state, 96); } catch (e) { }
+  sh.getRange(c.row0, c.redo, n, 1).setNumberFormat('yyyy-mm-dd').setHorizontalAlignment('center');
+
+  const fs = [];
+  for (let i = 0; i < n; i++) fs.push([impStateFormula(c, c.row0 + i)]);
+  sh.getRange(c.row0, c.state, n, 1).setFormulas(fs).setHorizontalAlignment('center');
+
+  /* 검수는 세 말만 들어간다. 빈칸 = 아직 보지 않았다는 뜻이다 (설계 §4 — 검수는 의무가 아니다) */
+  try {
+    const rule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(['확정', '반려', '재반려'], true)
+      .setAllowInvalid(false).build();
+    sh.getRange(c.row0, c.audit, n, 1).setDataValidation(rule).setHorizontalAlignment('center');
+  } catch (e) { }
+  try { sh.getRange(c.row0, c.waive, n, 1).insertCheckboxes(); } catch (e) { }
+
+  try { sh.hideColumns(c.waive, 2); } catch (e) { }
+
+  return { ok: true, done: true, plan: plan, cols: c };
+}
+
 function makeMonthTabIn(ss, ym) {
   if (ss.getSheetByName(ym)) return { mark: '·', msg: '이미 있음' };
   const tabs = monthTabs(ss).filter(function (t) { return t < ym; });
@@ -4977,8 +5415,13 @@ function makeMonthTabIn(ss, ym) {
         t2.setValue(cur2.replace(/^\s*\d{1,2}\s*월/, Number(ym.slice(2, 4)) + '월'));
       }
     } catch (e) { }
-    // ① 개선요청 표 본문
-    const bodyRng = grid(sh, 12, 2, sh.getMaxRows() - 11, 14);
+    /* ① 개선요청 표 본문
+       ★지우는 폭을 시트에 물어서 정한다★ — 종전에는 B부터 14칸(B~O)으로 박혀 있었다.
+         2611을 2610에서 복제하면 새로 붙인 검수·재제출기한·감점제외·이월이 그 폭 밖이라
+         ★지난 달 검수 결과를 그대로 안은 채 새 달이 태어난다★. 아무도 눈치채지 못한다. */
+    const c0 = impCols(sh);
+    const wipeLast = c0.ok ? Math.max(c0.memo, c0.roll || 0) : 15;   // 못 읽으면 종전대로 O열까지
+    const bodyRng = grid(sh, 12, 2, sh.getMaxRows() - 11, Math.max(1, wipeLast - 1));
     if (bodyRng) bodyRng.clearContent();
     // ② 라벨 옆 값 칸 중 수식이 아닌 것
     const lm = labelMap(sh);
@@ -4997,6 +5440,17 @@ function makeMonthTabIn(ss, ym) {
         const c = grid(sh, p.row, p.col, 1, 1);
         if (c && String(c.getFormula() || '') === '') c.clearContent();
       });
+    /* ★서식을 새 것으로 올린다 (2610~)★ — 반드시 본문을 지운 다음이다.
+       위 clearContent가 상태 수식까지 지우므로 여기서 다시 깔아 준다(upgradeMonthTab은 몇 번을
+       돌려도 같은 결과가 되게 만들어 두었다). 실패하면 위 catch로 던져 ★탭을 통째로 되돌린다★ —
+       반쯤 바뀐 표를 남기느니 없는 편이 낫다. */
+    let upNote = '';
+    if (ym >= '2610') {
+      const up = upgradeMonthTab(sh);
+      if (!up.ok) throw new Error('개선요청 서식을 올리지 못했습니다 — ' + up.why);
+      upNote = '  · 개선요청 서식 ✓';
+    }
+
     /* ★복제된 보호 설정을 보고한다★ — copyTo는 보호까지 복제한다. 원본 탭이 보호돼 있으면
        새 탭도 보호된 채 태어나고, store.saveImprove가 게이트·락·rev를 다 통과한 뒤
        setValues 한 줄에서 죽어 SERVER_ERROR로만 보인다. 만드는 김에 알려주는 편이
@@ -5009,7 +5463,7 @@ function makeMonthTabIn(ss, ym) {
       const bad = pr.filter(function (x) { return !x.canEdit(); });
       if (bad.length) { mark = '✗'; note = '  ★보호 ' + bad.length + '건 — 이 매장은 저장되지 않습니다★'; }
     } catch (e2) { note = '  (보호 확인 실패)'; }
-    return { mark: mark, msg: tabs[0] + ' → ' + ym + note };
+    return { mark: mark, msg: tabs[0] + ' → ' + ym + upNote + note };
   } catch (e) {
     let removed = false;
     try { ss.deleteSheet(sh); removed = true; } catch (e2) { }
@@ -5026,6 +5480,173 @@ function makeMonthTabIn(ss, ym) {
      사라진다. 지워야 하는 것은 '데이터'이므로 ① 개선요청 표 본문(B12 이하)과 ② 라벨 옆
      값 칸 중 수식이 아닌 것만 지운다. 수식(개선율 등)은 그대로 두어야 새 달에도 계산된다.
    파일당 3~6초라 반드시 10곳씩. makeMonthTabs(['금종제과'], '2610') 으로 1곳 선검증할 것. */
+/* 검수 — [개선확정] · [보완 요청] (설계 §4 · 작업재개.md §1-7 ⑩)  ★관리자 전용★
+
+   ★검수는 의무가 아니다★ — 제출하면 그 순간 '완료(검수 전)'로 확정된다(월 56~280건이라 전건
+   승인은 불가능하다). 여기서 하는 일은 ①일찍 확정 도장을 찍거나 ②사후에 되돌리는 것뿐이다.
+
+   ★반려는 원탭이고 사유 칸이 없다★ — 세부 소통은 전화·메신저로 하고, 기록은 감사로그가 남긴다.
+     사유 칸을 만들면 담당자가 그 칸을 채우느라 검수를 미루게 된다.
+
+   재제출기한 = ★반려일 +7일과 원래 기한 중 긴 쪽★ — 마감 전에 반려하면 원 기한이 더 넉넉할 수
+     있는데, 그때 7일로 줄이면 반려가 오히려 기한을 앞당기는 벌이 된다.
+
+   ★재제출한 뒤 또 반려하면 '재반려'다★ — 무한 루프를 막는다. 그 뒤로는 미조치로 굳고,
+     되살리는 것은 관리자가 검수 칸을 비우는 길뿐이다. */
+function fnImproveAudit(ctx, payload) {
+  const p = payload || {};
+  const ym = String(p.ym || '').trim();
+  const no = p.no;
+  const verdict = String(p.verdict == null ? '' : p.verdict).trim();
+  if (!validYm(ym)) return err('BAD_REQUEST', 'ym 형식이 올바르지 않습니다 (예: 2610)');
+  if (!(typeof no === 'number' && no >= 1 && no === Math.floor(no))) {
+    return err('BAD_REQUEST', '항목 번호가 올바르지 않습니다.');
+  }
+  if (['확정', '반려', ''].indexOf(verdict) < 0) {
+    return err('BAD_REQUEST', "검수는 '확정'·'반려'·빈칸만 가능합니다.");
+  }
+
+  let ss, label;
+  if (p.fileId) {
+    /* ★사본에만 열어 준다★ — store.upgrade와 같은 규칙이다. 실매장은 매장명으로만 부른다.
+       사본은 STORE_FILE_WRITE 스위치를 타지 않는다(그 스위치는 실매장 26곳을 위한 것이다). */
+    try { ss = SpreadsheetApp.openById(String(p.fileId)); }
+    catch (e) { return err('BAD_REQUEST', '그 ID로 파일을 열지 못했습니다'); }
+    if (String(ss.getName()).indexOf('_연동테스트') < 0) {
+      return err('FORBIDDEN', '파일 ID로는 이름에 _연동테스트가 있는 사본만 다룰 수 있습니다: ' + ss.getName());
+    }
+    label = ss.getName();
+  } else {
+    if (!STORE_FILE_WRITE) {
+      return err('FORBIDDEN', '지금은 조회만 가능합니다. 매장 파일 기록은 아직 열리지 않았습니다.');
+    }
+    const store = normStore(p.store || '');
+    if (!store) return err('BAD_REQUEST', '매장을 지정해 주세요');
+    const id = storeFileId(store);
+    if (!id) return err('NOT_FOUND', '매장 파일을 찾지 못했습니다.');
+    ss = SpreadsheetApp.openById(id);
+    label = store;
+  }
+
+  const sh = ss.getSheetByName(ym);
+  if (!sh) return err('NOT_FOUND', ym + ' 탭이 없습니다.');
+  const g = impGeo(sh);
+  if (!g.isNew) return err('CONFLICT', '이 달 탭은 아직 새 서식이 아닙니다 — 검수 칸이 없습니다.');
+
+  const lock = LockService.getScriptLock();
+  let got = false;
+  try { got = lock.tryLock(20000); } catch (e) { got = false; }
+  if (!got) return err('CONFLICT', '다른 처리가 진행 중입니다. 잠시 후 다시 시도해 주세요.');
+  try {
+    const found = impFindRow(sh, g, no);
+    if (!found.ok) return err(found.code, found.error);
+    const r = found.row;
+    const tz = fileTz(ss);
+    const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+
+    const cur = String(grid(sh, r, g.audit, 1, 1).getValue() || '').trim();
+    let put = verdict, redo = '';
+    if (verdict === '반려') {
+      put = (cur === '반려' || cur === '재반려') ? '재반려' : '반려';
+      if (put === '반려') {
+        const plus7 = impPlusDays(today, IMP_REDO_DAYS, tz);
+        const dl = dateOfCell(grid(sh, r, g.due, 1, 1).getValue(), tz);
+        redo = (dl && plus7 && dl > plus7) ? dl : plus7;   // 긴 쪽
+      }
+    }
+    grid(sh, r, g.audit, 1, 1).setValue(put);
+    grid(sh, r, g.redo, 1, 1).setValue(redo);
+    SpreadsheetApp.flush();
+
+    /* ★쓴 값이 아니라 시트를 다시 읽어 판정한다★ — 날짜 서식이 값을 어떻게 저장했는지는
+       시트가 안다. 쓴 값으로 계산하면 화면과 시트가 갈라진다. */
+    const row = grid(sh, r, 2, 1, Math.max(14, g.last - 1)).getValues()[0];
+    const at = function (col) { return row[col - 2]; };
+    const jd = impJudge({
+      audit: at(g.audit), redo: at(g.redo),
+      doneNote: at(g.done), plan: at(g.plan), planRaw: at(g.plan), due: at(g.due),
+    }, today, tz, ym, false);
+
+    if (!p.fileId) dropStoreCache(label, ym);   // 매장이 바로 보게
+
+    return {
+      ok: true, store: label, ym: ym, no: no,
+      audit: put, redo: dateOfCell(at(g.redo), tz) || null,
+      status: jd.state, statusWhy: jd.why || '',
+    };
+  } finally {
+    try { lock.releaseLock(); } catch (e) { }
+  }
+}
+
+/* 매장 월 탭을 새 개선요청 서식으로 올린다 — ★관리자 전용★.
+   앱스 스크립트 편집기에서 함수를 고르는 것이 몹시 불안정해서(2026-08-20 기록) 실행 통로를
+   정식 기능으로 만들었다. 10/1에 문수가 직접 쓸 것이기도 하다.
+
+   ★기본이 미리보기다★ — apply:true 를 명시해야 실제로 쓴다. 무엇을 할지 먼저 읽고 누른다. */
+function fnStoreUpgrade(ctx, payload) {
+  const p = payload || {};
+  const ym = String(p.ym || '').trim();
+  if (!validYm(ym)) return err('BAD_REQUEST', 'ym 형식이 올바르지 않습니다 (예: 2610)');
+
+  let ss;
+  if (p.fileId) {
+    /* ★이름에 _연동테스트가 있는 사본에만 열어 준다★ — 파일 ID로 실매장을 직접 지목하는
+       길을 남기면 붙여넣기 한 번으로 남의 파일이 바뀐다. 실매장은 매장명으로만 부른다. */
+    try { ss = SpreadsheetApp.openById(String(p.fileId)); }
+    catch (e) { return err('BAD_REQUEST', '그 ID로 파일을 열지 못했습니다'); }
+    if (String(ss.getName()).indexOf('_연동테스트') < 0) {
+      return err('FORBIDDEN', '파일 ID로는 이름에 _연동테스트가 있는 사본만 다룰 수 있습니다: ' + ss.getName());
+    }
+  } else {
+    const store = normStore(p.store || '');
+    if (!store) return err('BAD_REQUEST', '매장을 지정해 주세요');
+    const id = storeFileId(store);
+    if (!id) return err('NOT_FOUND', STORE_MAP_SHEET + '에 매장이 없습니다: ' + store);
+    ss = SpreadsheetApp.openById(id);
+  }
+
+  const sh = ss.getSheetByName(ym);
+  if (!sh) return err('NOT_FOUND', '월 탭이 없습니다: ' + ym);
+
+  /* ★읽기 확인★ — 서식을 올린 탭을 매장 화면이 어떻게 읽는지 그대로 돌려준다.
+     사본은 매장파일맵에 없어 store.get으로 열 수 없기 때문이다. 읽기만 하고 아무것도 쓰지 않는다.
+     10/1에 실매장 10월 탭을 만든 뒤에도 이걸로 한 곳씩 확인하면 된다. */
+  if (p.probe === true) {
+    const rd = readStoreTab(ss, sh, String(p.store || '(사본)'), ym);
+    return {
+      ok: true, file: ss.getName(), ym: ym, probe: true,
+      summary: rd.summary,
+      items: (rd.items || []).slice(0, 5).map(function (it) {
+        /* ★저장이 이 항목을 어느 행에서 찾을지★ — 실제 저장 코드와 같은 함수로 확인한다 */
+        const fr = impFindRow(sh, impGeo(sh), it.no);
+        return {
+          saveRow: fr.ok ? fr.row : ('✗ ' + fr.error),
+          no: it.no, text: String(it.text || '').slice(0, 24), cat: it.cat,
+          state: it.state, status: it.status, statusWhy: it.statusWhy,
+          deadline: it.deadline, audit: it.audit, redo: it.redo,
+          dept: it.dept, doneNote: String(it.doneNote || '').slice(0, 20), rev: it.rev,
+        };
+      }),
+      count: (rd.items || []).length,
+    };
+  }
+
+  const r = upgradeMonthTab(sh, p.apply !== true);
+  if (!r.ok) return err('CONFLICT', r.why);
+  const c = r.cols || {};
+  return {
+    ok: true, file: ss.getName(), ym: ym, dry: !!r.dry, plan: r.plan || [],
+    cols: c.ok ? {
+      기한: colLetter(c.due), 상태: colLetter(c.state), 개선요청: colLetter(c.body),
+      담당부서: colLetter(c.dept), 비고: colLetter(c.memo),
+      검수: c.audit ? colLetter(c.audit) : '', 재제출기한: c.redo ? colLetter(c.redo) : '',
+      감점제외: c.waive ? colLetter(c.waive) : '', 이월: c.roll ? colLetter(c.roll) : '',
+      본문: c.row0 + '~' + c.endRow + '행',
+    } : null,
+  };
+}
+
 function makeMonthTabs(stores, ym, page) {
   if (!validYm(ym)) return 'ym 형식이 올바르지 않습니다 (예: 2610)';
   const sel = pickPage(stores, page);
@@ -5432,7 +6053,7 @@ function storeCellsIn(sh) {
   if (endRow < row0) return { ok: false, why: '표 끝(' + endRow + ')이 본문 시작(' + row0 + ')보다 앞입니다' };
 
   return {
-    ok: true, row0: row0, col0: hc, cols: lc - hc + 1, endRow: endRow,
+    ok: true, hr: hr, row0: row0, col0: hc, cols: lc - hc + 1, endRow: endRow,
     a1: sh.getRange(row0, hc, endRow - row0 + 1, lc - hc + 1).getA1Notation(),
   };
 }

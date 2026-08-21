@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=56">
+<link rel="stylesheet" href="css/app.css?v=57">
 </head>
 <body>
 <header class="topbar">
@@ -61,10 +61,10 @@
        개입할 자리가 없다 — 즉 이 한 줄이 유일한 방어다.
        guard('codes')는 Auth.menus()를 아는 상태에서 codes 읽기 권한이 없을 때만
        denyHome()으로 안내 후 홈으로 보낸다(모르면 통과 — 저장소가 비워진 기기 보호). -->
-<script src="js/auth.js?v=56"></script>
+<script src="js/auth.js?v=57"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('codes');</script>
-<script src="js/api.js?v=56"></script>
-<script src="js/codes-app.js?v=56"></script>
+<script src="js/api.js?v=57"></script>
+<script src="js/codes-app.js?v=57"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
