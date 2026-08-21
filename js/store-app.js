@@ -190,6 +190,51 @@
   }
 
   $('#ymSel').onchange = function () { curYm = $('#ymSel').value; load(); };
+
+  /* ---------- [월 채점 확정] — ★본사에게만 만들어진다★ ----------
+     매장 화면에는 이 버튼이 존재하지 않는다(감추는 것이 아니라 만들지 않는다).
+     ★반드시 미리보기를 먼저 보여 준다★ — 무엇이 확정되고 무엇이 이월되는지 읽고 누르게 한다.
+     한 번 누르면 점수가 굳고 시트가 잠긴다. */
+  function paintClose() {
+    const box = $('#closeBox');
+    if (!box) return;
+    if (!canAudit() || !(data && data.items)) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    const done = closedAt();
+    $('#closeNote').textContent = done
+      ? (curYm.slice(0,2) + '/' + curYm.slice(2) + ' 채점이 ' + done + '에 확정되었습니다')
+      : '확정하면 점수가 굳고 시트가 잠깁니다 (이월 건의 매장 칸만 열립니다)';
+    $('#closeBtn').disabled = !!done;
+    $('#closeBtn').textContent = done ? '확정됨' : '월 채점 확정';
+  }
+  modes.push && null;   // (modes는 카드별 갱신용이라 여기서는 쓰지 않는다)
+
+  const closeBtn = $('#closeBtn');
+  if (closeBtn) closeBtn.onclick = async function () {
+    closeBtn.disabled = true;
+    const pre = await Api.call('month.close', { store: curStore, ym: curYm })
+      .catch(function () { return null; });
+    closeBtn.disabled = false;
+    if (!(pre && pre.ok)) {
+      alert('미리보기를 불러오지 못했습니다.\n' + ((pre && pre.error) || '잠시 후 다시 시도해 주세요.'));
+      return;
+    }
+    const lines = (pre.plan || []).join('\n');
+    if (!confirm(curStore + ' ' + curYm.slice(0,2) + '/' + curYm.slice(2) + ' 채점을 확정할까요?\n\n'
+      + lines + '\n\n★확정하면 점수가 굳고 되돌릴 수 없습니다.★')) return;
+    closeBtn.disabled = true;
+    closeBtn.textContent = '확정하는 중…';
+    const r = await Api.call('month.close', { store: curStore, ym: curYm, apply: true })
+      .catch(function () { return null; });
+    if (!(r && r.ok)) {
+      closeBtn.disabled = false; closeBtn.textContent = '월 채점 확정';
+      alert('확정하지 못했습니다.\n' + ((r && r.error) || '잠시 후 다시 시도해 주세요.'));
+      return;
+    }
+    alert('확정했습니다.\n\n개선율 ' + (r.rate && r.rate.rate != null ? Math.round(r.rate.rate * 100) + '%' : '—')
+      + '\n이월 ' + r.rolled + '건\n' + (r.lock || ''));
+    load();
+  };
   $('#reloadBtn').onclick = function () { load(); };
   // 다시 연결되면 스냅샷 화면을 실제 값으로 바꿔 준다 (저장 버튼도 그때 살아난다)
   window.addEventListener('online', function () { if (fromSnap) load(); });
@@ -296,6 +341,7 @@
     data = res; fromSnap = false;
     snapPut(res);
     renderAll();
+    paintClose();
   }
 
   // ---------- 그리기 ----------
@@ -319,6 +365,9 @@
   function canAudit() {
     try { return !!(Auth.can('accounts', '쓰기') && !maint && online()); } catch (e) { return false; }
   }
+
+  /* 이 달이 확정되었나 — 서버(store.get)가 준 값만 본다. 화면이 날짜로 추측하지 않는다. */
+  function closedAt() { return (data && str(data.closedAt)) || ''; }
 
   function writable() {
     // 하나라도 아니면 저장할 수 없다: 점검 아님 · 역할 권한 · 서버 조회전용 아님 · 실데이터 · 온라인
@@ -689,6 +738,13 @@
     function paintAudit() {
       if (!canAudit() || !str(it.status)) { auditRow.style.display = 'none'; return; }
       auditRow.style.display = '';
+      /* ★확정된 달은 손대지 않는다★ — 점수가 이미 굳었다(§1-7 ⑪). 검수를 되돌리면
+         화면의 상태와 이미 반영된 점수가 갈라진다. 무엇이 확정됐는지만 적어 둔다. */
+      if (closedAt()) {
+        auditNote.textContent = '이 달은 ' + closedAt() + '에 채점이 확정되었습니다';
+        auditBtns.innerHTML = '';
+        return;
+      }
       auditBtns.innerHTML = '';
       const a = str(it.audit);
 

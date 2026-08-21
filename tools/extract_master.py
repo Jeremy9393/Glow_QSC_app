@@ -216,6 +216,31 @@ master = {
     'shopper_categories': shopper_cats,
 }
 OUT.parent.mkdir(parents=True, exist_ok=True)
+
+# ★source_sha·version 은 '뽑아낸 내용'에서 낸다 — 엑셀 파일 바이트가 아니다★
+#   (2026-08-21) 엑셀을 열었다 그냥 닫아도 파일 바이트와 수정시각이 바뀐다. 그때마다
+#   source_sha·version 이 달라져서 master.json이 '바뀐 파일'로 잡히고, 배포 점검이
+#   캐시 버전을 올리라고 한다. 문항은 한 글자도 안 바뀌었는데 26곳 폰이 앱을 다시 받는다.
+#   그렇게 두 번 헛 배포가 났다(v54·v55). 내용이 같으면 값도 같아야 한다.
+#   ★엑셀이 정말 바뀌면 아래 payload 가 달라지므로 여전히 잡힌다.★
+_payload = dict(master)
+_payload.pop('version', None)
+_payload.pop('source_sha', None)
+_body = json.dumps(_payload, ensure_ascii=False, sort_keys=True)
+master['source_sha'] = hashlib.sha256(_body.encode('utf-8')).hexdigest()[:12]
+
+# version 은 '내용이 마지막으로 바뀐 날'이다 — 내용이 같으면 옛 날짜를 그대로 지킨다.
+_prev = {}
+if OUT.exists():
+    try:
+        _prev = json.loads(OUT.read_text(encoding='utf-8'))
+    except Exception:
+        _prev = {}
+if _prev.get('source_sha') == master['source_sha'] and _prev.get('version'):
+    master['version'] = _prev['version']
+else:
+    master['version'] = XLSX_VERSION
+
 with open(OUT, 'w', encoding='utf-8') as f:
     json.dump(master, f, ensure_ascii=False, indent=1)
 
