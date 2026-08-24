@@ -3367,9 +3367,6 @@ function fnStoreGet(ctx, payload, target) {
      readOnly는 권한이, isNew는 그 계정의 최근접속이 정한다. 캐시에 담으면 먼저 연 사람의
      권한·기준선이 다음 사람에게 그대로 간다. */
   out.readOnly = !(prop('STORE_IMPROVE_WRITE', 'false') === 'true' && can(ctx.role, 'store', '쓰기').allow);
-  /* 확정된 달인지 화면이 알아야 [월 채점 확정] 버튼과 검수 버튼을 감출 수 있다.
-     ★캐시 뒤에 붙인다★ — 확정은 캐시(60초)보다 늦게 바뀌면 안 되는 정보다. */
-  try { out.closedAt = monthClosedAt(store, ym) || null; } catch (e) { out.closedAt = null; }
   markNewItems(out.items, store, ym, seenBaseline(ctx.id));
   return out;
 }
@@ -3630,6 +3627,12 @@ function readStoreTab(ss, sh, store, ym) {
   /* '오늘'은 ★매장 파일의★ 타임존으로 잡는다 (§9-4). toISOString()(UTC)을 쓰면 KST 자정이
      하루 앞으로 밀려, 매달 1일 아침에 전월 마감분이 통째로 '지연'으로 빨갛게 뜬다. */
   const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  /* ★확정된 달은 굳힌 값을 읽는다★ (2026-08-21) — 다시 계산하면 굳힌 의미가 없다.
+     확정 시점에 C열에 상태를, 요약에 개선율을 값으로 적어 두었다. 그 뒤로 날짜가 흐르거나
+     이월 표시가 붙으면 impJudge/impRate의 답이 달라져서 ★같은 달을 열 때마다 점수가 바뀐다★.
+     (확정 직후 개선율이 100%에서 33%로 흔들리는 것을 검수에서 잡았다) */
+  const closedAt = g.isNew ? monthClosedAt(ss, ym) : '';
+  const frozen = !!closedAt;
   const judged = [];   // 개선율 계산용 — 아래 impRate가 받는다
   for (let i = 0; i < vals.length; i++) {
     const v = vals[i], f = fmls[i];
@@ -3650,10 +3653,13 @@ function readStoreTab(ss, sh, store, ym) {
     const overdue = !!(due && !n && due < today);
     /* ★서버 판정★ — 시트 수식이 못 읽는 예정일까지 읽어 한 단계 더 가른다(impJudge 주석).
        final=false이므로 '미조치'는 아직 나오지 않는다 — 그것은 월 채점 확정의 몫이다. */
-    const jd = g.isNew ? impJudge({
-      audit: at(v, g.audit), redo: at(v, g.redo), doneNote: n, plan: m,
-      planRaw: at(v, g.plan), due: at(v, g.due),
-    }, today, tz, ym, false) : null;
+    const frz = frozen ? String(at(v, g.state) == null ? '' : at(v, g.state)).trim() : '';
+    const jd = !g.isNew ? null
+      : (frz ? { state: frz, why: '' }
+             : impJudge({
+                 audit: at(v, g.audit), redo: at(v, g.redo), doneNote: n, plan: m,
+                 planRaw: at(v, g.plan), due: at(v, g.due),
+               }, today, tz, ym, false));
     if (g.isNew) {
       judged.push({
         state: jd.state, planDate: jd.planDate || null,
@@ -3713,13 +3719,21 @@ function readStoreTab(ss, sh, store, ym) {
      진행중을 뺀다. 시트 수식으로는 이월 때문에 지난 달 탭을 건너다녀야 하고, 그런 수식은
      26곳 × 12개월에서 깨진다. 적힌 값은 본사가 손으로 고칠 수 있다(보호는 매장만 막는다). */
   let calc = null;
-  if (g.isNew) {
+  if (g.isNew && !frozen) {
     calc = impRate(judged);
     rate = calc.rate;
+  }
+  /* 확정된 달의 개선율은 ★시트에 적힌 값 그대로★다 — 다시 세지 않는다 */
+  if (frozen) {
+    const pr0 = labelValue(lm, L_RATE);
+    const fv = numOf(pr0.v);
+    if (fv !== null) rate = fv;
   }
 
   return {
     ok: true, store: store, ym: ym, label: ymLabel(ym), exists: true,
+    /* 확정된 달인지 — 화면이 검수 버튼과 [월 채점 확정]을 감추는 근거다 */
+    closedAt: closedAt || null,
     months: monthTabs(ss),
     summary: {
       visitDate: vDate.found ? cell(vDate.v, tz) : null,
@@ -3886,9 +3900,13 @@ function ymLabel(ym) {
    ※readStoreTab·makeMonthTabIn이 찾는 라벨과 같은 어휘를 여기 한 곳에 모아 둔다. */
 const LABEL_WORDS = (function () {
   const o = {};
+  /* ★새 이름을 반드시 여기 넣는다★ (2026-08-21) — 빠뜨리면 labelValue가 빈 값 칸을 지나
+     ★옆 라벨을 '값'으로 읽는다★. 실제로 그 때문에 10월 탭의 MS점수·MS등급 라벨이
+     통째로 지워졌다(QSC점수의 값 칸 E2가 비어 있어 F2까지 걸어갔다).
+     그러면 CS 점수를 영영 적을 자리가 없어진다. 라벨 이름을 새로 만들 때마다 이 줄을 같이 고칠 것. */
   ['방문일', '방문일자', '점검일', '점검일자', '방문시간',
-    '위생점수', 'QSC점수', '위생', 'CS점수', 'CS', '종합점수', '종합',
-    '위생등급', 'CS등급', '종합등급', '등급',
+    '위생점수', 'QSC점수', '위생', 'CS점수', 'MS점수', 'CS', 'MS', '종합점수', '종합',
+    '위생등급', 'QSC등급', 'CS등급', 'MS등급', '종합등급', '등급',
     '개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수',
     '개선예정/진행', '개선예정', '개선진행', '진행중', '진행',
     '개선완료', '조치완료', '완료', '미조치', '미이행', '개선율'
@@ -4063,6 +4081,21 @@ function fnStoreSave(ctx, payload, target) {
     const found = impFindRow(sh, g, no);
     if (!found.ok) return err(found.code, found.error);
     const r = found.row;
+
+    /* ★확정된 달은 이월된 줄만 받는다★ (2026-08-21)
+       시트 잠금은 ★사람★을 막는다. 앱은 스크립트 계정으로 쓰므로 그 잠금을 그냥 통과한다
+       (스크립트가 보호 편집자여야 애초에 기록을 할 수 있기 때문이다).
+       그래서 여기서 한 번 더 막는다 — 안 그러면 확정 뒤에도 앱으로 고칠 수 있고,
+       §1-7⑪ '확정 후 점수 불변'이 말뿐이 된다. ★검수에서 실제로 뚫렸다.★
+       이월된 줄만 여는 이유는 그 건이 다음 달로 넘어가 아직 답할 것이 남았기 때문이다(§1-8). */
+    if (g.isNew && monthClosedAt(ss, ym)) {
+      const rc = grid(sh, r, g.roll, 1, 1);
+      const rolled = rc ? Number(rc.getValue() || 0) : 0;
+      if (!(rolled >= 1)) {
+        return err('FORBIDDEN', ym.slice(0, 2) + '/' + ym.slice(2) +
+          ' 채점이 확정되어 이 항목은 더 고칠 수 없습니다. 다음 점검에서 확인합니다.');
+      }
+    }
 
     // 현재 개선요청~개선 후 6칸 재읽기 → rev 비교
     const cur = grid(sh, r, g.body, 1, 6);
@@ -5533,6 +5566,26 @@ const SCORE_RENAME = [
   ['위생등급', 'QSC등급'], ['CS등급', 'MS등급'],
 ];
 
+/* 지워진 점수 라벨을 되살린다 — 원본 탭에 있는 라벨 중 이 탭에 없는 것을 그 자리에 다시 쓴다.
+   ★2026-08-21에 LABEL_WORDS 누락으로 MS점수·MS등급이 지워진 탭을 고치려고 만들었다.★
+   원본과 자리가 같다는 전제 위에서만 동작하고(같은 원본에서 뜬 탭이므로 맞다),
+   이미 있는 라벨은 건드리지 않는다. */
+function healScoreLabels(sh, tplSh) {
+  if (!tplSh) return [];
+  const lm = labelMap(sh), lt = labelMap(tplSh);
+  const done = [];
+  ['QSC점수', 'MS점수', 'QSC등급', 'MS등급', '종합점수', '종합등급', '위생점수', 'CS점수'].forEach(function (w) {
+    if (lm.at[w]) return;              // 이 탭에 이미 있다
+    const at = lt.at[w];
+    if (!at) return;                   // 원본에도 없다 — 그 서식이 원래 그런 것이다
+    const cur = grid(sh, at.row, at.col, 1, 1);
+    if (!cur) return;
+    if (String(cur.getValue() || '').trim() !== '') return;   // ★빈 칸일 때만 쓴다★
+    try { cur.setValue(w); done.push(w + '@' + cur.getA1Notation()); } catch (e) { }
+  });
+  return done;
+}
+
 /* 라벨을 새 이름으로 바꾼다. ★옛 이름이 있을 때만★ 손대므로 몇 번 돌려도 같은 결과다. */
 function renameScoreLabels(sh) {
   const done = [];
@@ -5726,8 +5779,16 @@ function templateTabIn(ss, dry, rebuild) {
    26개 파일의 요약 서식이 조금씩 다른데 없는 자리를 억지로 만들면 그 파일만 어긋나기 때문이다. */
 const MC_PREFIX = 'MC:';
 
-function monthClosedAt(key, ym) {
-  try { return prop(MC_PREFIX + key + ':' + ym, ''); } catch (e) { return ''; }
+/* ★열쇠는 스프레드시트 ID다★ (2026-08-21) — 매장명으로 두었더니 사본에서는 파일명으로 남고
+   실매장에서는 매장명으로 남아 ★같은 달인데 열쇠가 갈라졌다★. 그래서 확정을 걸어 두고도
+   저장이 막히지 않고 개선율이 다시 계산됐다(검수에서 잡았다).
+   파일 ID는 매장명이 바뀌어도, 사본이든 실매장이든 하나뿐이다. */
+function monthClosedAt(ss, ym) {
+  try {
+    const id = (ss && typeof ss === 'object' && ss.getId) ? ss.getId() : String(ss || '');
+    if (!id) return '';
+    return prop(MC_PREFIX + id + ':' + ym, '');
+  } catch (e) { return ''; }
 }
 
 /* 그 달 탭을 잠근다. openRows = 열어 둘 본문 행 번호(이월된 줄).
@@ -5803,7 +5864,7 @@ function fnMonthClose(ctx, payload) {
   const g = impGeo(sh);
   if (!g.isNew) return err('CONFLICT', '이 달 탭은 아직 새 서식이 아닙니다 — 확정할 수 없습니다.');
 
-  const already = monthClosedAt(key, ym);
+  const already = monthClosedAt(ss, ym);
   if (already && !p.again) {
     return err('CONFLICT', ym + '은 이미 ' + already + '에 확정했습니다. 다시 확정하려면 again:true 를 주십시오.');
   }
@@ -5881,7 +5942,7 @@ function fnMonthClose(ctx, payload) {
     SpreadsheetApp.flush();
 
     const lk = lockMonthTab(sh, openRows);
-    PROPS.setProperty(MC_PREFIX + key + ':' + ym, today);
+    PROPS.setProperty(MC_PREFIX + ss.getId() + ':' + ym, today);
     if (!p.fileId) dropStoreCache(key, ym);
 
     return {
@@ -6124,6 +6185,15 @@ function fnStoreUpgrade(ctx, payload) {
     if (!dead) return { ok: true, file: ss.getName(), ym: ym, msg: '이미 없습니다' };
     try { ss.deleteSheet(dead); } catch (e) { return err('CONFLICT', '지우지 못했습니다: ' + String(e).slice(0, 60)); }
     return { ok: true, file: ss.getName(), ym: ym, msg: ym + ' 탭을 지웠습니다' };
+  }
+
+  if (p.heal === true) {
+    const sh0 = ss.getSheetByName(ym);
+    if (!sh0) return err('NOT_FOUND', '월 탭이 없습니다: ' + ym);
+    const tpl = ss.getSheetByName(TPL_NEW);
+    if (!tpl) return err('NOT_FOUND', TPL_NEW + ' 원본이 없습니다 — 먼저 store.template 을 돌리십시오');
+    const fixed = healScoreLabels(sh0, tpl);
+    return { ok: true, file: ss.getName(), ym: ym, healed: fixed, msg: fixed.length ? ('되살린 라벨: ' + fixed.join(', ')) : '되살릴 라벨이 없습니다' };
   }
 
   if (p.issue) {
