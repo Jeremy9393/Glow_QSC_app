@@ -6054,10 +6054,15 @@ function fnStoreMakeTab(ctx, payload) {
    ② ★같은 열의 다섯 줄은 반드시 같은 달을 봐야 한다★
       실제로 수식을 옆으로 끌어 복사해 범위까지 밀린 파일이 있었다(신라당 경주):
         K5(9월) → '2604'!I2:N9   L6(10월) → '2604'!J2:O9   N5(12월) → '2604'!L2:Q9
-      탭도 달도 범위도 어긋났다. 값이 안 나오니 ★조용히 빌 뿐★ 아무도 모른다.
-      그래서 열마다 '이 열은 몇 월인가'를 ★수식이 가리키는 달의 다수결★로 정하고,
-      어긋난 칸은 그 달의 올바른 수식으로 다시 쓴다. 머리글을 읽지 않는 이유는
-      병합·서식이 파일마다 달라 못 읽는 곳이 있기 때문이다. */
+      4월 칸(F5)을 복사해 K5:N6에 붙인 것이다 — 탭 이름은 글자라 그대로 '2604'로 남고
+      범위만 붙여넣은 거리만큼 밀렸다. 값이 안 나오니 ★조용히 빌 뿐★ 아무도 모른다.
+
+      ★열의 달은 머리글이 정한다★ (2026-08-24, 2판을 고쳐 3판)
+      2판은 '그 열 수식들이 가리키는 달의 다수결'로 정했다. 그런데 바로 그 파일에서
+      역효과가 났다 — 잘못된 칸이 다수라 다수결이 4월을 골랐고, 4월은 손대지 않는 달이라
+      ★고칠 것이 없다★고 답해 버렸다. 사고를 잡으려고 만든 규칙이 사고에 속은 것이다.
+      그래서 머리글 줄(1월…12월)을 먼저 읽어 열→달 지도를 만든다. 사람이 관리하는
+      라벨이라 붙여넣기 사고에 오염되지 않는다. 머리글을 못 읽을 때만 다수결로 물러선다. */
 const SUM_TAB = '월별 QSC현황표';
 const SUM_OLD_RE = /'(\d{4})'!\s*B2:E7\s*,\s*4/;   // 옛 서식 — 라벨 B · 값 E
 const SUM_NEW_RE = /'(\d{4})'!\s*D2:I9\s*,\s*5/;   // 지금 서식 — 라벨 D · 값 H
@@ -6084,6 +6089,43 @@ function monthTabLayout(ss, ym, memo) {
   return out;
 }
 
+/* ---------- 왜 막히는가 (2026-08-24) ----------
+   26곳에 적용했더니 ★24곳이 「보호된 셀이나 개체를 수정하려고 하고 있습니다」★로 막혔다.
+   금종제과 한 곳만 통했다. 보호는 사람을 막으려고 걸어 둔 것인데, 앱도 사람 계정으로
+   시트를 만지므로 같이 막힌다. 무엇이 다른지는 짐작하지 말고 ★물어봐서★ 알아낸다.
+   읽기만 한다 — 보호를 풀거나 고치지 않는다. */
+function probeSummaryIn(ss) {
+  const out = { file: ss.getName() };
+  try { out.owner = DriveApp.getFileById(ss.getId()).getOwner().getEmail(); }
+  catch (e) { out.owner = '못 읽음: ' + String(e).slice(0, 40); }
+  try { out.me = Session.getEffectiveUser().getEmail(); } catch (e) { out.me = '?'; }
+
+  const sh = ss.getSheetByName(SUM_TAB);
+  if (!sh) { out.tab = '없음'; return out; }
+  out.tab = '있음';
+
+  const list = [];
+  [SpreadsheetApp.ProtectionType.SHEET, SpreadsheetApp.ProtectionType.RANGE].forEach(function (ty) {
+    let ps = [];
+    try { ps = sh.getProtections(ty); } catch (e) { list.push({ err: String(e).slice(0, 50) }); return; }
+    ps.forEach(function (p) {
+      const one = { 종류: (ty === SpreadsheetApp.ProtectionType.SHEET ? '시트' : '범위') };
+      try { one.설명 = p.getDescription() || '(없음)'; } catch (e) { }
+      try { one.내가고칠수있나 = p.canEdit(); } catch (e) { one.내가고칠수있나 = '?'; }
+      try { one.경고만 = p.isWarningOnly(); } catch (e) { }
+      try { one.편집자 = p.getEditors().map(function (u) { return u.getEmail(); }).slice(0, 6); } catch (e) { }
+      try { if (ty === SpreadsheetApp.ProtectionType.RANGE) one.범위 = p.getRange().getA1Notation(); } catch (e) { }
+      try {
+        const un = p.getUnprotectedRanges() || [];
+        one.예외 = un.map(function (r) { return r.getA1Notation(); }).slice(0, 6);
+      } catch (e) { }
+      list.push(one);
+    });
+  });
+  out.보호 = list;
+  return out;
+}
+
 function fixSummaryTabIn(ss, dry, from) {
   const floor = String(from || SUM_FROM);
   const sh = ss.getSheetByName(SUM_TAB);
@@ -6106,18 +6148,42 @@ function fixSummaryTabIn(ss, dry, from) {
 
   const f = sh.getRange(1, 1, rows, cols).getFormulas();
 
-  /* ① 열마다 '몇 월인가' — 그 열 다섯 줄이 가리키는 달의 다수결 */
-  const vote = {};
+  /* ① 열마다 '몇 월인가'
+     ㉠ 먼저 ★머리글★(1월…12월)을 찾는다 — 사람이 관리하는 라벨이라 사고에 안 오염된다.
+     ㉡ 못 찾으면 그 열 수식들이 가리키는 달의 ★다수결★로 물러선다. */
+  const vote = {}, years = {};
   rowNums.forEach(function (r) {
     for (let c = 1; c <= cols; c++) {
       const m = f[r - 1][c - 1] ? f[r - 1][c - 1].match(SUM_ANY_RE) : null;
       if (!m) continue;
       vote[c] = vote[c] || {};
       vote[c][m[1]] = (vote[c][m[1]] || 0) + 1;
+      const yy = m[1].slice(0, 2);
+      years[yy] = (years[yy] || 0) + 1;
     }
   });
-  const colYm = {};
+  let year = '';
+  Object.keys(years).forEach(function (y) { if (!year || years[y] > years[year]) year = y; });
+
+  const head = sh.getRange(1, 1, Math.min(rows, 8), cols).getValues();
+  let hdr = null;
+  for (let r = 0; r < head.length; r++) {
+    const map = {};
+    let n = 0;
+    for (let c = 0; c < cols; c++) {
+      const mm = sumNorm(head[r][c]).match(/^(\d{1,2})월$/);
+      if (!mm) continue;
+      const num = Number(mm[1]);
+      if (num < 1 || num > 12) continue;
+      map[c + 1] = ('0' + num).slice(-2);
+      n++;
+    }
+    if (n >= 3 && (!hdr || n > hdr.n)) hdr = { map: map, n: n, row: r + 1 };
+  }
+
+  const colYm = {}, how = hdr ? '머리글' : '다수결';
   Object.keys(vote).forEach(function (c) {
+    if (hdr && year && hdr.map[c]) { colYm[c] = year + hdr.map[c]; return; }
     let top = '', n = 0, tie = false;
     Object.keys(vote[c]).forEach(function (y) {
       if (vote[c][y] > n) { top = y; n = vote[c][y]; tie = false; }
@@ -6155,6 +6221,7 @@ function fixSummaryTabIn(ss, dry, from) {
   todo.forEach(function (t) { per[t.ym] = (per[t.ym] || 0) + 1; });
   const list = Object.keys(per).sort().map(function (y) { return y + '(' + per[y] + '칸)'; });
   const tail =
+    ' · 열↔달은 ' + how + (hdr ? '(' + hdr.row + '행)' : '') + '로 정함' +
     (moved.length ? ' · ★엉뚱한 달을 보던 칸 ' + moved.join(', ') + '★' : '') +
     (Object.keys(past).length ? ' · 지난 달 ' + Object.keys(past).sort().join(',') + '은 그대로' : '') +
     (hold.length ? ' · 판단 보류 ' + uniq(hold).join(',') : '') +
@@ -6234,6 +6301,7 @@ function fnStoreFixSummary(ctx, payload) {
     if (String(ss.getName()).indexOf('_연동테스트') < 0) {
       return err('FORBIDDEN', '파일 ID로는 이름에 _연동테스트가 있는 사본만 다룰 수 있습니다: ' + ss.getName());
     }
+    if (p.probe === true) return { ok: true, probe: probeSummaryIn(ss) };
     return { ok: true, dry: !apply, file: ss.getName(), result: fixSummaryTabIn(ss, !apply, p.from) };
   }
 
@@ -6244,6 +6312,7 @@ function fnStoreFixSummary(ctx, payload) {
     try {
       const id = storeFileId(store);
       if (!id) { out.push({ mark: '✗', store: store, msg: STORE_MAP_SHEET + '에 매장 없음' }); return; }
+      if (p.probe === true) { out.push({ store: store, probe: probeSummaryIn(SpreadsheetApp.openById(id)) }); return; }
       const r = fixSummaryTabIn(SpreadsheetApp.openById(id), !apply, p.from);
       out.push({ mark: r.mark, store: store, msg: r.msg });
     } catch (e) {
