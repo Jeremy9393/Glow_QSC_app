@@ -154,12 +154,21 @@ async function initShopperForm(opts) {
         '[평가기준]\n' + (master.texts.shopper_criteria || '') +
         '\n\n' + (master.texts.shopper_principles || '');
     }
-    if ($('#resetBtn')) $('#resetBtn').onclick = function () {
-      if (!confirm('모든 응답을 지우고 새로 입력할까요?')) return;
-      localStorage.removeItem(DRAFT_KEY);
-      location.reload();
-    };
   }
+
+  /* ---------- 초기화 — ★관리자·고객 둘 다★ (2026-08-24) ----------
+     종전에는 관리자 전용이었다. 고객은 잘못 고른 답을 되돌릴 길이 없어 브라우저 데이터를
+     통째로 지우는 수밖에 없었다. 지우는 것은 ★이 기기의 임시저장뿐★이다 — 제출 전 화면이라
+     서버에는 애초에 아무것도 가 있지 않다.
+     ★DRAFT_KEY가 관리자·고객으로 갈려 있다★(shopper-admin-v4 / shopper-guest-v4) —
+     한쪽에서 눌러도 다른 쪽 작성 내용은 그대로 남는다.
+     location.reload()는 주소의 ?store= 같은 값을 그대로 두므로 매장 지정은 유지된다. */
+  if ($('#resetBtn')) $('#resetBtn').onclick = function () {
+    if (!confirm(ADMIN ? '모든 응답을 지우고 새로 입력할까요?'
+      : '지금까지 고르신 답을 모두 지우고 처음부터 다시 작성할까요?')) return;
+    localStorage.removeItem(DRAFT_KEY);
+    location.reload();
+  };
 
   function todayStr() {
     const d = new Date();
