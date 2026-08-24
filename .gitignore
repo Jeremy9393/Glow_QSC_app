@@ -11,3 +11,12 @@
 # 임시·백업
 ~$*
 *.tmp
+
+# ★clasp★ — 앱스 스크립트 배포 도구 (2026-08-24)
+# .clasp.json 에는 스크립트 ID가, .clasprc.json 에는 구글 로그인 토큰이 들어간다.
+# 저장소가 공개라 둘 다 올리지 않는다. 실제 값은 상위 폴더의 연동_설정값.md 에 있다.
+.clasp.json
+.clasprc.json
+# clasp pull 이 Code.gs 를 Code.js 로 한 벌 더 내려받는다 (구글 쪽 파일형식이 SERVER_JS).
+# 대조용으로만 쓰고 지우므로 저장소에는 두지 않는다.
+backend/Code.js
