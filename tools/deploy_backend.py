@@ -2,7 +2,12 @@
 """백엔드(앱스 스크립트) 배포 — clasp 로 올리고 ★있는 배포를 수정★한다.
 
   python tools/deploy_backend.py "v3.16-17 설명"
+  python tools/deploy_backend.py --if-changed "설명"   ← 안 바뀌었으면 그냥 넘어간다
   (또는 백엔드배포.bat 을 더블클릭)
+
+  --if-changed 는 배포.bat 이 쓴다. 화면만 고친 날 백엔드 버전이 쓸데없이 하나씩
+  늘어나지 않게, Code.gs 가 지난번 배포 때와 같으면 아무 일도 하지 않는다.
+  판단 근거는 backend/.deployed.json 에 적어 둔 지난 배포의 파일 지문(sha256)이다.
 
 ────────────────────────────────────────────────────────────────────
 왜 이 스크립트가 있는가
@@ -30,6 +35,7 @@
 ⑤ clasp deploy --deploymentId <그 ID>  — 새 버전을 만들어 ★그 배포에 끼운다★
 ⑥ 실서버에 물어 정말 ★그 버전★을 주는지 확인한다
 """
+import hashlib
 import json
 import os
 import re
@@ -40,6 +46,11 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND = os.path.join(ROOT, 'backend')
+STAMP = os.path.join(BACKEND, '.deployed.json')   # 지난 배포의 파일 지문
+ARGS = sys.argv[1:]
+IF_CHANGED = '--if-changed' in ARGS
+if IF_CHANGED:
+    ARGS = [a for a in ARGS if a != '--if-changed']
 NODE = os.path.abspath(os.path.join(ROOT, '..', '_도구', 'node'))
 CLASP = os.path.abspath(os.path.join(ROOT, '..', '_도구', 'node_modules', '.bin', 'clasp.cmd'))
 
@@ -78,6 +89,29 @@ def run(args, quiet=False):
 
 
 # ── 0. 도구가 있는가 ────────────────────────────────────────────
+def gs_sha():
+    with open(os.path.join(BACKEND, 'Code.gs'), 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+# ── -1. 바뀐 게 없으면 아무 일도 하지 않는다 ────────────────────
+#
+#  배포.bat 이 화면·백엔드를 한 번에 다루면서, 화면만 고친 날에도 여기까지 들어온다.
+#  그때마다 배포하면 백엔드 버전만 쓸데없이 늘고, 나중에 이력을 볼 때
+#  '이 버전에서 뭐가 바뀌었나'를 알 수 없게 된다. 그래서 지문을 대조하고 넘어간다.
+if IF_CHANGED:
+    line('백엔드가 바뀌었나')
+    try:
+        old = json.load(open(STAMP, encoding='utf-8'))
+    except Exception:
+        old = {}
+    if old.get('sha256') == gs_sha():
+        ok('Code.gs 가 지난 배포(버전 %s) 때와 같습니다 — 백엔드는 넘어갑니다' % old.get('version', '?'))
+        sys.exit(0)
+    print('   Code.gs 가 바뀌었습니다 — 배포합니다'
+          + ('' if old else ' (지난 배포 기록이 없어 처음으로 봅니다)'))
+
+
 line('0. 도구 확인')
 for path, what in [(os.path.join(NODE, 'node.exe'), 'Node.js'), (CLASP, 'clasp')]:
     if os.path.isfile(path):
@@ -155,7 +189,7 @@ ok('올렸습니다')
 
 
 # ── 4. 새 버전을 만들어 그 배포에 끼운다 ────────────────────────
-desc = ' '.join(sys.argv[1:]).strip() or time.strftime('%Y-%m-%d %H:%M 배포')
+desc = ' '.join(ARGS).strip() or time.strftime('%Y-%m-%d %H:%M 배포')
 line('4. 새 버전 + 배포 수정', 32)
 print('   설명: ' + desc)
 code, out = run(['deploy', '--deploymentId', DEPLOY_ID, '--description', desc])
@@ -193,6 +227,14 @@ try:
                  % (label or '(라벨 없음)', LIVE))
 except Exception as e:
     fail('실서버에 닿지 못했습니다: %s' % e)
+
+
+# \u2500\u2500 6. \ubb34\uc5c7\uc744 \ubc30\ud3ec\ud588\ub294\uc9c0 \uc9c0\ubb38\uc73c\ub85c \ub0a8\uae34\ub2e4 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+#     \ub2e4\uc74c\ubc88 --if-changed \uac00 \uc774\uac78 \ubcf4\uace0 '\ub118\uc5b4\uac08\uc9c0'\ub97c \uc815\ud55c\ub2e4.
+if not FAILED:
+    json.dump({'sha256': gs_sha(), 'version': LIVE, 'when': time.strftime('%Y-%m-%d %H:%M:%S'),
+               'description': desc},
+              open(STAMP, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
 
 
 print('\n' + '\u2550' * 60)
