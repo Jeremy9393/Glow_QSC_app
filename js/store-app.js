@@ -207,8 +207,6 @@
     $('#closeBtn').disabled = !!done;
     $('#closeBtn').textContent = done ? '확정됨' : '월 채점 확정';
   }
-  modes.push && null;   // (modes는 카드별 갱신용이라 여기서는 쓰지 않는다)
-
   const closeBtn = $('#closeBtn');
   if (closeBtn) closeBtn.onclick = async function () {
     closeBtn.disabled = true;

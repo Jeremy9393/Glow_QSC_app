@@ -4013,7 +4013,12 @@ function dropStoreCache(store, ym) {
 /* ★K~O만 쓴다★. 본사 몫인 B·C·D·J를 쓰는 코드 경로를 매장 기능층에 아예 만들지 않는다
    (§8-3 방어④). 열 번호를 계산하는 코드가 없으므로 오프셋 실수로 본사 칸을 덮을 수 없다. */
 function fnStoreSave(ctx, payload, target) {
-  if (prop('STORE_IMPROVE_WRITE', 'false') !== 'true') {
+  /* ★사본(_연동테스트)에서는 스위치를 타지 않는다★ — 그 스위치는 실매장 26곳을 위한 것이고,
+     10/1 전에 이 경로를 한 번도 못 돌려 보면 그날 처음 알게 된다. 실매장은 그대로 막힌다.
+     fileId는 관리자만 보낼 수 있고(이 액션은 menu:'store' 쓰기 권한이 필요하다),
+     이름에 _연동테스트가 없으면 곧바로 거절한다. */
+  const testId = String((payload && payload.fileId) || '');
+  if (!testId && prop('STORE_IMPROVE_WRITE', 'false') !== 'true') {
     return err('FORBIDDEN', '지금은 조회만 가능합니다. 저장 기능은 아직 열리지 않았습니다.');
   }
   const store = target;
@@ -4030,8 +4035,19 @@ function fnStoreSave(ctx, payload, target) {
   };
   for (const k in texts) if (texts[k].length > 1000) return err('BAD_REQUEST', '입력이 너무 깁니다 (1000자 이내).');
 
-  const id = storeFileId(store);
-  if (!id) return err('NOT_FOUND', '매장 파일을 찾지 못했습니다.');
+  let id;
+  if (testId) {
+    let probe;
+    try { probe = SpreadsheetApp.openById(testId); }
+    catch (e) { return err('BAD_REQUEST', '그 ID로 파일을 열지 못했습니다'); }
+    if (String(probe.getName()).indexOf('_연동테스트') < 0) {
+      return err('FORBIDDEN', '파일 ID로는 이름에 _연동테스트가 있는 사본만 다룰 수 있습니다: ' + probe.getName());
+    }
+    id = testId;
+  } else {
+    id = storeFileId(store);
+    if (!id) return err('NOT_FOUND', '매장 파일을 찾지 못했습니다.');
+  }
 
   const lock = LockService.getScriptLock();
   let got = false;
@@ -6097,6 +6113,34 @@ function fnStoreUpgrade(ctx, payload) {
     const id = storeFileId(store);
     if (!id) return err('NOT_FOUND', STORE_MAP_SHEET + '에 매장이 없습니다: ' + store);
     ss = SpreadsheetApp.openById(id);
+  }
+
+  /* ---------- 검수용 두 가지 — ★사본에서만★ ----------
+     10/1 전에 '발행'과 '탭 정리'를 한 번도 못 돌려 보면 그날 처음 알게 된다.
+     실매장은 위 분기에서 이미 걸러졌다(fileId는 _연동테스트만 통과한다). */
+  if (p.drop === true) {
+    if (!p.fileId) return err('FORBIDDEN', '탭 삭제는 사본에서만 됩니다 (fileId 필요)');
+    const dead = ss.getSheetByName(ym);
+    if (!dead) return { ok: true, file: ss.getName(), ym: ym, msg: '이미 없습니다' };
+    try { ss.deleteSheet(dead); } catch (e) { return err('CONFLICT', '지우지 못했습니다: ' + String(e).slice(0, 60)); }
+    return { ok: true, file: ss.getName(), ym: ym, msg: ym + ' 탭을 지웠습니다' };
+  }
+
+  if (p.issue) {
+    if (!p.fileId) return err('FORBIDDEN', '발행 시늉은 사본에서만 됩니다 (fileId 필요)');
+    /* ★진짜 발행 코드를 그대로 탄다★ — writeStoreQscInto 다. 시늉용 사본을 따로 만들면
+       "테스트는 통과했는데 실전은 다르더라"가 된다. 탭이 없으면 그 안에서 만들어진다. */
+    const items = (p.issue.items || []).map(function (x, i) {
+      return { no: Number(x.no || (i + 1)), code: String(x.code || ('T-' + (i + 1))),
+        group: '', text: '', value: Number(x.value || 1), severity: '', memo: String(x.memo || '테스트 개선요청 ' + (i + 1)) };
+    });
+    const r = writeStoreQscInto(ss, {
+      store: String(p.issue.store || ss.getName()),
+      date: String(p.issue.date || Utilities.formatDate(new Date(), fileTz(ss), 'yyyy-MM-dd')),
+      time: String(p.issue.time || ''),
+      items: items, result: { final: p.issue.final == null ? 90 : Number(p.issue.final) },
+    }, {}, ym);
+    return { ok: true, file: ss.getName(), ym: ym, issue: r };
   }
 
   const sh = ss.getSheetByName(ym);
