@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=59">
+<link rel="stylesheet" href="css/app.css?v=60">
 </head>
 <body>
 <header class="topbar">
@@ -17,7 +17,11 @@
   <span class="sub" id="cycleInfo"></span>
 </header>
 <div class="wrap">
-  <p class="note mockNote" id="mockNote">미리보기 — 구글 연동 전이라 발급 내용이 <b>이 기기에만</b> 저장됩니다. 연동 후에는 구글시트가 원장이 됩니다.</p>
+  <!-- 2026-08-24: '구글 연동 전' 안내를 지웠다. ★이미 연동되어 있다★ —
+       codes-app.js는 codes.list · codes.issue · codes.revoke 로 서버를 부르고,
+       원장은 `쇼퍼_코드` 시트다. 그 안내문은 연동 전에 붙여 둔 것이 그대로 남아
+       "코드는 이 기기에만 저장된다"는 틀린 말을 계속 하고 있었다.
+       (브라우저에 남은 qsc-codes-mock 키도 그 시절 흔적일 뿐 지금은 아무도 쓰지 않는다) -->
 
   <section class="card">
     <h2>코드 발급</h2>
@@ -61,10 +65,10 @@
        개입할 자리가 없다 — 즉 이 한 줄이 유일한 방어다.
        guard('codes')는 Auth.menus()를 아는 상태에서 codes 읽기 권한이 없을 때만
        denyHome()으로 안내 후 홈으로 보낸다(모르면 통과 — 저장소가 비워진 기기 보호). -->
-<script src="js/auth.js?v=59"></script>
+<script src="js/auth.js?v=60"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('codes');</script>
-<script src="js/api.js?v=59"></script>
-<script src="js/codes-app.js?v=59"></script>
+<script src="js/api.js?v=60"></script>
+<script src="js/codes-app.js?v=60"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

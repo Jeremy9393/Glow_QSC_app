@@ -304,6 +304,8 @@ function actionTable() {
     'store.template':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnStoreTemplate },
     /* 월 탭 미리 만들기 — 평소엔 점검 제출이 알아서 만든다. 이건 미리 만들거나 다시 만들 때 쓴다. */
     'store.makeTab':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnStoreMakeTab },
+    /* 매장 파일 「월별 QSC현황표」의 VLOOKUP 주소 수리 — 기본이 미리보기다. */
+    'store.fixSummary':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnStoreFixSummary },
     /* [월 채점 확정] — 그 달을 닫는다. 기본이 미리보기다. */
     'month.close':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMonthClose },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
@@ -6015,6 +6017,170 @@ function fnStoreMakeTab(ctx, payload) {
    ★STORE_FILE_WRITE 스위치를 타지 않는다★ — 그 스위치는 '점검 결과를 매장 파일에 자동 기록'을
    여는 것이고 10/1에 켠다. 원본 탭은 그 전에 미리 만들어 두는 것이 목적이므로 여기서 막으면
    기능 자체가 성립하지 않는다. 대신 ①관리자 인증 ②기본 미리보기 ③한 번에 10곳으로 좁혀 둔다. */
+/* ---------- 매장 파일 「월별 QSC현황표」 수리 (2026-08-24) ----------
+
+   그 탭은 월 탭에서 VLOOKUP으로 건수와 개선율을 끌어온다.
+
+     J8(8월)  =IFERROR(VLOOKUP("개선율", '2608'!D2:I9, 5, FALSE), "")
+
+   그런데 월 탭 서식이 도중에 바뀌었다 — ★라벨 B열·값 E열 → 라벨 D열·값 H열★.
+   ★바뀐 달이 파일마다 다르다★(어떤 곳은 2604부터, 어떤 곳은 2605부터). 요약 탭 수식은
+   그때그때 손으로 고쳤기 때문에 ★10~12월은 확인한 파일 전부, 9월은 일부 파일★이
+   옛 주소를 그대로 보고 있다. VLOOKUP이 못 찾으면 IFERROR가 빈칸을 돌려준다 — 조용히 빈다.
+
+   그냥 두면:
+     · 10월부터 개선율은 종합점수의 10%다. 그 칸이 비면 종합이 안 나온다.
+     · 연간 개선율 O4 = 개선완료 합 ÷ 개선요청 합 인데 9~12월이 통째로 빠진다.
+       통합시트 CU열이 바로 그 칸을 IMPORTRANGE로 읽는다.
+
+   ★9월까지 그 칸은 '개선요청(건)'이고 10월부터는 '개선현황(%)'이다★ (2026-08-24 사용자 확인)
+   뜻이 바뀐 것이지 자리가 바뀐 것이 아니다. 그래서 수리는 뜻을 보지 않고 ★주소만★ 본다.
+
+   ★수식을 새로 쓰지 않는다 — 범위만 갈아 끼운다★
+   있는 수식에서 '어느 월 탭을 보는가'만 읽는다. 통째로 다시 쓰면 파일마다 다른 사정을
+   뭉갠다. 칸 단위로만 쓴다(범위로 쓰면 수식이 없는 칸의 ★값이 지워진다★).
+
+   ★모르는 것은 고치지 않고 적어 낸다★ — 있어야 할 모양(IFERROR+VLOOKUP+그 줄의 라벨)이
+   아닌 칸은 others로 돌려준다. 짐작해서 고치면 틀렸을 때 아무도 모른다.
+
+   ---------- 2026-08-24 사용자 결정 두 가지 ----------
+
+   ① ★지난 달은 건드리지 않는다 (기본 2609부터)★
+      D2:I9로 바꾼 것은 문수님이 운영 중에 손수 하신 일이고, 그때그때 요약 탭도 같이
+      고쳐 오셨다. 1~8월 칸이 비어 있는 곳이 남아 있지만 연간 개선율은 판단 자료가
+      아니라 그대로 두기로 했다. ★그래서 손대는 달은 전부 아직 데이터가 없는 달이다★ —
+      이 사실이 아래 ②를 안전하게 만든다.
+
+   ② ★같은 열의 다섯 줄은 반드시 같은 달을 봐야 한다★
+      실제로 수식을 옆으로 끌어 복사해 범위까지 밀린 파일이 있었다(신라당 경주):
+        K5(9월) → '2604'!I2:N9   L6(10월) → '2604'!J2:O9   N5(12월) → '2604'!L2:Q9
+      탭도 달도 범위도 어긋났다. 값이 안 나오니 ★조용히 빌 뿐★ 아무도 모른다.
+      그래서 열마다 '이 열은 몇 월인가'를 ★수식이 가리키는 달의 다수결★로 정하고,
+      어긋난 칸은 그 달의 올바른 수식으로 다시 쓴다. 머리글을 읽지 않는 이유는
+      병합·서식이 파일마다 달라 못 읽는 곳이 있기 때문이다. */
+const SUM_TAB = '월별 QSC현황표';
+const SUM_OLD_RE = /'(\d{4})'!\s*B2:E7\s*,\s*4/;   // 옛 서식 — 라벨 B · 값 E
+const SUM_NEW_RE = /'(\d{4})'!\s*D2:I9\s*,\s*5/;   // 지금 서식 — 라벨 D · 값 H
+const SUM_ANY_RE = /'(\d{4})'!/;
+/* 요약 탭에서 손댈 다섯 줄. ★B열 라벨로 찾는다★ — 행 번호는 파일마다 밀릴 수 있다. */
+const SUM_ROW_LABELS = ['개선요청사항', '개선예정/진행', '개선완료', '미조치', '개선율'];
+const SUM_FROM = '2609';                    // 이 달부터만 손댄다 (사용자 결정)
+function sumNorm(x) { return String(x == null ? '' : x).replace(/\s+/g, ''); }
+
+/* 그 월 탭이 어느 서식인가.
+   ★아직 없는 탭은 새 서식으로 본다★ — tabSourceFor가 새 원본(TPL_NEW)을 먼저 고르므로
+   그 탭은 새 서식으로 태어난다. 원본조차 없으면 판단하지 않는다(빈 문자열 → 손대지 않는다). */
+function monthTabLayout(ss, ym, memo) {
+  if (memo && memo[ym] !== undefined) return memo[ym];
+  let out = '';
+  const sh = ss.getSheetByName(ym);
+  if (!sh) {
+    out = ss.getSheetByName(TPL_NEW) ? 'new' : '';
+  } else {
+    const at = labelMap(sh).at['개선요청사항'];
+    out = at ? (at.col >= 4 ? 'new' : 'old') : '';
+  }
+  if (memo) memo[ym] = out;
+  return out;
+}
+
+function fixSummaryTabIn(ss, dry, from) {
+  const floor = String(from || SUM_FROM);
+  const sh = ss.getSheetByName(SUM_TAB);
+  if (!sh) return { mark: '✗', msg: SUM_TAB + ' 탭이 없습니다' };
+  const rows = Math.min(sh.getLastRow(), 30);
+  const cols = Math.min(sh.getLastColumn(), 30);
+  if (!rows || !cols) return { mark: '✗', msg: SUM_TAB + ' 탭이 비어 있습니다' };
+
+  /* 손댈 줄을 B열 라벨로 정한다 */
+  const bcol = sh.getRange(1, 2, rows, 1).getValues();
+  const label = {};
+  const rowNums = [];
+  for (let r = 0; r < rows; r++) {
+    const t = sumNorm(bcol[r][0]);
+    if (SUM_ROW_LABELS.indexOf(t) >= 0 && !label[r + 1]) { label[r + 1] = t; rowNums.push(r + 1); }
+  }
+  if (!rowNums.length) {
+    return { mark: '✗', msg: SUM_TAB + '에서 개선요청사항~개선율 줄을 못 찾았습니다 (B열 라벨)' };
+  }
+
+  const f = sh.getRange(1, 1, rows, cols).getFormulas();
+
+  /* ① 열마다 '몇 월인가' — 그 열 다섯 줄이 가리키는 달의 다수결 */
+  const vote = {};
+  rowNums.forEach(function (r) {
+    for (let c = 1; c <= cols; c++) {
+      const m = f[r - 1][c - 1] ? f[r - 1][c - 1].match(SUM_ANY_RE) : null;
+      if (!m) continue;
+      vote[c] = vote[c] || {};
+      vote[c][m[1]] = (vote[c][m[1]] || 0) + 1;
+    }
+  });
+  const colYm = {};
+  Object.keys(vote).forEach(function (c) {
+    let top = '', n = 0, tie = false;
+    Object.keys(vote[c]).forEach(function (y) {
+      if (vote[c][y] > n) { top = y; n = vote[c][y]; tie = false; }
+      else if (vote[c][y] === n) { tie = true; }
+    });
+    if (n >= 2 && !tie) colYm[c] = top;      /* 과반이 분명할 때만 열의 달로 인정한다 */
+  });
+
+  /* ② 있어야 할 수식과 대조 */
+  const memo = {}, todo = [], hold = [], others = [], past = {}, moved = [];
+  rowNums.forEach(function (r) {
+    for (let c = 1; c <= cols; c++) {
+      const cur = f[r - 1][c - 1];
+      if (!cur) continue;
+      const m = cur.match(SUM_ANY_RE);
+      if (!m) continue;
+      const want = colYm[c] || m[1];          /* 열의 달을 못 정했으면 수식이 가리키는 달을 믿는다 */
+      if (want < floor) { past[want] = 1; continue; }        /* ★지난 달은 그대로 둔다★ */
+      const lay = monthTabLayout(ss, want, memo);
+      if (!lay) { hold.push(want); continue; }
+      /* 있어야 할 모양이 아니면 손대지 않는다 */
+      if (cur.indexOf('VLOOKUP(') < 0 || cur.indexOf('"' + label[r] + '"') < 0) {
+        others.push(sh.getRange(r, c).getA1Notation() + '=' + m[1]);
+        continue;
+      }
+      const rng = (lay === 'new') ? "'" + want + "'!D2:I9, 5" : "'" + want + "'!B2:E7, 4";
+      const next = '=IFERROR(VLOOKUP("' + label[r] + '", ' + rng + ', FALSE), "")';
+      if (sumNorm(cur) === sumNorm(next)) continue;
+      if (m[1] !== want) moved.push(sh.getRange(r, c).getA1Notation() + ' ' + m[1] + '→' + want);
+      todo.push({ r: r, c: c, ym: want, next: next });
+    }
+  });
+
+  const per = {};
+  todo.forEach(function (t) { per[t.ym] = (per[t.ym] || 0) + 1; });
+  const list = Object.keys(per).sort().map(function (y) { return y + '(' + per[y] + '칸)'; });
+  const tail =
+    (moved.length ? ' · ★엉뚱한 달을 보던 칸 ' + moved.join(', ') + '★' : '') +
+    (Object.keys(past).length ? ' · 지난 달 ' + Object.keys(past).sort().join(',') + '은 그대로' : '') +
+    (hold.length ? ' · 판단 보류 ' + uniq(hold).join(',') : '') +
+    (others.length ? ' · ★모양이 다른 칸 ' + others.slice(0, 8).join(',') + '★' : '');
+
+  if (!todo.length) return { mark: others.length ? '✗' : '·', msg: '고칠 것이 없습니다' + tail, others: others };
+  if (dry) return { mark: '·', fix: todo.length, others: others, moved: moved,
+    msg: '고칠 곳 ' + todo.length + '칸 — ' + list.join(' ') + tail };
+
+  todo.forEach(function (t) { sh.getRange(t.r, t.c).setFormula(t.next); });
+  SpreadsheetApp.flush();
+  /* ★쓴 것을 다시 읽어 확인한다★ — 보호·잠금에 막혀 조용히 안 들어가는 일이 실제로 있었다 */
+  let bad = 0;
+  todo.forEach(function (t) {
+    if (sumNorm(sh.getRange(t.r, t.c).getFormula()) !== sumNorm(t.next)) bad++;
+  });
+  return { mark: bad ? '✗' : '✓', fix: todo.length, bad: bad, others: others, moved: moved,
+    msg: (bad ? ('★' + bad + '칸이 안 들어갔습니다★ ') : '') + todo.length + '칸 고침 — ' + list.join(' ') + tail };
+}
+
+function uniq(a) {
+  const seen = {}, out = [];
+  a.forEach(function (x) { if (!seen[x]) { seen[x] = 1; out.push(x); } });
+  return out;
+}
+
 function fnStoreTemplate(ctx, payload) {
   const p = payload || {};
   const apply = p.apply === true;
@@ -6047,6 +6213,46 @@ function fnStoreTemplate(ctx, payload) {
     ok: true, dry: !apply, page: sel.page, total: sel.total, left: sel.left,
     next: sel.left ? (sel.page + 1) : null,
     results: out,
+  };
+}
+
+
+/* 「월별 QSC현황표」 주소 수리 — ★기본이 미리보기다★. 10곳씩 (45초 시한 때문).
+     await Api.call('store.fixSummary', {})                 ← 1~10곳 미리보기
+     await Api.call('store.fixSummary', {page:1})           ← 11~20곳
+     await Api.call('store.fixSummary', {apply:true})       ← 실제로 고친다
+     await Api.call('store.fixSummary', {fileId:'…사본…'})   ← 사본에서 먼저
+     await Api.call('store.fixSummary', {from:'2601'})       ← 지난 달까지 (기본은 2609부터) */
+function fnStoreFixSummary(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+
+  if (p.fileId) {
+    let ss;
+    try { ss = SpreadsheetApp.openById(String(p.fileId)); }
+    catch (e) { return err('BAD_REQUEST', '그 ID로 파일을 열지 못했습니다'); }
+    if (String(ss.getName()).indexOf('_연동테스트') < 0) {
+      return err('FORBIDDEN', '파일 ID로는 이름에 _연동테스트가 있는 사본만 다룰 수 있습니다: ' + ss.getName());
+    }
+    return { ok: true, dry: !apply, file: ss.getName(), result: fixSummaryTabIn(ss, !apply, p.from) };
+  }
+
+  const sel = pickPage(p.stores, p.page);
+  const out = [];
+  sel.list.forEach(function (raw) {
+    const store = normStore(raw);
+    try {
+      const id = storeFileId(store);
+      if (!id) { out.push({ mark: '✗', store: store, msg: STORE_MAP_SHEET + '에 매장 없음' }); return; }
+      const r = fixSummaryTabIn(SpreadsheetApp.openById(id), !apply, p.from);
+      out.push({ mark: r.mark, store: store, msg: r.msg });
+    } catch (e) {
+      out.push({ mark: '✗', store: store, msg: String(e).slice(0, 100) });
+    }
+  });
+  return {
+    ok: true, dry: !apply, page: sel.page, total: sel.total, left: sel.left,
+    next: sel.left ? (sel.page + 1) : null, results: out,
   };
 }
 
