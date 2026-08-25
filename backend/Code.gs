@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v41', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v43', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -324,6 +324,8 @@ function actionTable() {
     'admin.undoSubmit':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnUndoSubmit },
     /* 인증 시트를 응답 시트로 합치기 — 일회성. 기본이 미리보기다. */
     'admin.mergeAuth':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMergeAuth },
+    /* 매장 월 탭 보호 — 인자가 없으면 대상 목록만 보여준다(아무것도 걸지 않는다). */
+    'admin.protect':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnProtect },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -4840,6 +4842,60 @@ function switchesSet_(on) {
 function switchesOn() { return switchesSet_(true); }
 function switchesOff() { return switchesSet_(false); }
 
+/* ═══ 매장 월 탭 보호 — 관리자 화면에서 부르기 (admin.protect) ═══════════════════
+   본체는 protectMonthTabsIn / protectStoreTabs 다. 이 함수는 앱에서 부를 수 있게 감싼 것뿐이다
+   — 편집기 함수 목록이 283개라 드롭다운에서 고르기가 사실상 불가능하다.
+
+     await Api.call('admin.protect', {})                     ← 대상 목록만 (아무것도 안 건다)
+     await Api.call('admin.protect', {fileId:'…사본…'})       ← ★사본에 먼저★ (이름에 '연동테스트' 필수)
+     await Api.call('admin.protect', {store:'금종제과 익산'})   ← 실물 한 곳
+     await Api.call('admin.protect', {page:0})               ← 10곳씩 (0·1·2)
+     await Api.call('admin.protect', {store:'…', undo:true}) ← 되돌리기
+
+   ★6분 한도★ 때문에 10곳씩 나눈다. 한 쪽이 끝나면 다음 쪽 번호를 결과에 적어 준다. */
+function fnProtect(ctx, payload) {
+  const p = payload || {};
+  const undo = p.undo === true;
+
+  if (p.fileId) {
+    /* 사본 전용 길 — 이름으로 막는다. 진짜 매장은 store/page 로 부르게 한다(오타 한 번에
+       실매장이 잠기는 것을 막는 유일한 방어다). */
+    const ss = SpreadsheetApp.openById(String(p.fileId));
+    const nm = ss.getName();
+    /* 구글이 붙이는 '…의 사본'도 받아 준다 — 사본을 만든 직후 이름을 못 바꾸는 경우가 많다.
+       진짜 매장 파일이 그런 이름일 리는 없다. */
+    if (!/연동테스트|의 사본/.test(nm)) {
+      return err('BAD_REQUEST', '사본이 아닙니다 (' + nm + ') — 이름에 「연동테스트」나 「의 사본」이 들어간 파일에만 걸립니다.');
+    }
+    const lines = undo ? unprotectMonthTabsIn(ss) : protectMonthTabsIn(ss);
+    auditLog(ctx, 'admin.protect', '', '성공', '', '사본 ' + nm + (undo ? ' 되돌리기' : ''));
+    return { ok: true, target: nm, lines: lines };
+  }
+
+  if (p.store) {
+    const msg = undo ? unprotectStoreTabs([String(p.store)]) : protectStoreTabs([String(p.store)]);
+    auditLog(ctx, 'admin.protect', String(p.store), '성공', '', undo ? '되돌리기' : '보호');
+    return { ok: true, lines: String(msg).split('\n') };
+  }
+
+  if (p.page === 0 || (typeof p.page === 'number' && p.page > 0)) {
+    const msg = undo ? unprotectStoreTabs(null, p.page) : protectStoreTabs(null, p.page);
+    auditLog(ctx, 'admin.protect', '', '성공', '', (undo ? '되돌리기' : '보호') + ' ' + (p.page + 1) + '쪽');
+    return { ok: true, lines: String(msg).split('\n') };
+  }
+
+  /* 기본 — 아무것도 걸지 않고 대상만 보여준다. 파일을 열지 않으므로 빠르다. */
+  const all = displayStores();
+  const pages = [];
+  for (let i = 0; i < all.length; i += 10) pages.push((i / 10) + '쪽: ' + all.slice(i, i + 10).join(', '));
+  return { ok: true, preview: true, total: all.length, pages: pages, 규칙: [
+    '~' + PROTECT_FULL_FROM + ' 이전 월 탭 : 일부 보호 — 답변 칸(담당부서~비고)만 열림',
+    PROTECT_FULL_FROM + ' 이후 월 탭 : 전면 보호 — 앱·본사만 편집',
+    '양식 원본류 탭(원본·개편안) : 전면 보호 — 여기서 복제되는 새 월 탭도 잠긴 채 태어난다',
+    "'월별 QSC현황표'는 손대지 않는다 (본사가 건 보호를 잃지 않으려고)",
+  ] };
+}
+
 /* ═══ 인증 시트를 응답 시트로 합치기 — 일회성 (admin.mergeAuth) ═══════════════════
    담당자 요청(2026-08-25): "시트 두 개를 따로 두는 게 불편하다. 「QSC관리자 시트」 하나에 탭으로 두자."
 
@@ -7257,18 +7313,58 @@ function clearProtections(sh) {
      종전의 '스크립트 편집가능=true'는 방금 자기가 만든 보호에게 물은 것이라 늘 참이었다.
      지금은 보호를 건 뒤 시트에서 ①보호 개수 ②열린 범위 ③스크립트 편집 가능 여부를
      ★다시 읽어★ 기대와 맞는지 대조한다. 하나라도 어긋나면 ✗다. */
+/* ★달에 따라 거는 방식이 다르다★ (2026-08-25 담당자 확인)
+
+     ~2609  점장이 월 탭에 ★직접 입력하던★ 달이다 → '일부 보호'. 답변 칸(담당부서~비고)만 열어 둔다.
+            9월 개선요청을 10월에 마저 적는 일이 있으므로 2609도 열어 둔다.
+     2610~  점장은 ★앱으로만★ 개선보고를 올린다(STORE_IMPROVE_WRITE). 시트를 직접 열 이유가 없다
+            → '전면 보호'. 앱 계정과 소유자만 편집할 수 있다.
+
+   ★양식 원본 탭도 전면 보호한다★ — 이것이 앞으로를 지키는 핵심이다.
+     copyTo는 보호까지 복제하므로, 원본이 전면 보호(앱 계정이 편집자)면
+     10·11·12월 탭이 ★보호된 채 태어난다★. 매달 다시 걸어 줄 필요가 없다.
+     반대로 원본이 무방비면, 링크를 가진 누군가가 그것을 고치는 순간
+     앞으로 만들어질 모든 월 탭이 조용히 틀어진다. */
+const PROTECT_FULL_FROM = '2610';
+const TPL_TAB_RE = /원본|개편안/;
+
 function protectMonthTabsIn(ss) {
   const me = (function () { try { return Session.getEffectiveUser().getEmail(); } catch (e) { return ''; } })();
   const out = [];
-  const tabs = monthTabs(ss);
+  /* 대상은 ①4자리 월 탭 ②양식 원본류 탭 뿐이다.
+     ★'월별 QSC현황표'는 손대지 않는다★ — 본사가 건 보호가 이미 있고, 지웠다 다시 걸면
+     본사가 정해 둔 편집자 목록이 날아간다. */
+  const tabs = ss.getSheets().map(function (sh) { return sh.getName().trim(); })
+    .filter(function (n) { return /^\d{4}$/.test(n) || TPL_TAB_RE.test(n); })
+    .sort().reverse();
+
   for (let i = 0; i < tabs.length; i++) {
     const tab = tabs[i];
     const sh = ss.getSheetByName(tab);
     if (!sh) continue;
+    const isTpl = TPL_TAB_RE.test(tab);
+    const full = isTpl || tab >= PROTECT_FULL_FROM;   // 전면 잠글 것인가
+    const how = full ? '전면' : '일부';
+
+    /* 양식 원본에 이미 보호가 있으면 손대지 않는다 — 목적(남이 못 고침)은 이미 이뤄져 있고,
+       지웠다 다시 걸면 본사가 정해 둔 편집자를 잃는다. 다만 앱이 못 쓰면 그건 알려야 한다. */
+    if (isTpl) {
+      let had = [];
+      try { had = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET); } catch (e) { }
+      if (had.length) {
+        let can = false;
+        try { can = had[0].canEdit(); } catch (e) { }
+        out.push((can ? '· ' : '✗ ') + tab + ' : 이미 보호돼 있어 그대로 둡니다' +
+          (can ? '' : ' — ★앱이 이 탭을 못 씁니다. 새 월 탭이 만들어지지 않습니다★'));
+        continue;
+      }
+    }
 
     /* ① 자리부터 알아낸다. 모르면 ★아무것도 건드리지 않고★ 넘어간다 —
-          보호를 먼저 지웠다가 실패하면 그 탭이 무방비로 남는다(지적 17·18). */
-    const box = storeCellsIn(sh);
+          보호를 먼저 지웠다가 실패하면 그 탭이 무방비로 남는다(지적 17·18).
+          ★전면 잠글 탭에는 필요 없다★ — 열어 둘 칸이 없으니 자리를 몰라도 된다.
+          (양식 원본은 표 모양이 달라 storeCellsIn이 실패하기 쉽다. 그것 때문에 건너뛰면 안 된다.) */
+    const box = full ? { ok: true, a1: '(없음 · 전면 잠금)' } : storeCellsIn(sh);
     if (!box.ok) { out.push('✗ ' + tab + ' : ' + box.why + ' — 손대지 않았습니다'); continue; }
 
     /* ② 옛 보호 정리. 못 지운 것이 있으면 새로 걸지 않는다 —
@@ -7282,8 +7378,11 @@ function protectMonthTabsIn(ss) {
 
     let pr = null;
     try {
-      pr = sh.protect().setDescription('QSC — 매장은 답변 칸만 편집 (' + box.a1 + ')');
-      pr.setUnprotectedRanges([sh.getRange(box.row0, box.col0, box.endRow - box.row0 + 1, box.cols)]);
+      pr = sh.protect().setDescription(full
+        ? ('QSC — 전면 잠금 (앱·본사만) ' + (isTpl ? '· 양식 원본' : '· ' + PROTECT_FULL_FROM + '~ 는 앱으로만 씁니다'))
+        : ('QSC — 매장은 답변 칸만 편집 (' + box.a1 + ')'));
+      pr.setUnprotectedRanges(full ? []
+        : [sh.getRange(box.row0, box.col0, box.endRow - box.row0 + 1, box.cols)]);
       try { pr.setWarningOnly(false); } catch (e) { }
       try { pr.setDomainEdit(false); } catch (e) { /* 도메인 공유 파일이 아닐 때 던진다 */ }
       if (me) { try { pr.addEditor(me); } catch (e) { } }
@@ -7307,7 +7406,9 @@ function protectMonthTabsIn(ss) {
         if (sp.length !== 1) return '시트 보호가 ' + sp.length + '건 (1건이어야 합니다)';
         if (rp.length) return '범위 보호가 ' + rp.length + '건 남아 있습니다';
         const open = sp[0].getUnprotectedRanges().map(function (r) { return r.getA1Notation(); });
-        if (open.length !== 1 || open[0] !== box.a1) {
+        if (full) {
+          if (open.length) return '전면 잠금인데 열린 칸이 있습니다: ' + open.join(',');
+        } else if (open.length !== 1 || open[0] !== box.a1) {
           return '열린 칸이 ' + (open.join(',') || '없음') + ' — ' + box.a1 + ' 이어야 합니다';
         }
         if (!sp[0].canEdit()) return '스크립트 계정이 이 보호를 편집할 수 없습니다';
@@ -7318,7 +7419,9 @@ function protectMonthTabsIn(ss) {
     if (v) {
       out.push('✗ ' + tab + ' : ' + v);
     } else {
-      out.push('✓ ' + tab + ' : 답변 칸 ' + box.a1 + ' 만 열림 (확인함)' +
+      out.push('✓ ' + tab + ' : ' + how + ' — ' +
+        (full ? (isTpl ? '양식 원본 잠금 (여기서 복제되는 새 월 탭도 잠긴 채 태어납니다)' : '앱·본사만 편집')
+          : ('답변 칸 ' + box.a1 + ' 만 열림')) + ' (확인함)' +
         (cl.gone ? ' · 옛 보호 ' + cl.gone + '건 지움' +
           (cl.desc.length ? ' [' + cl.desc.join(' / ') + ']' : '') : ''));
     }
@@ -7431,12 +7534,21 @@ function protectProgress() {
 
 function unprotectMonthTabsIn(ss) {
   const out = [];
-  const tabs = monthTabs(ss);
+  /* ★거는 쪽과 같은 목록을 본다★ — 종전에는 4자리 월 탭만 풀었다. 그런데 거는 쪽이
+     양식 원본류까지 잠그게 되었으므로(2026-08-25), 여기가 좁으면
+     "풀었다는데 여전히 안 써진다"가 그대로 재현된다. */
+  const tabs = ss.getSheets().map(function (sh) { return sh.getName().trim(); })
+    .filter(function (n) { return /^\d{4}$/.test(n) || TPL_TAB_RE.test(n); })
+    .sort().reverse();
   const TYPES = [SpreadsheetApp.ProtectionType.SHEET, SpreadsheetApp.ProtectionType.RANGE];
   for (let i = 0; i < tabs.length; i++) {
     const sh = ss.getSheetByName(tabs[i]);
     if (!sh) continue;
-    let gone = 0, left = 0;
+    /* ★양식 원본에서는 우리가 건 것만 푼다★ — 본사가 원래 걸어 둔 보호까지 쓸어 가면
+       되돌릴 방법이 없다. 월 탭은 종전대로 전부 쓸어 낸다(사람 손으로 걸린 옛 보호가
+       남으면 점장이 계속 못 쓰기 때문이다 — 그것이 이 함수의 존재 이유다). */
+    const onlyOurs = TPL_TAB_RE.test(tabs[i]);
+    let gone = 0, left = 0, kept = 0;
     const desc = [];
     TYPES.forEach(function (t) {
       let list = [];
@@ -7444,9 +7556,11 @@ function unprotectMonthTabsIn(ss) {
       list.forEach(function (x) {
         let d = '';
         try { d = String(x.getDescription() || '').trim(); } catch (e) { }
+        if (onlyOurs && d.indexOf('QSC — ') !== 0) { kept++; return; }
         try { x.remove(); gone++; if (d) desc.push(d); } catch (e) { left++; }
       });
     });
+    if (kept) out.push('· ' + tabs[i] + ' : 본사가 건 보호 ' + kept + '건은 그대로 뒀습니다');
     out.push((left ? '✗ ' : '✓ ') + tabs[i] + ' : 푼 보호 ' + gone + '건' +
       (desc.length ? ' [' + desc.join(' / ') + ']' : '') +
       (left ? ' · ★못 푼 것 ' + left + '건 — 이 탭은 시트에서 직접 풀어야 합니다★' : ''));
