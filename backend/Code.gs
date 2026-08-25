@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v40', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v41', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -322,6 +322,8 @@ function actionTable() {
     'admin.switches':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnSwitches },
     /* 제출 한 회차 되돌리기 — 기본이 미리보기다(apply를 안 주면 아무것도 지우지 않는다). */
     'admin.undoSubmit':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnUndoSubmit },
+    /* 인증 시트를 응답 시트로 합치기 — 일회성. 기본이 미리보기다. */
+    'admin.mergeAuth':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMergeAuth },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -4837,6 +4839,80 @@ function switchesSet_(on) {
 }
 function switchesOn() { return switchesSet_(true); }
 function switchesOff() { return switchesSet_(false); }
+
+/* ═══ 인증 시트를 응답 시트로 합치기 — 일회성 (admin.mergeAuth) ═══════════════════
+   담당자 요청(2026-08-25): "시트 두 개를 따로 두는 게 불편하다. 「QSC관리자 시트」 하나에 탭으로 두자."
+
+   ★코드를 고칠 일이 없다★ — 두 파일 모두 주소를 스크립트 속성으로 받고, 탭은 이름으로 찾는다.
+   이름도 안 겹친다 (계정·역할·감사로그·매장파일맵 ↔ 쇼퍼_*·QSC_*·NA프리셋).
+   그래서 이 함수가 하는 일은 넷뿐이다: ①탭 복사 ②행·열 대조 ③AUTH_SHEET_ID 교체 ④캐시 무효화.
+
+     await Api.call('admin.mergeAuth', {})            ← 미리보기(기본 · 아무것도 안 바꾼다)
+     await Api.call('admin.mergeAuth', {apply:true})  ← 실제로 합친다
+
+   ★옛 인증 파일은 지우지 않는다★ — 이름만 「(구) …」로 바꿔 남긴다.
+   잘못되면 AUTH_SHEET_ID 를 옛 주소로 되돌리는 것만으로 원상복구된다. 그래서 옛 주소를 결과에 담는다.
+   ⚠합치면 '제출 기록'과 '감사로그'가 같은 파일을 두고 줄을 서게 된다(구글은 파일 단위로 잠근다).
+     26곳 규모에서 체감될 일은 거의 없지만, 없던 성질이 하나 생기는 것은 사실이다. */
+function fnMergeAuth(ctx, payload) {
+  const apply = payload && payload.apply === true;
+  const src = prop('AUTH_SHEET_ID', '');
+  const dst = SPREADSHEET_ID;
+  if (!src) return err('SERVER_ERROR', 'AUTH_SHEET_ID 속성이 비어 있습니다.');
+  if (!dst) return err('SERVER_ERROR', 'SPREADSHEET_ID 속성이 비어 있습니다.');
+  if (src === dst) return { ok: true, already: true, plan: ['이미 한 파일입니다 — 할 일이 없습니다'] };
+
+  const sSS = SpreadsheetApp.openById(src);
+  const dSS = SpreadsheetApp.openById(dst);
+  const from = sSS.getSheets();
+  const names = from.map(function (sh) { return sh.getName(); });
+  const plan = [];
+
+  /* ★같은 이름이 하나라도 있으면 시작도 하지 않는다★ — 복사본은 '탭명의 사본'으로 들어오는데,
+     그 상태에서 이름을 바꾸면 원래 있던 탭과 충돌해 어느 쪽이 원장인지 알 수 없게 된다. */
+  const clash = names.filter(function (n) { return !!dSS.getSheetByName(n); });
+  if (clash.length) {
+    return err('BAD_REQUEST', '받는 파일에 같은 이름의 탭이 이미 있습니다: ' + clash.join(', ') + ' — 아무것도 하지 않았습니다.');
+  }
+
+  plan.push('옮길 탭 ' + names.length + '개: ' + from.map(function (sh) {
+    return sh.getName() + '(' + sh.getLastRow() + '행)';
+  }).join(' · '));
+  plan.push('받는 파일: ' + dSS.getName() + ' — 지금 탭 ' + dSS.getSheets().length + '개');
+  plan.push('파일 이름 → 「QSC관리자 시트」 · 옛 인증 파일은 이름만 「(구) …」로 바꿔 남깁니다(지우지 않습니다)');
+  plan.push('AUTH_SHEET_ID 를 받는 파일 주소로 바꾸고 CACHE_EPOCH 를 +1 합니다');
+  if (!apply) return { ok: true, preview: true, plan: plan, oldAuthId: src };
+
+  const done = [], rows = {};
+  for (let i = 0; i < from.length; i++) {
+    const to = from[i].copyTo(dSS);
+    to.setName(names[i]);
+    rows[names[i]] = { 행: [from[i].getLastRow(), to.getLastRow()], 열: [from[i].getLastColumn(), to.getLastColumn()] };
+  }
+  const bad = Object.keys(rows).filter(function (n) {
+    return rows[n].행[0] !== rows[n].행[1] || rows[n].열[0] !== rows[n].열[1];
+  });
+  done.push('탭 ' + names.length + '개 복사 완료');
+  if (bad.length) {
+    /* ★대조가 어긋나면 주소를 바꾸지 않는다★ — 바꿔 버리면 반쪽짜리 사본이 원장이 된다.
+       옛 파일이 그대로 원장으로 남아 있으므로 업무는 계속 돌아간다. */
+    return { ok: false, code: 'SERVER_ERROR', rows: rows, done: done,
+      error: '복사본이 원본과 다릅니다: ' + bad.join(', ') + ' — AUTH_SHEET_ID 는 바꾸지 않았습니다. 복사된 탭을 지우고 다시 시도하십시오.' };
+  }
+  done.push('행·열 수 대조 이상 없음');
+
+  try { DriveApp.getFileById(dst).setName('QSC관리자 시트'); done.push('받는 파일 이름 → QSC관리자 시트'); }
+  catch (e) { done.push('★파일 이름 변경 실패★: ' + String(e).slice(0, 60)); }
+  try { DriveApp.getFileById(src).setName('(구) QSC 인증 — 2026-08-25 합침'); done.push('옛 인증 파일 이름 → (구) QSC 인증'); }
+  catch (e) { done.push('옛 파일 이름 변경 실패: ' + String(e).slice(0, 60)); }
+
+  PROPS.setProperty('AUTH_SHEET_ID', dst);
+  PROPS.setProperty('CACHE_EPOCH', String(propN('CACHE_EPOCH', 1) + 1));
+  done.push('AUTH_SHEET_ID 교체 · CACHE_EPOCH +1 (옛 캐시 무효)');
+  /* 이 한 줄이 곧 확인이다 — 감사로그가 ★새 파일★에 남으면 교체가 실제로 먹은 것이다. */
+  auditLog(ctx, 'admin.mergeAuth', '', '성공', '', '옛 AUTH_SHEET_ID → 새 주소로 교체 · 탭 ' + names.length + '개');
+  return { ok: true, preview: false, plan: plan, done: done, rows: rows, oldAuthId: src };
+}
 
 /* ═══ 제출 되돌리기 ═══════════════════════════════════════════════════════════
    제출 한 회차를, 기록이 남는 네 곳에서 한 번에 없앤다.
