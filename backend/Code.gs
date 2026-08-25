@@ -18,13 +18,14 @@
      그리고 이전 배포는 반드시 '보관처리'할 것 — 옛 URL은 게이트 없는 코드로 영원히 살아 있다.
 
    ⚠어느 계정으로 만들 것인가: **QSC 담당자 개인 계정**(현재 tlsanstn93). '실행: 나'로 배포되므로
-     스크립트는 그 계정 권한으로 동작한다. 통합시트는 보기 권한만 있으면 되고(읽기 전용으로 매장 목록과
-     점수를 가져온다), 매장별 시트는 '링크가 있는 사람 편집 가능'이라 개인 계정으로도 쓸 수 있다.
+     스크립트는 그 계정 권한으로 동작한다. 통합시트는 매장 목록·점수를 읽는 데 쓰고, DASHBOARD_WRITE를
+     켜면 점수 칸(BV·BX)에 쓰기도 한다 — 그때는 ★편집 권한★이 필요하다(2026-08-25 현재 있음).
+     매장별 시트는 '링크가 있는 사람 편집 가능'이라 개인 계정으로도 쓸 수 있다.
      담당자가 바뀌면 프로젝트 소유권을 이전하면 되고, 그때도 배포 주소는 유지된다.
 
    드라이브 구조:
      📁 QSC (본사 계정)
-        📊 QSC 통합시트          … DASHBOARD_ID   ← 개인 계정은 보기 권한만 (읽기 전용)
+        📊 QSC 통합시트          … DASHBOARD_ID   ← 개인 계정에 편집 권한 (2026-08-25~ · 종전에는 보기만)
         📁 매장현황              … 매장별 QSC현황 시트 26개 (ID 불필요 — 통합시트 D열 링크에서 자동 추출)
      📁 QSC 사진 (개인 계정)      … PHOTO_FOLDER_ID
         2026 / QSC점검      / 매장 / 날짜   ← 관리자 점검 사진
@@ -44,7 +45,7 @@
 
      SPREADSHEET_ID      응답 원본 저장용 'QSC 응답' 스프레드시트
      PHOTO_FOLDER_ID     사진 보관용 '사진' 폴더
-     DASHBOARD_ID        '[감사총무팀_QSC] 통합시트'  (보기 전용)
+     DASHBOARD_ID        '[감사총무팀_QSC] 통합시트'  (읽기 + DASHBOARD_WRITE가 켜지면 점수 칸 쓰기)
      AUTH_SHEET_ID       'QSC 인증' 스프레드시트      ★신규
      APP_BASE_URL        앱 배포 주소(끝에 /). 비우면 GitHub Pages 기본값. 배포 링크 조립에만 쓴다
      TOKEN_KEY           HMAC 서명 키 (랜덤 44자 이상) ★신규 — 비어 있으면 ensureAuthSheets()가 만든다
@@ -71,6 +72,8 @@
      PHOTO_DAY_MAX       기본 200 (계정당 하루 사진 저장 건수)
      IMPROVE_DUE_DAY     기본 10 (익월 며칠까지 종합점수를 '잠정'으로 표시)
      STORE_FILE_WRITE    'false'(기본) | 'true'.  매장 파일에 점검 결과 자동 기록
+     DASHBOARD_WRITE     'false'(기본) | 'true'.  통합시트 [데이터] 그 달 QSC·MS 점수 칸에 자동 기록
+                                                 ★9월까지 꺼 둘 것 · 10/1에 위 둘과 함께 켠다★
 
    (실제 ID는 로컬 문서 `1. QSC\연동_설정값.md`에 기록해 두었다 — 저장소에 올리지 말 것)
 
@@ -88,12 +91,19 @@ const DASHBOARD_SHEET = '데이터';
    true  = 매장 파일 개선요청 표에 자동 기록 (전환 시 켠다).
    ※ 켜고 끄는 것은 스크립트 속성 STORE_FILE_WRITE = 'true' 로도 가능 */
 const STORE_FILE_WRITE = PROPS.getProperty('STORE_FILE_WRITE') === 'true';
-/* 통합시트에 점수를 직접 쓸지 여부 — **영구 false**.
-   스크립트가 도는 개인 계정에는 통합시트 '보기' 권한만 있다. 즉 이것은 시험용 스위치가 아니라
-   권한이 없어서 못 하는 일이다. 위생·CS 점수는 관리자가 통합시트에 직접 입력하고,
-   대시보드(§10)는 그렇게 입력된 값을 '읽기만' 한다. 읽기 전용 권한이 곧 안전장치다 —
-   대시보드 코드에 어떤 버그가 있어도 통합시트를 훼손할 수 없다. */
-const DASHBOARD_WRITE = false;
+/* 통합시트 [데이터]에 QSC·MS 점수를 직접 쓸지 여부 (BV·BX 칸. 등급·개선·종합은 시트 수식이라 안 건드린다).
+   false = 점수는 담당자가 통합시트에 직접 입력한다. 앱은 그렇게 입력된 값을 '읽기만' 한다.
+   true  = 제출이 끝나면 그 달 점수 칸에 저절로 들어간다.
+
+   ★2026-08-25 이력★ 종전에는 `const DASHBOARD_WRITE = false;` 로 코드에 박혀 있었고 그 근거는
+   "스크립트가 도는 계정에 통합시트 '보기' 권한밖에 없다"였다. **그 근거는 더 이상 사실이 아니다** —
+   지금 그 계정에 편집 권한이 있다(같은 계정으로 10~12월 수식 204칸을 넣었다). 그래서 다른 스위치들과
+   같은 모양(스크립트 속성)으로 바꾼다. 재배포 없이 끌 수 있어야 롤백 수단이 된다.
+
+   ⚠종전의 안전장치("읽기 전용이라 어떤 버그도 통합시트를 훼손할 수 없다")가 사라지므로,
+     그 자리를 writeDashboard() 안의 검사 두 개가 대신한다 — ①올해 자료인지 ②그 칸이 수식은 아닌지.
+   ⚠9월까지는 반드시 꺼 둘 것. 수기 운영과 부딪힌다. 10/1에 STORE_FILE_WRITE·STORE_IMPROVE_WRITE와 같이 켠다. */
+const DASHBOARD_WRITE = PROPS.getProperty('DASHBOARD_WRITE') === 'true';
 const STORE_MAP_SHEET = '매장파일맵'; // 인증 시트 안의 탭: A=매장명, B=매장 파일 ID
 const PHOTO_EMBED = true;    // true면 개선요청 표에 사진을 =IMAGE()로 삽입 (사진 파일이 '링크 있는 사용자 보기'로 공유됨) / false면 링크만
 
@@ -158,7 +168,7 @@ const ACCOUNT_PUBLIC = ['id', 'name', 'role', 'status', 'scope', 'hasPw', 'pw', 
 /* ---------- 스크립트 속성 읽기 ---------- */
 
 /* 속성은 매 실행마다 다시 읽는다 — 그래서 속성 화면에서 값을 고치면 재배포 없이 즉시 반영된다.
-   이 성질이 이 시스템의 롤백 수단 전부다 (AUTH_ENFORCE·STORE_IMPROVE_WRITE·CACHE_EPOCH·STORE_FILE_WRITE). */
+   이 성질이 이 시스템의 롤백 수단 전부다 (AUTH_ENFORCE·STORE_IMPROVE_WRITE·CACHE_EPOCH·STORE_FILE_WRITE·DASHBOARD_WRITE). */
 function prop(key, def) {
   const v = PROPS.getProperty(key);
   return (v === null || v === undefined || v === '') ? def : v;
@@ -185,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v35', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v36', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3054,21 +3064,37 @@ function shopperMonthAvg(sh, store, dateStr, tz) {
 
 /* ---------- ② 통합시트 [데이터] ---------- */
 
-// offset: 0 = 위생(QSC) 점수 열, 2 = CS(쇼퍼) 점수 열. 등급·종합 열은 시트 수식이라 건드리지 않는다.
-// ※DASHBOARD_WRITE가 영구 false라 지금은 호출되지 않는다. 권한이 생기는 날을 위해 남겨 둔다.
+/* offset: 0 = QSC(위생) 점수 열, 2 = MS(CS) 점수 열. 등급·개선·종합 열은 시트 수식이라 건드리지 않는다.
+   ★쓰는 칸은 매장 한 행 x 한 칸뿐이다★ — 못 찾으면 아무것도 쓰지 않고 이유를 돌려준다.
+
+   검사 두 개를 앞에 둔다. 종전에는 "계정에 보기 권한밖에 없다"가 안전장치였는데 이제 편집 권한이
+   있으므로, 그 자리를 이 검사들이 대신한다. 둘 다 ★쓰지 않고 알린다★ — 제출 자체는 그대로 저장된다. */
 function writeDashboard(store, dateStr, frac, offset) {
+  /* ① 올해 자료인가. 통합시트는 ★한 해짜리 파일★이다(기간 목록도 올해만 준다 — dashPeriods).
+        지난해 날짜를 그대로 쓰면 올해 그 달 칸에 조용히 들어가 앉는다. 오류 하나 없이 틀린다. */
+  const y = String(dateStr).slice(0, 4);
+  if (y !== curYm().slice(0, 4)) {
+    return { ok: false, error: '올해 통합시트가 아닙니다 (' + y + '년 자료) — 점수는 직접 입력해 주십시오' };
+  }
   const sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET);
   const month = parseInt(dateStr.slice(5, 7), 10);
   const col = MONTH_COL[month] + offset;
   const last = sh.getLastRow();
-  const rng = grid(sh, 6, STORE_NAME_COL, last - 5, 1); // D6부터 매장명
+  const rng = grid(sh, 6, STORE_NAME_COL, last - 5, 1); // D6부터 매장명 (숨김 행도 그대로 온다)
   const names = rng ? rng.getValues() : [];
   const key = normStore(store);
   for (let i = 0; i < names.length; i++) {
     if (normStore(names[i][0]) === key) {
       const row = 6 + i;
-      sh.getRange(row, col).setValue(frac);
-      return { ok: true, cell: sh.getRange(row, col).getA1Notation() };
+      const cell = sh.getRange(row, col);
+      /* ② 그 칸이 수식이면 손대지 않는다. 점수 칸은 사람이 넣는 값 칸이라 수식이 있을 리 없다 —
+            있다면 열을 잘못 짚었거나(칸 뜻이 또 바뀌었거나) 담당자가 뭔가 걸어 둔 것이다.
+            setValue는 수식을 되돌릴 수 없이 지운다. 덮어쓰기 전에 멈추는 편이 낫다. */
+      if (String(cell.getFormula() || '') !== '') {
+        return { ok: false, error: '그 칸에 수식이 있어 쓰지 않았습니다: ' + cell.getA1Notation() };
+      }
+      cell.setValue(frac);
+      return { ok: true, cell: cell.getA1Notation() };
     }
   }
   return { ok: false, error: '통합시트에 매장 행 없음: ' + store };
