@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v44', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v45', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -4856,6 +4856,39 @@ function switchesOff() { return switchesSet_(false); }
 function fnProtect(ctx, payload) {
   const p = payload || {};
   const undo = p.undo === true;
+
+  /* ★진단★ — 아무것도 바꾸지 않는다. 그 파일의 월 탭·원본류 탭에 어떤 보호가 있고,
+     ★앱 계정이 그것을 고칠 수 있는지★를 그대로 보여 준다.
+     '보호된 셀이나 개체를 수정하려고 하고 있습니다'로 막혔을 때 원인을 여기서 본다
+     (2026-08-25 실제로 필요했다 — 사본에서는 되고 실물에서는 막혔다). */
+  if (p.probe === true) {
+    const id = p.fileId ? String(p.fileId) : storeFileId(String(p.store || ''));
+    if (!id) return err('BAD_REQUEST', 'store 또는 fileId 를 주십시오.');
+    const ss = SpreadsheetApp.openById(id);
+    let owner = '?';
+    try { owner = DriveApp.getFileById(id).getOwner().getEmail(); } catch (e) { owner = '못 읽음'; }
+    let me = '?';
+    try { me = Session.getEffectiveUser().getEmail(); } catch (e) { }
+    const rows = [];
+    ss.getSheets().forEach(function (sh) {
+      const n = sh.getName().trim();
+      if (!/^\d{4}$/.test(n) && !TPL_TAB_RE.test(n) && n !== SUM_TAB) return;
+      const ps = [];
+      [['시트', SpreadsheetApp.ProtectionType.SHEET], ['범위', SpreadsheetApp.ProtectionType.RANGE]].forEach(function (pair) {
+        let list = [];
+        try { list = sh.getProtections(pair[1]); } catch (e) { ps.push(pair[0] + ':읽기실패'); return; }
+        list.forEach(function (x) {
+          let can = '?', desc = '', ed = [];
+          try { can = x.canEdit() ? '고칠수있음' : '★못고침★'; } catch (e) { }
+          try { desc = String(x.getDescription() || '(설명없음)').slice(0, 40); } catch (e) { }
+          try { ed = x.getEditors().map(function (u) { return u.getEmail(); }).slice(0, 4); } catch (e) { }
+          ps.push(pair[0] + ' [' + desc + '] ' + can + ' 편집자:' + (ed.join(',') || '(못읽음)'));
+        });
+      });
+      rows.push(n + ' → ' + (ps.length ? ps.join('  |  ') : '보호 없음'));
+    });
+    return { ok: true, probe: true, file: ss.getName(), owner: owner, me: me, tabs: rows };
+  }
 
   if (p.fileId) {
     /* 사본 전용 길 — 이름으로 막는다. 진짜 매장은 store/page 로 부르게 한다(오타 한 번에
