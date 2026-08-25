@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""엑셀(QSC 평가 체계 개편_v3.xlsx) → data/master.json 추출.
+"""엑셀(QSC·MS 평가표.xlsx) → data/master.json 추출.
 
 엑셀 시트가 문항·심각도의 원본. 시트 수정 후 이 스크립트를 다시 실행하면
 앱 마스터 데이터가 갱신된다. 실행: python tools/extract_master.py
@@ -20,7 +20,7 @@ import openpyxl
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 warnings.filterwarnings('ignore')
 
-SRC = r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\QSC 평가 체계 개편_v3.xlsx'
+SRC = r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\QSC·MS 평가표.xlsx'
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'data' / 'master.json'
 
@@ -33,7 +33,18 @@ XLSX_VERSION = datetime.datetime.fromtimestamp(Path(SRC).stat().st_mtime).strfti
 XLSX_SHA = hashlib.sha256(_raw).hexdigest()[:12]     # 사람에게는 안 보인다. 기계가 대조용으로 쓴다.
 
 wb = openpyxl.load_workbook(SRC)
-ws = wb['QSC 평가표']
+
+# ★2026-08-25: 시트 두 장을 한 장으로 합쳤다★ (사용자 요청)
+#   전   「QSC 평가표」 · 「미스터리쇼퍼 평가표」 · 「채점기준」 · 「예비항목」  네 장
+#   후   「QSC·MS 평가표」 한 장 — QSC 는 A~I, 미스터리쇼퍼는 ★S열부터★
+#   (채점기준·예비항목은 이 스크립트가 읽지 않던 시트라 없애도 영향이 없다)
+#
+#   그래서 쇼퍼 쪽은 같은 시트를 보되 ★열을 MSC 만큼 밀어★ 읽는다.
+#   행 번호는 그대로다(나란히 붙였다). 옮길 때 엑셀이 수식의 열 참조도 같이 밀어 두었다
+#   (D11 → V11 식으로. 93칸 전부 대조 확인).
+SHEET = 'QSC·MS 평가표'
+MSC = 18                 # 쇼퍼 A열(1) → S열(19). 즉 +18
+ws = wb[SHEET]
 
 # ★행 범위를 박아 두지 않는다★ — A열 병합이 곧 대분류 경계다.
 #   상수로 두면 엑셀에서 행을 하나 넣고 하나 빼는 순간, 74 검사는 통과하면서
@@ -71,7 +82,7 @@ for g0, g1 in GROUPS:
 assert item_no == 74, f'문항 수 {item_no} — 74가 아님. GROUPS 범위 확인 필요'
 assert sev_count == {'S1': 4, 'S2': 12}, f'심각도 분포 {sev_count} — ★★4/★12가 아님. I열 확인 필요'
 
-sh = wb['미스터리쇼퍼 평가표']
+sh = ws                  # 같은 시트다. 열만 MSC 만큼 밀어서 읽는다.
 
 # ── 쇼퍼 문항 범위 ─────────────────────────────────────────────────
 # ★행 번호를 박아 두지 않는다★ — D열 데이터 유효성이 곧 문항 범위다.
@@ -85,7 +96,7 @@ def _rows_for(choices):
         if str(dv.formula1 or '').strip().strip('"') != choices:
             continue
         for rng in dv.sqref.ranges:
-            if rng.min_col <= 4 <= rng.max_col:          # D열을 덮는 규칙만
+            if rng.min_col <= MSC + 4 <= rng.max_col:    # 쇼퍼 D열(=V열)을 덮는 규칙만
                 out.update(range(rng.min_row, rng.max_row + 1))
     return out
 
@@ -97,13 +108,13 @@ assert Q_ROWS, '쇼퍼 문항 행을 못 찾음 — D열 유효성 규칙을 확
 assert not (YN_ROWS & LIKERT_ROWS), f'두 척도에 겹쳐 걸린 행 {sorted(YN_ROWS & LIKERT_ROWS)}'
 Q_MIN, Q_MAX = min(Q_ROWS), max(Q_ROWS)
 
-# 카테고리 이름은 A열에 있다 — 병합이면 시작 행에만, 한 줄짜리면 그 행에 있다
+# 카테고리 이름은 쇼퍼 A열(=S열)에 있다 — 병합이면 시작 행에만, 한 줄짜리면 그 행에 있다
 cat_at = {}
 for m in sh.merged_cells.ranges:
-    if m.min_col == 1 and Q_MIN <= m.min_row <= Q_MAX:
-        cat_at[m.min_row] = sh.cell(m.min_row, 1).value
+    if m.min_col == MSC + 1 and Q_MIN <= m.min_row <= Q_MAX:
+        cat_at[m.min_row] = sh.cell(m.min_row, MSC + 1).value
 for r in sorted(Q_ROWS):
-    v = sh.cell(r, 1).value
+    v = sh.cell(r, MSC + 1).value
     if v not in (None, ''):
         cat_at.setdefault(r, v)
 
@@ -114,7 +125,7 @@ for r in sorted(Q_ROWS):
     if r in cat_at:
         cur = {'name': str(cat_at[r]).strip().replace('\n', ' '), 'questions': []}
         shopper_cats.append(cur)
-    text = sh[f'C{r}'].value
+    text = sh.cell(r, MSC + 3).value                     # 쇼퍼 C열 = U열
     if not text:
         continue
     assert cur is not None, f'{r}행 문항 위에 카테고리 이름이 없습니다'
@@ -129,8 +140,8 @@ assert q_no == len(Q_ROWS), f'문항 {q_no}개 / 유효성 행 {len(Q_ROWS)}개 
 
 # 비고 문구도 행을 찾아 읽는다 (종전에는 C66으로 박혀 있었다)
 _note_row = next((r for r in range(Q_MAX + 1, Q_MAX + 30)
-                  if str(sh.cell(r, 1).value or '').strip() == '비고'), None)
-shopper_note = sh.cell(_note_row, 3).value if _note_row else None
+                  if str(sh.cell(r, MSC + 1).value or '').strip() == '비고'), None)
+shopper_note = sh.cell(_note_row, MSC + 3).value if _note_row else None
 
 # 매장 목록: 구글 통합시트에서 **직접** 읽는다 (2026-08-20).
 #
@@ -191,9 +202,13 @@ assert len(stores) >= 20, ('★중단★ 매장이 %d곳뿐입니다 — 구글 
 master = {
     'version': XLSX_VERSION,          # 화면에 '평가표 … 기준'으로 뜬다
     'source_sha': XLSX_SHA,           # 엑셀이 바뀌면 반드시 바뀐다 — 배포 점검이 이걸 본다
-    'source': 'QSC 평가 체계 개편_v3.xlsx',
+    'source': 'QSC·MS 평가표.xlsx',
     'stores': stores,
-    # 절대 감점제 파라미터 — 엑셀 '채점기준' 시트와 반드시 일치시킬 것
+    # 절대 감점제 파라미터
+    # ⚠2026-08-25에 엑셀 '채점기준' 시트를 없앴다(사용자 요청). 그래서 이 숫자들을
+    #   대조할 시트가 이제 없다 — ★여기가 사실상의 원본★이다. 고칠 때는 아래 세 곳을
+    #   반드시 함께 본다: 이 파일 · js/scoring.js · backend/Code.gs.
+    #   옛 '채점기준' 시트가 필요하면 _보관/작업기록/백업/백업_v316_평가표합치기전.xlsx 에 있다.
     'scoring': {
         'general_per_case': 1,
         'S2': {'label': '★', 'name': '중대운영', 'first': 8, 'more': 2, 'cap': 45},
@@ -209,7 +224,8 @@ master = {
     ],
     'texts': {
         'criteria': ws['C2'].value, 'principles': ws['C5'].value,
-        'shopper_criteria': sh['C2'].value, 'shopper_principles': sh['C5'].value,
+        'shopper_criteria': sh.cell(2, MSC + 3).value,      # 쇼퍼 C2 = U2
+        'shopper_principles': sh.cell(5, MSC + 3).value,    # 쇼퍼 C5 = U5
         'shopper_grade_note': shopper_note,
     },
     'qsc_groups': qsc_groups,
