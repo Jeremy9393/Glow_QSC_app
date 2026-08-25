@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v38', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v40', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -320,6 +320,8 @@ function actionTable() {
     'month.close':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMonthClose },
     /* 실전 기록 스위치 세 개 — 기본이 '보기'다(on을 안 주면 아무것도 바꾸지 않는다). §스위치 */
     'admin.switches':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnSwitches },
+    /* 제출 한 회차 되돌리기 — 기본이 미리보기다(apply를 안 주면 아무것도 지우지 않는다). */
+    'admin.undoSubmit':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnUndoSubmit },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -4835,6 +4837,134 @@ function switchesSet_(on) {
 }
 function switchesOn() { return switchesSet_(true); }
 function switchesOff() { return switchesSet_(false); }
+
+/* ═══ 제출 되돌리기 ═══════════════════════════════════════════════════════════
+   제출 한 회차를, 기록이 남는 네 곳에서 한 번에 없앤다.
+   ★시험 자료 정리용으로 만들었지만 실무에도 필요하다★ — 잘못 낸 제출을 되돌릴 수단이
+   지금까지 하나도 없었다. 담당자가 시트 네 곳을 손으로 찾아 지우는 수밖에 없었다.
+
+     await Api.call('admin.undoSubmit', {store:'금종제과', date:'2026-10-01'})             ← 미리보기(기본)
+     await Api.call('admin.undoSubmit', {store:'금종제과', date:'2026-10-01', apply:true}) ← 실제로 지운다
+     kind:'qsc' | 'shopper'      한쪽만 (기본은 둘 다)
+     time:'14:15'                같은 날 두 번 냈을 때 그 회차만 (QSC에만 쓰인다)
+
+   ★기본이 미리보기다★ — apply를 빠뜨렸다고 지워지는 일은 없다(store.fixSummary와 같은 관례).
+
+   매장 파일을 다루는 규칙은 일부러 단순하게 뒀다:
+     그 달에 남는 자료가 하나도 없으면 → 그 달 탭을 통째로 지운다 (원래 없던 상태로 돌아간다)
+     남는 자료가 있으면              → ★건드리지 않고 손으로 정리하라고 알린다★
+   회차가 여럿 섞인 탭에서 한 회차분만 골라내는 것은 조용히 틀리기 쉽다. 틀리느니 멈춘다. */
+function fnUndoSubmit(ctx, payload) {
+  const p = payload || {};
+  const store = String(p.store || '').trim();
+  const date = String(p.date || '').trim();
+  const time = p.time ? timeKeyOf(p.time, ssTz()) : '';
+  const kind = String(p.kind || 'both');
+  const apply = p.apply === true;
+  if (!store) return err('BAD_REQUEST', '매장명을 주십시오.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('BAD_REQUEST', '날짜는 2026-10-01 모양으로 주십시오.');
+  if (['both', 'qsc', 'shopper'].indexOf(kind) < 0) return err('BAD_REQUEST', "kind는 'qsc'·'shopper'·'both' 중 하나입니다.");
+
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const tz = ssTz();
+  const key = normStore(store);
+  const ym = date.slice(0, 7);
+  const tab = yymm(date);
+  const doQsc = (kind !== 'shopper'), doShop = (kind !== 'qsc');
+  const log = [], done = [];
+
+  /* 지울 행을 먼저 전부 모은다 — 미리보기와 실제 실행이 같은 판단을 쓰게 하기 위해서다. */
+  function pick(shName, dateCol, storeCol, timeCol) {
+    const sh = ss.getSheetByName(shName);
+    if (!sh) return { sh: null, rows: [], monthLeft: 0 };
+    const last = sh.getLastRow();
+    if (last < 2) return { sh: sh, rows: [], monthLeft: 0 };
+    const rng = grid(sh, 2, 1, last - 1, sh.getLastColumn());
+    const vals = rng ? rng.getValues() : [];
+    const rows = [];
+    let monthLeft = 0;
+    for (let i = 0; i < vals.length; i++) {
+      if (normStore(vals[i][storeCol - 1]) !== key) continue;
+      const d = dateOfCell(vals[i][dateCol - 1], tz);
+      const sameDay = (d === date);
+      const sameTime = (!time || !timeCol) ? true : (timeKeyOf(vals[i][timeCol - 1], tz) === time);
+      if (sameDay && sameTime) rows.push(i + 2);
+      else if (d.slice(0, 7) === ym) monthLeft++;   // 같은 달에 남을 자료
+    }
+    return { sh: sh, rows: rows, monthLeft: monthLeft };
+  }
+
+  const round = doQsc ? pick('QSC_회차', 2, 4, 3) : { sh: null, rows: [], monthLeft: 0 };
+  const detail = doQsc ? pick('QSC_상세', 1, 3, 2) : { sh: null, rows: [], monthLeft: 0 };
+  const shop = doShop ? pick('쇼퍼_응답', 2, 4, 0) : { sh: null, rows: [], monthLeft: 0 };
+  const na = (doQsc && time === '') ? pick('NA프리셋', 3, 1, 0) : { sh: null, rows: [], monthLeft: 0 };
+
+  const hit = round.rows.length + detail.rows.length + shop.rows.length + na.rows.length;
+  log.push('QSC_회차 ' + round.rows.length + '건 · QSC_상세 ' + detail.rows.length +
+    '건 · 쇼퍼_응답 ' + shop.rows.length + '건 · NA프리셋 ' + na.rows.length + '건');
+
+  /* ★찾은 것이 하나도 없으면 여기서 끝낸다★ — 아래로 내려가면 안 된다.
+     내려가면 "그 달에 남는 자료가 없다"가 참이 되어 ★매장 파일 탭을 지우겠다★고 나선다.
+     매장 파일에만 있고 응답 시트에는 없는 탭(담당자가 손으로 만든 탭)이 그렇게 날아간다.
+     매장명 오타도 여기서 걸린다 — 없는 매장은 당연히 0건이다. */
+  if (!hit) {
+    return { ok: true, preview: true, nothing: true, store: store, date: date,
+      plan: ['되돌릴 제출을 찾지 못했습니다 — 매장명·날짜를 다시 보십시오 (아무것도 건드리지 않았습니다)'] };
+  }
+
+  /* 그 달에 아무것도 안 남는가 — 매장 파일 탭을 지워도 되는지의 판단 기준이다.
+     한쪽만 되돌리는 경우(kind)에는 손대지 않은 쪽이 그대로 남으므로 탭을 지우지 않는다. */
+  const oneSided = (kind !== 'both');
+  const monthEmpty = !oneSided && (round.monthLeft === 0) && (shop.monthLeft === 0);
+  log.push(monthEmpty
+    ? ('매장 파일 ' + tab + ' 탭: 그 달에 남는 자료가 없어 통째로 지웁니다 (탭의 방문일이 ' + date + '일 때만)')
+    : ('매장 파일 ' + tab + ' 탭: ★건드리지 않습니다★ — '
+      + (oneSided ? "한쪽만(kind='" + kind + "') 되돌리기 때문입니다"
+        : '그 달에 QSC ' + round.monthLeft + '건 · 쇼퍼 ' + shop.monthLeft + '건이 남습니다')
+      + '. 점수 칸만 비우고 개선요청 행은 손으로 정리하십시오'));
+  log.push('통합시트 ' + ym + ' ' + (doQsc ? 'QSC' : '') + (doQsc && doShop ? '·' : '') + (doShop ? 'MS' : '') + ' 점수 칸을 비웁니다');
+
+  if (!apply) return { ok: true, preview: true, store: store, date: date, plan: log };
+
+  /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
+  [round, detail, shop, na].forEach(function (t) {
+    if (!t.sh || !t.rows.length) return;
+    t.rows.slice().sort(function (a, b) { return b - a; }).forEach(function (r) { t.sh.deleteRow(r); });
+  });
+  done.push('응답 시트 ' + (round.rows.length + detail.rows.length + shop.rows.length + na.rows.length) + '행 삭제');
+
+  const fileId = storeFileId(store);
+  if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
+  else {
+    const ss2 = SpreadsheetApp.openById(fileId);
+    const sh2 = ss2.getSheetByName(tab);
+    if (!sh2) done.push('매장 파일 ' + tab + ' 탭이 원래 없습니다');
+    else if (monthEmpty && dateOfCell(labelValue(labelMap(sh2), ['방문일', '방문일자', '점검일', '점검일자']).v, fileTz(ss2)) !== date) {
+      /* ★탭의 방문일이 다르면 지우지 않는다★ — 응답 시트에서는 안 보이는 회차가 그 탭에
+         들어 있다는 뜻이다(담당자가 손으로 만든 탭 등). 지우면 되돌릴 수 없다. */
+      if (doQsc) setByLabelAny(sh2, L_QSC, '');
+      if (doShop) setByLabelAny(sh2, L_MS, '');
+      done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 비웠습니다');
+    }
+    else if (monthEmpty) { ss2.deleteSheet(sh2); done.push('매장 파일 ' + tab + ' 탭 삭제'); }
+    else {
+      if (doQsc) setByLabelAny(sh2, L_QSC, '');
+      if (doShop) setByLabelAny(sh2, L_MS, '');
+      done.push('매장 파일 ' + tab + ' 탭: 점수 칸만 비웠습니다 ★개선요청 행은 손으로 지우십시오★');
+    }
+  }
+
+  /* 통합시트 — writeDashboard 를 그대로 탄다. 빈 값을 쓰는 것뿐이라
+     '올해인가·그 칸이 수식인가' 두 검사도 똑같이 걸린다. */
+  if (DASHBOARD_ID) {
+    if (doQsc) { const a = writeDashboard(store, date, '', 0); done.push('통합시트 QSC 칸: ' + (a.ok ? a.cell + ' 비움' : a.error)); }
+    if (doShop) { const b = writeDashboard(store, date, '', 2); done.push('통합시트 MS 칸: ' + (b.ok ? b.cell + ' 비움' : b.error)); }
+  }
+  dropDashCache(date);
+  dropStoreCache(store, tab);
+  auditLog(ctx, 'admin.undoSubmit', store, '성공', '', date + (time ? ' ' + time : '') + ' / ' + kind + ' / ' + done.join(' · '));
+  return { ok: true, preview: false, store: store, date: date, plan: log, done: done };
+}
 
 /* 같은 일을 관리자 화면에서도 할 수 있게 — 편집기 함수 목록이 283개라 고르기가 어렵고,
    설정 화면은 위 이유로 영영 읽기 전용이다. 관리자 권한이 있어야 도달한다(ACTIONS 등록표).
