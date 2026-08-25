@@ -32,7 +32,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 ROOT = Path(__file__).resolve().parents[1]
 LIVE = 'https://jeremy9393.github.io/Glow_QSC_app'
-XLSX = ROOT.parent / 'QSC 평가 체계 개편_v3.xlsx'
+XLSX = ROOT.parent / 'QSC·MS 평가표.xlsx'
 
 CHECK_ONLY = len(sys.argv) > 1 and sys.argv[1] in ('check', '점검', '-c')
 
@@ -97,6 +97,21 @@ print('\n━━ 1. 엑셀에서 다시 뽑기 ' + '━' * 34)
 if not XLSX.exists():
     fail('평가표 엑셀을 찾지 못했습니다: %s' % XLSX)
 else:
+    # ★엉뚱한 엑셀을 고치지 않았는가★ (2026-08-25)
+    #   2026-08-25에 시트를 합치면서 새 파일(QSC·MS 평가표.xlsx)로 옮겼는데,
+    #   옛 파일(참고용자료_QSC 평가 체계 개편_v3.xlsx)도 지우지 않고 그대로 뒀다(사용자 요청).
+    #   ★앱이 읽는 것은 새 파일 하나뿐이다.★ 옛 파일을 고치면 아무 일도 일어나지 않고,
+    #   고친 사람은 고쳤다고 믿는다 — 이 저장소가 겪은 사고가 늘 그런 모양이었다
+    #   (낡은 통합시트 사본 때문에 옛 매장명이 열흘간 배포된 적이 있다).
+    #   그래서 옛 파일이 더 최신이면 알린다. 막지는 않는다 — 그냥 열어만 봐도
+    #   수정시각이 바뀌기 때문이다(옛 파일에만 있는 '채점기준' 시트를 볼 일이 있다).
+    _old = ROOT.parent / '참고용자료_QSC 평가 체계 개편_v3.xlsx'
+    if _old.exists() and _old.stat().st_mtime > XLSX.stat().st_mtime + 1:
+        warn('★옛 엑셀이 더 최신입니다★ — 혹시 이쪽을 고치셨나요?\n'
+             '        앱이 읽는 것은  %s\n'
+             '        방금 만진 것은  %s\n'
+             '        옛 파일을 고쳐도 앱에는 반영되지 않습니다.' % (XLSX.name, _old.name))
+
     before = (ROOT / 'data' / 'master.json').read_bytes() if (ROOT / 'data' / 'master.json').exists() else b''
     out = run_tool('extract_master.py')
     for line in out.split('\n'):
