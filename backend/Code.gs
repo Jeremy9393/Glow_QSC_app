@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v36', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v38', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -318,6 +318,8 @@ function actionTable() {
     'store.fixSummary':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnStoreFixSummary },
     /* [월 채점 확정] — 그 달을 닫는다. 기본이 미리보기다. */
     'month.close':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMonthClose },
+    /* 실전 기록 스위치 세 개 — 기본이 '보기'다(on을 안 주면 아무것도 바꾸지 않는다). §스위치 */
+    'admin.switches':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnSwitches },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -4801,6 +4803,58 @@ function setupPhotoFolder() {
   const f = it.hasNext() ? it.next() : DriveApp.createFolder('QSC 사진');
   Logger.log('PHOTO_FOLDER_ID = ' + f.getId());
   return f.getId();
+}
+
+/* ═══ 실전 기록 스위치 세 개 — 편집기에서 직접 실행 ══════════════════════════════
+   ★프로젝트 설정 화면에서는 못 한다★ — 스크립트 속성이 50개를 넘으면 구글이 그 화면을
+   「처음 50개만 표시 · 읽기 전용」으로 바꾼다. 시간당 카운터(AL:·AN:·GF:·HB:)가 쌓여 이미 넘었다.
+   그래서 10/1 전환도, 되돌리기도 여기서 한다 — 편집기 위쪽 함수 목록에서 골라 [실행].
+
+     switchesShow()   지금 상태만 본다 (아무것도 바꾸지 않는다)
+     switchesOn()     세 개를 켠다   ← 10/1에 이것 하나면 끝난다
+     switchesOff()    세 개를 끈다   ← 되돌릴 때
+
+   ★재배포는 필요 없다★ — 속성은 매 실행마다 다시 읽는다. 실행 기록(로그)에 결과가 남는다.
+   켜면 ①본사 점검이 매장 파일에 ②매장 개선보고가 매장 파일에 ③QSC·MS 점수가 통합시트에 들어간다. */
+const SWITCHES = ['STORE_FILE_WRITE', 'STORE_IMPROVE_WRITE', 'DASHBOARD_WRITE'];
+
+function switchesShow() {
+  const out = '지금 스위치 상태\n' + SWITCHES.map(function (k) {
+    const v = PROPS.getProperty(k);
+    return '  ' + (v === 'true' ? '★켜짐★' : '  꺼짐 ') + '  ' + k + ' = ' + (v === null ? '(속성 없음)' : v);
+  }).join('\n');
+  Logger.log(out);
+  return out;
+}
+function switchesSet_(on) {
+  SWITCHES.forEach(function (k) { PROPS.setProperty(k, on ? 'true' : 'false'); });
+  const out = (on ? '세 개를 켰습니다 — 이제 실제로 기록됩니다' : '세 개를 껐습니다 — 아무 파일도 건드리지 않습니다')
+    + '\n' + switchesShow();
+  Logger.log(out);
+  return out;
+}
+function switchesOn() { return switchesSet_(true); }
+function switchesOff() { return switchesSet_(false); }
+
+/* 같은 일을 관리자 화면에서도 할 수 있게 — 편집기 함수 목록이 283개라 고르기가 어렵고,
+   설정 화면은 위 이유로 영영 읽기 전용이다. 관리자 권한이 있어야 도달한다(ACTIONS 등록표).
+
+     await Api.call('admin.switches', {})            ← 지금 상태만 본다 (기본 · 아무것도 안 바꾼다)
+     await Api.call('admin.switches', {on:true})     ← 세 개를 켠다   (10/1)
+     await Api.call('admin.switches', {on:false})    ← 세 개를 끈다   (되돌리기)
+
+   ★기본이 '보기'다★ — on을 빠뜨렸다고 켜지는 일은 없다. 바꾼 경우에만 감사로그에 남는다. */
+function fnSwitches(ctx, payload) {
+  const on = payload && payload.on;
+  const changed = (on === true || on === false);
+  if (changed) {
+    SWITCHES.forEach(function (k) { PROPS.setProperty(k, on ? 'true' : 'false'); });
+    auditLog(ctx, 'admin.switches', '', '성공', '',
+      (on ? '켬' : '끔') + ': ' + SWITCHES.join(' · '));
+  }
+  const now = {};
+  SWITCHES.forEach(function (k) { now[k] = PROPS.getProperty(k) === 'true'; });
+  return { ok: true, changed: changed, switches: now };
 }
 
 /* 지금 사진이 드라이브를 얼마나 쓰고 있는지 연도별로 알려준다 (앱스 스크립트에서 직접 실행).
