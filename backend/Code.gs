@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v43', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v44', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -7328,6 +7328,33 @@ function clearProtections(sh) {
 const PROTECT_FULL_FROM = '2610';
 const TPL_TAB_RE = /원본|개편안/;
 
+/* 우측 '차기 월 목표'의 ★값 칸★ 자리. 9월까지는 이 칸도 열어 둔다.
+   ★누가 쓰는지 확정되지 않았다★ — 코드 주석은 '본사 몫'이라 했는데, 실물에는 숫자(0.95)·등급('B')
+   ·문장('CS재교육을 통해 95%달성')이 섞여 있어 사람이 손으로 쓰는 칸이 분명하다. 2609는 아직 비어 있다.
+   막았다가 9월 업무가 막히는 쪽이, 열어 뒀다가 생기는 위험보다 훨씬 비싸다 — 점수 산식이 아니라 메모다.
+   (10월부터는 안 쓰기로 했다 — 2026-08-25 담당자. 그 달부터는 전면 잠금이라 이 함수를 타지 않는다.)
+
+   자리: 제목('차기 월 목표')이 (r,c)면 라벨은 c열 r+1~r+5, ★값은 c+1열★이다.
+   못 찾으면 null 을 돌려준다 — 그때는 답변 칸만 열고 넘어간다(실패로 치지 않는다). */
+function goalCellsIn(sh) {
+  const NG = function (v) { return String(v == null ? '' : v).replace(/\s+/g, ''); };
+  let vals = [];
+  try { vals = sh.getRange(1, 1, Math.min(12, sh.getMaxRows()), sh.getMaxColumns()).getValues(); }
+  catch (e) { return null; }
+  for (let r = 0; r < vals.length; r++) {
+    for (let c = 0; c < vals[r].length; c++) {
+      if (NG(vals[r][c]) === '차기월목표') {
+        const col = c + 2;                       // 값 칸은 라벨 오른쪽
+        if (col > sh.getMaxColumns()) return null;
+        const row = r + 2, n = 5;                // 위생·(빈)·CS·(빈)·종합
+        if (row + n - 1 > sh.getMaxRows()) return null;
+        return { row: row, col: col, rows: n };
+      }
+    }
+  }
+  return null;
+}
+
 function protectMonthTabsIn(ss) {
   const me = (function () { try { return Session.getEffectiveUser().getEmail(); } catch (e) { return ''; } })();
   const out = [];
@@ -7376,13 +7403,21 @@ function protectMonthTabsIn(ss) {
       continue;
     }
 
+    /* 열어 둘 칸을 먼저 다 모은다 — 검증도 이 목록을 그대로 쓴다(기대와 실제가 갈리지 않게). */
+    const openR = [];
+    if (!full) {
+      openR.push(sh.getRange(box.row0, box.col0, box.endRow - box.row0 + 1, box.cols));
+      const g = goalCellsIn(sh);
+      if (g) openR.push(sh.getRange(g.row, g.col, g.rows, 1));
+    }
+    const openA1 = openR.map(function (r) { return r.getA1Notation(); });
+
     let pr = null;
     try {
       pr = sh.protect().setDescription(full
         ? ('QSC — 전면 잠금 (앱·본사만) ' + (isTpl ? '· 양식 원본' : '· ' + PROTECT_FULL_FROM + '~ 는 앱으로만 씁니다'))
-        : ('QSC — 매장은 답변 칸만 편집 (' + box.a1 + ')'));
-      pr.setUnprotectedRanges(full ? []
-        : [sh.getRange(box.row0, box.col0, box.endRow - box.row0 + 1, box.cols)]);
+        : ('QSC — 매장은 답변 칸만 편집 (' + openA1.join(' + ') + ')'));
+      pr.setUnprotectedRanges(openR);
       try { pr.setWarningOnly(false); } catch (e) { }
       try { pr.setDomainEdit(false); } catch (e) { /* 도메인 공유 파일이 아닐 때 던진다 */ }
       if (me) { try { pr.addEditor(me); } catch (e) { } }
@@ -7405,11 +7440,10 @@ function protectMonthTabsIn(ss) {
         const rp = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE);
         if (sp.length !== 1) return '시트 보호가 ' + sp.length + '건 (1건이어야 합니다)';
         if (rp.length) return '범위 보호가 ' + rp.length + '건 남아 있습니다';
-        const open = sp[0].getUnprotectedRanges().map(function (r) { return r.getA1Notation(); });
-        if (full) {
-          if (open.length) return '전면 잠금인데 열린 칸이 있습니다: ' + open.join(',');
-        } else if (open.length !== 1 || open[0] !== box.a1) {
-          return '열린 칸이 ' + (open.join(',') || '없음') + ' — ' + box.a1 + ' 이어야 합니다';
+        const open = sp[0].getUnprotectedRanges().map(function (r) { return r.getA1Notation(); }).sort();
+        const want = openA1.slice().sort();
+        if (open.length !== want.length || open.join(',') !== want.join(',')) {
+          return '열린 칸이 [' + (open.join(', ') || '없음') + '] — [' + (want.join(', ') || '없음') + '] 이어야 합니다';
         }
         if (!sp[0].canEdit()) return '스크립트 계정이 이 보호를 편집할 수 없습니다';
         return '';
@@ -7421,7 +7455,7 @@ function protectMonthTabsIn(ss) {
     } else {
       out.push('✓ ' + tab + ' : ' + how + ' — ' +
         (full ? (isTpl ? '양식 원본 잠금 (여기서 복제되는 새 월 탭도 잠긴 채 태어납니다)' : '앱·본사만 편집')
-          : ('답변 칸 ' + box.a1 + ' 만 열림')) + ' (확인함)' +
+          : ('열린 칸 ' + openA1.join(' + ') + (openA1.length > 1 ? ' (답변 + 차기 월 목표)' : ' (답변만 · 차기 월 목표 표 없음)'))) + ' (확인함)' +
         (cl.gone ? ' · 옛 보호 ' + cl.gone + '건 지움' +
           (cl.desc.length ? ' [' + cl.desc.join(' / ') + ']' : '') : ''));
     }
