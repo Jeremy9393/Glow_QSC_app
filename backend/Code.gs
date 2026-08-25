@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v45', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v48', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -4900,19 +4900,19 @@ function fnProtect(ctx, payload) {
     if (!/연동테스트|의 사본/.test(nm)) {
       return err('BAD_REQUEST', '사본이 아닙니다 (' + nm + ') — 이름에 「연동테스트」나 「의 사본」이 들어간 파일에만 걸립니다.');
     }
-    const lines = undo ? unprotectMonthTabsIn(ss) : protectMonthTabsIn(ss);
+    const lines = undo ? unprotectMonthTabsIn(ss) : protectMonthTabsIn(ss, p.old === true);
     auditLog(ctx, 'admin.protect', '', '성공', '', '사본 ' + nm + (undo ? ' 되돌리기' : ''));
     return { ok: true, target: nm, lines: lines };
   }
 
   if (p.store) {
-    const msg = undo ? unprotectStoreTabs([String(p.store)]) : protectStoreTabs([String(p.store)]);
+    const msg = undo ? unprotectStoreTabs([String(p.store)]) : protectStoreTabs([String(p.store)], 0, p.old === true);
     auditLog(ctx, 'admin.protect', String(p.store), '성공', '', undo ? '되돌리기' : '보호');
     return { ok: true, lines: String(msg).split('\n') };
   }
 
   if (p.page === 0 || (typeof p.page === 'number' && p.page > 0)) {
-    const msg = undo ? unprotectStoreTabs(null, p.page) : protectStoreTabs(null, p.page);
+    const msg = undo ? unprotectStoreTabs(null, p.page) : protectStoreTabs(null, p.page, p.old === true);
     auditLog(ctx, 'admin.protect', '', '성공', '', (undo ? '되돌리기' : '보호') + ' ' + (p.page + 1) + '쪽');
     return { ok: true, lines: String(msg).split('\n') };
   }
@@ -4926,6 +4926,8 @@ function fnProtect(ctx, payload) {
     PROTECT_FULL_FROM + ' 이후 월 탭 : 전면 보호 — 앱·본사만 편집',
     '양식 원본류 탭(원본·개편안) : 전면 보호 — 여기서 복제되는 새 월 탭도 잠긴 채 태어난다',
     "'월별 QSC현황표'는 손대지 않는다 (본사가 건 보호를 잃지 않으려고)",
+    "★기본은 " + PROTECT_FULL_FROM + "~ 와 양식 원본류만★ — 옛 달은 이미 끝난 기록이고, 본사가 건 보호가 남아 있어 앱이 손을 못 댄다",
+    "옛 달까지 걸려면 {old:true} · 지금 상태만 보려면 {store:'…', probe:true}",
   ] };
 }
 
@@ -5877,6 +5879,26 @@ function makeMonthTabIn(ss, ym) {
       const up = upgradeMonthTab(sh);
       if (!up.ok) throw new Error('개선요청 서식을 올리지 못했습니다 — ' + up.why);
       upNote = '  · 개선요청 서식 ✓';
+    }
+
+    /* ★새 달 탭을 만든 자리에서 바로 잠근다★ (2026-08-25)
+       종전 계획은 '양식 원본만 잠가 두면 copyTo 가 보호까지 복제한다'였다. 사본에서는 실제로 그랬다.
+       ★그런데 실물에서는 복제되지 않았다★ — 매장 파일 주인이 본사 공용 계정이라, 앱 계정이 그
+       보호의 편집자 목록에 들어 있지 않기 때문으로 보인다. 실물 금종제과에서 2610을 만들어 보니
+       '보호 없음'으로 태어났다. 원본에만 기대면 10·11·12월이 무방비로 태어난다.
+       그래서 여기서 직접 건다 — 만드는 자리에서 걸면 사람이 매달 잊을 일이 없다.
+       ★잠그기에 실패해도 탭은 살린다★ — 탭이 없으면 제출 자체가 죽는다. 대신 크게 알린다. */
+    if (ym >= PROTECT_FULL_FROM) {
+      try {
+        clearProtections(sh);
+        const lk = sh.protect().setDescription('QSC — 전면 잠금 (앱·본사만) · ' + ym + ' 는 앱으로만 씁니다');
+        lk.setUnprotectedRanges([]);
+        try { lk.setWarningOnly(false); } catch (e) { }
+        try { lk.setDomainEdit(false); } catch (e) { }
+        upNote += lk.canEdit() ? '  · 전면 잠금 ✓' : '  ★잠갔는데 앱이 못 씁니다 — 곧 저장이 죽습니다★';
+      } catch (e) {
+        upNote += '  ★잠그지 못했습니다(' + String(e).slice(0, 40) + ') — 이 탭은 무방비입니다★';
+      }
     }
 
     /* ★복제된 보호 설정을 보고한다★ — copyTo는 보호까지 복제한다. 원본 탭이 보호돼 있으면
@@ -7388,14 +7410,23 @@ function goalCellsIn(sh) {
   return null;
 }
 
-function protectMonthTabsIn(ss) {
+function protectMonthTabsIn(ss, withOld) {
   const me = (function () { try { return Session.getEffectiveUser().getEmail(); } catch (e) { return ''; } })();
   const out = [];
   /* 대상은 ①4자리 월 탭 ②양식 원본류 탭 뿐이다.
      ★'월별 QSC현황표'는 손대지 않는다★ — 본사가 건 보호가 이미 있고, 지웠다 다시 걸면
-     본사가 정해 둔 편집자 목록이 날아간다. */
+     본사가 정해 둔 편집자 목록이 날아간다.
+
+     ★기본은 2610~ 와 양식 원본류만★ (2026-08-25 담당자 지적: "2610부터 걸리면 되는데 왜 다른 것도?")
+     옛 달은 ①이미 끝난 기록이라 매장이 고칠 일이 없고 ②매장 파일 주인(본사 공용 계정)이 걸어 둔
+     보호가 남아 있어 앱이 손을 못 댄다 — 시도하면 실패 줄만 잔뜩 쌓인다.
+     그래도 걸고 싶으면 withOld=true (앱에서는 {old:true}) 로 부른다. */
   const tabs = ss.getSheets().map(function (sh) { return sh.getName().trim(); })
-    .filter(function (n) { return /^\d{4}$/.test(n) || TPL_TAB_RE.test(n); })
+    .filter(function (n) {
+      if (TPL_TAB_RE.test(n)) return true;
+      if (!/^\d{4}$/.test(n)) return false;
+      return withOld === true || n >= PROTECT_FULL_FROM;
+    })
     .sort().reverse();
 
   for (let i = 0; i < tabs.length; i++) {
@@ -7409,13 +7440,19 @@ function protectMonthTabsIn(ss) {
     /* 양식 원본에 이미 보호가 있으면 손대지 않는다 — 목적(남이 못 고침)은 이미 이뤄져 있고,
        지웠다 다시 걸면 본사가 정해 둔 편집자를 잃는다. 다만 앱이 못 쓰면 그건 알려야 한다. */
     if (isTpl) {
+      /* ★지금 쓰는 원본과 옛 원본을 가른다★ — 이름에 달이 적힌 것(0QSC현황(원본_2610~))이 지금 쓰는 것이다.
+         옛 원본(QSC현황(원본)·개편안)은 tabSourceFor 가 고르지 않으므로, 앱이 못 써도 아무 일도 안 난다.
+         종전에는 이 둘을 구별하지 않아 26곳 전부에서 「새 월 탭이 만들어지지 않습니다」라는
+         ★틀린 경고★가 떴고, 그 때문에 성공 집계가 0곳으로 나왔다(2026-08-25). */
+      const isNewTpl = /원본_\d{4}/.test(tab);
       let had = [];
       try { had = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET); } catch (e) { }
       if (had.length) {
         let can = false;
         try { can = had[0].canEdit(); } catch (e) { }
-        out.push((can ? '· ' : '✗ ') + tab + ' : 이미 보호돼 있어 그대로 둡니다' +
-          (can ? '' : ' — ★앱이 이 탭을 못 씁니다. 새 월 탭이 만들어지지 않습니다★'));
+        if (can) out.push('· ' + tab + ' : 이미 보호돼 있어 그대로 둡니다');
+        else if (isNewTpl) out.push('✗ ' + tab + ' : 이미 보호돼 있는데 ★앱이 못 씁니다 — 새 월 탭이 만들어지지 않습니다★');
+        else out.push('· ' + tab + ' : 이미 보호돼 있습니다 (앱은 못 쓰지만 ★옛 양식★이라 새 월 탭 생성에 쓰이지 않습니다)');
         continue;
       }
     }
@@ -7507,7 +7544,7 @@ function testStoreProtect() {
     Logger.log(m); return m;
   }
   const out = ['=== 사본 월 탭 보호 ===', '대상: ' + ss.getName()];
-  out.push.apply(out, protectMonthTabsIn(ss));
+  out.push.apply(out, protectMonthTabsIn(ss, true));
   out.push('');
   out.push('▶ 이제 점장 입장에서 확인하십시오 —');
   out.push('   ① K~P(담당부서~비고)에 글자가 써져야 한다');
@@ -7523,7 +7560,7 @@ function testStoreProtect() {
      종전에는 Logger.log가 맨 끝 한 번뿐이었다. 앱스 스크립트는 6분에서 실행을 끊는데,
      그때 반환값도 로그도 없이 사라지므로 ★어디까지 걸었는지 알 방법이 전혀 없었다★.
      26곳 × 9~10탭이면 6분은 넉넉하지 않다. 끊긴 뒤에는 `protectProgress()` 로 확인한다. */
-function protectStoreTabs(stores, page) {
+function protectStoreTabs(stores, page, withOld) {
   const sel = pickPage(stores, page);
   const t0 = Date.now();
   const out = ['=== 매장 월 탭 보호 ' + (sel.page + 1) + '쪽 · ' + sel.list.length + '곳 (전체 ' + sel.total + '곳) ==='];
@@ -7547,7 +7584,7 @@ function protectStoreTabs(stores, page) {
       if (!id) {
         lines.push('✗ 파일 ID 없음');
       } else {
-        lines.push.apply(lines, protectMonthTabsIn(SpreadsheetApp.openById(id)));
+        lines.push.apply(lines, protectMonthTabsIn(SpreadsheetApp.openById(id), withOld));
       }
     } catch (e) { lines.push('✗ ' + String(e).slice(0, 90)); }
 
