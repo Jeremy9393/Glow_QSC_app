@@ -360,8 +360,16 @@
       const pbtn = $('.photoBtn', card);
       pbtn.textContent = ph.length ? '사진 ' + ph.length : '사진';
       // 개선 필요(1건 이상)인데 사진이 없으면 빨간 테두리로 촬영 유도 (추적성)
+      /* 빨간 테두리 두 방향 (2026-08-26)
+         ㆍ개선 필요인데 사진이 없다      → 촬영을 유도한다(추적성)
+         ㆍ사진은 있는데 개선 필요가 아니다 → ★그 사진은 매장에 안 간다★. 제출도 막힌다.
+           둘 다 '지금 이 칸이 어긋나 있다'는 같은 뜻이라 같은 표시를 쓴다. */
+      const orphanPhoto = ph.length > 0 && !(typeof v === 'number' && v > 0);
       pbtn.className = 'photoBtn' + (ph.length ? ' has' : '') +
-        (typeof v === 'number' && v > 0 && !ph.length ? ' need' : '');
+        ((typeof v === 'number' && v > 0 && !ph.length) || orphanPhoto ? ' need' : '');
+      pbtn.title = orphanPhoto
+        ? '개선 필요 건수가 없어 이 사진은 매장에 전달되지 않습니다 — 건수를 올리시거나 사진을 지워 주세요'
+        : '';
       const thumbs = $('.thumbs', card);
       thumbs.innerHTML = '';
       ph.forEach(function (url, i) {
@@ -566,6 +574,33 @@
         const box = card.querySelector('.memo');
         if (box) box.focus();
       }
+      return;
+    }
+
+    /* ★사진이 있는데 개선요청이 없는 문항은 제출을 막는다★ (2026-08-26 담당자 결정)
+       반대(개선요청은 있는데 사진이 없는 것)는 허용한다 — 사진을 못 찍는 지적도 있다.
+       ★막는 이유는 그 사진이 갈 곳이 없어서다★ — 개선요청 표는 '1건 이상'인 문항만 만든다.
+         그래서 이 상태로 내면 사진은 드라이브에 올라가고 QSC_상세에 기록만 되고
+         ★매장에는 아무것도 안 간다★. 찍은 사람은 전달된 줄 알고, 매장은 받은 적이 없다 —
+         이 앱이 가장 싫어하는 '조용한 실패'다.
+       건수를 대신 올려 주지 않는다 — 점수를 앱이 몰래 바꾸는 셈이 된다. 사람이 정해야 한다. */
+    const orphan = allItems.filter(function (it) {
+      const v = state.values[it.no];
+      return (state.photos[it.no] || []).length > 0 && !(typeof v === 'number' && v >= 1);
+    });
+    if (orphan.length) {
+      alert('사진은 붙였는데 개선 필요 건수가 없는 문항이 ' + orphan.length + '개 있습니다.\n\n' +
+        orphan.slice(0, 6).map(function (it) {
+          const v = state.values[it.no];
+          const st = (v === 'NA') ? 'NA' : (v === 0 ? '이상 없음' : '미확인');
+          return '· ' + (it.code ? it.code + ' ' : '') + it.text + '  (' + st + ' · 사진 ' +
+            (state.photos[it.no] || []).length + '장)';
+        }).join('\n') +
+        (orphan.length > 6 ? '\n· 외 ' + (orphan.length - 6) + '개' : '') +
+        '\n\n이대로 내면 그 사진은 매장에 전달되지 않습니다.\n' +
+        '개선 필요 건수를 1 이상으로 올리시거나, 사진을 지워 주세요.');
+      const card = cardEls[orphan[0].no];
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
 
