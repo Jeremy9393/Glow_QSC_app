@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=66">
+<link rel="stylesheet" href="css/app.css?v=67">
 </head>
 <body>
 <div class="home">
@@ -46,11 +46,9 @@
       <span class="tag">관리자</span>
       <span class="arrow">›</span>
     </a>
-    <a class="menuCard" data-menu="codes" href="codes.html">
-      <span class="mi"><span class="mt">제출 코드 관리</span><span class="md">고객 설문 QR·제출 코드 발급</span></span>
-      <span class="tag">관리자</span>
-      <span class="arrow">›</span>
-    </a>
+    <!-- 2026-08-26: 「제출 코드 관리」 카드는 홈에서 뺐다 — 관리용 화면은 '관리자 도구' 안으로
+         모으기로 했다(담당자 결정). js/menu.js 등록표의 codes 항목에 home:false 를 달아 두었으므로
+         Menu.apply()가 이 카드를 만들지도, 되살리지도 않는다. -->
     <!-- ★계정 관리만 기본 숨김이다. 다른 카드와 정반대 규칙인 이유:
          나머지 카드는 오프라인에서 권한을 몰라도 보여야 점검을 시작할 수 있지만,
          이 카드는 비밀번호를 다루는 화면이라 '모르면 감춘다'가 안전한 기본값이다.
@@ -87,9 +85,9 @@
      api.js는 이 화면이 직접 부르지는 않지만 계속 싣는다 — window.Api를 붙여
      auth.js가 서버 주소를 자기 폴백 상수가 아니라 CONFIG에서 읽게 하기 위해서다.
      (endpoint()는 호출 시점에 읽으므로 auth.js보다 뒤에 실려도 된다) -->
-<script src="js/auth.js?v=66"></script>
-<script src="js/menu.js?v=66"></script>
-<script src="js/api.js?v=66"></script>
+<script src="js/auth.js?v=67"></script>
+<script src="js/menu.js?v=67"></script>
+<script src="js/api.js?v=67"></script>
 <script>
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
