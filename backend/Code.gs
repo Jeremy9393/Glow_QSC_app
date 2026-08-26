@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v53', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v54', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -2626,69 +2626,106 @@ function readDashboardRows() {
 
 /* ---------- 기능층: 제출 ---------- */
 
-/* 그 매장·그 날짜의 QSC 제출 요약 (없으면 null). 되묻기 문구에 쓴다.
-   여러 줄이면 마지막(가장 나중에 들어온) 것을 준다. */
-function qscPrevOf(ss, store, dateStr) {
+/* ══════════════════════════════════════════════════════════════
+   ★재제출 되묻기 — QSC·미스터리쇼퍼가 같은 규칙을 쓴다★ (2026-08-26 담당자 결정)
+
+   규칙 하나:  같은 매장·★그 달★에 같은 종류의 제출이 이미 있으면
+                → 멈추고, 무엇이 있는지 보여 주고 되묻는다
+                → 취소하면 아무 일도 일어나지 않는다 (작성한 내용은 그대로 남는다)
+                → 덮어쓰면 그 달의 그 종류 제출을 ★모두 지우고★ 새로 쓴다
+
+   ★왜 되묻나★ — 종전에는 아무것도 묻지 않았다. 그래서 하루에 여러 매장을 도는 날
+     매장을 잘못 고르면, 멀쩡한 매장의 점수와 개선요청이 아무 말 없이 그 자리에서 사라졌다
+     (QSC). 미스터리쇼퍼는 사라지지는 않지만 엉뚱한 조사가 그 달 평균에 조용히 섞였다.
+     둘 다 '조용해서' 위험한 사고다.
+
+   ★왜 '그 달'인가★ — QSC도 MS도 운영 기준이 월 1회다. 같은 달에 또 있는 것 자체가
+     물어볼 일이다. (월 2회 이상으로 바뀌면 이 단위를 다시 정한다.)
+
+   ★왜 규칙이 하나인가★ — 화면마다 규칙이 다르면 사람이 헷갈린다. 지우는 일도
+     fnUndoSubmit 한 곳에서만 한다(여기서 따로 지우지 않는다).
+
+   ⚠고객 직접 설문(survey.submit)만 예외다 — 고객은 '이미 있나요'를 판단할 수 없다.
+     그쪽은 제출 코드가 1회용이라 담당자가 이미 통제하고 있다.
+   ══════════════════════════════════════════════════════════════ */
+
+/* 그 매장·그 달의 제출 목록 요약. 없으면 []. 되묻기 문구가 이걸 그대로 편다. */
+function prevSubmitsOf(ss, kind, store, dateStr) {
   const key = normStore(store);
-  const date = String(dateStr || '').trim();
-  if (!key || !date) return null;
-  const sh = ss.getSheetByName('QSC_회차');
-  if (!sh) return null;
+  const ym = String(dateStr || '').slice(0, 7);
+  if (!key || !/^\d{4}-\d{2}$/.test(ym)) return [];
+  /* 열 자리는 saveQsc·saveShopper가 만드는 머리글 순서 그대로다.
+     QSC_상세가 아니라 QSC_회차를 본다 — 상세는 문항마다 한 줄이라 회차를 셀 수 없다. */
+  const conf = (kind === 'qsc')
+    ? { name: 'QSC_회차', cols: 7, date: 2, time: 3, store: 4, who: 5, score: 6, route: 0 }
+    : { name: '쇼퍼_응답', cols: 9, date: 2, time: 3, store: 4, who: 0, score: 9, route: 8 };
+  const sh = ss.getSheetByName(conf.name);
+  if (!sh) return [];
   const last = sh.getLastRow();
-  if (last < 2) return null;
+  if (last < 2) return [];
   const tz = ssTz();
-  // 제출시각 · 점검일자 · 방문시간 · 매장명 · 점검자 · QSC점수 · 등급
-  const rng = grid(sh, 2, 1, last - 1, 7);
+  const rng = grid(sh, 2, 1, last - 1, conf.cols);
   const vals = rng ? rng.getValues() : [];
-  let out = null;
+  const out = [];
   for (let i = 0; i < vals.length; i++) {
-    if (normStore(vals[i][3]) !== key) continue;
-    if (dateOfCell(vals[i][1], tz) !== date) continue;
-    out = {
-      date: date,
-      time: String(vals[i][2] == null ? '' : vals[i][2]).trim(),
-      inspector: String(vals[i][4] == null ? '' : vals[i][4]).trim(),
-      score: (typeof vals[i][5] === 'number') ? vals[i][5] : null,
-      grade: String(vals[i][6] == null ? '' : vals[i][6]).trim(),
+    if (normStore(vals[i][conf.store - 1]) !== key) continue;
+    const d = dateOfCell(vals[i][conf.date - 1], tz);
+    if (String(d).slice(0, 7) !== ym) continue;
+    const one = {
+      kind: kind,
+      date: d,
+      time: timeKeyOf(vals[i][conf.time - 1], tz) || '',
+      route: conf.route ? String(vals[i][conf.route - 1] == null ? '' : vals[i][conf.route - 1]).trim() : '',
+      who: conf.who ? String(vals[i][conf.who - 1] == null ? '' : vals[i][conf.who - 1]).trim() : '',
+      score: (typeof vals[i][conf.score - 1] === 'number') ? round1(vals[i][conf.score - 1]) : null,
     };
+    const dup = out.some(function (x) {
+      return x.date === one.date && x.time === one.time && x.route === one.route;
+    });
+    if (!dup) out.push(one);
   }
   return out;
 }
 
-/* ★같은 매장·같은 날짜에 이미 낸 기록이 있으면 저장하기 전에 되묻는다★ (2026-08-26)
-
-   종전에는 아무것도 묻지 않고 덮어썼다 — 그것도 반만. 통합시트·매장 파일 점수 칸은 덮어쓰고,
-   QSC_회차·QSC_상세는 행이 또 쌓이고, 사진은 드라이브에 두 벌이 되었다.
-   ★진짜 위험은 그 조용함이었다★ — 하루에 여러 매장을 도는 날 매장을 잘못 고르면,
-   멀쩡한 매장의 점수와 개선요청이 아무 말 없이 그 자리에서 사라진다(담당자 지적).
-
-   점검은 한 회차 = 한 건이므로 '이미 있음'은 곧 재제출이거나 매장 오선택이다 — 둘 다 물어야 한다.
-   예라고 답하면 앞 것을 ★통째로 되돌린 뒤★ 쓴다: 반쯤 덮어쓰고 반쯤 쌓이던 것을 없앤다.
-
-   ⚠미스터리쇼퍼·고객 설문에는 이 검사를 하지 않는다 — 그쪽은 ★여러 건이 정상★이고
-     (고객이 각자 낸다) 점수도 그 달 평균이라 앞 자료가 사라지지 않는다. 물을 이유가 없다. */
-function fnQscSubmit(ctx, payload) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const prev = qscPrevOf(ss, payload && payload.store, payload && payload.date);
-  if (prev && !(payload && payload.overwrite === true)) {
+/* 저장 전 관문. 막아야 하면 응답 객체를, 그냥 지나가도 되면 null을 준다. */
+function guardResubmit(ss, kind, payload, ctx) {
+  const prev = prevSubmitsOf(ss, kind, payload && payload.store, payload && payload.date);
+  if (!prev.length) return null;                       // 이번 달 첫 제출 — 묻지 않는다
+  if (!(payload && payload.overwrite === true)) {
     return {
       ok: false, code: 'CONFLICT',
-      error: '이 매장은 그 날짜에 이미 제출된 기록이 있습니다.',
+      error: '이 매장은 이번 달에 이미 제출된 기록이 있습니다.',
       existing: prev,
     };
   }
-  if (prev) {
-    /* 사람이 '덮어씁니다'를 눌렀다 — 되돌리기를 그대로 태운다(한 곳에서만 지우는 규칙을 갖는다). */
-    const u = fnUndoSubmit(ctx, { store: payload.store, date: payload.date, kind: 'qsc', apply: true });
+  /* 사람이 '덮어씁니다'를 눌렀다 — 되돌리기를 그대로 태운다.
+     그 달에 날짜가 여럿이면 날짜마다 한 번씩. ★하나라도 실패하면 아무것도 저장하지 않는다★ —
+     반쯤 지워진 채로 새 자료를 얹는 것이 가장 나쁘다. */
+  const days = [];
+  prev.forEach(function (p) { if (days.indexOf(p.date) < 0) days.push(p.date); });
+  for (let i = 0; i < days.length; i++) {
+    const u = fnUndoSubmit(ctx, { store: payload.store, date: days[i], kind: kind, apply: true });
     if (!u || u.ok !== true) {
       return { ok: false, code: 'SERVER_ERROR',
-        error: '앞 제출을 정리하지 못해 ★아무것도 저장하지 않았습니다★: ' + ((u && u.error) || '알 수 없는 이유') };
+        error: '앞 제출(' + days[i] + ')을 정리하지 못해 ★아무것도 저장하지 않았습니다★: ' +
+          ((u && u.error) || '알 수 없는 이유') };
     }
   }
+  return null;
+}
+
+function fnQscSubmit(ctx, payload) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const stop = guardResubmit(ss, 'qsc', payload, ctx);
+  if (stop) return stop;
   return saveQsc(ss, payload, ctx);
 }
+
 function fnShopperSubmit(ctx, payload) {
-  return saveShopper(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx, false);
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const stop = guardResubmit(ss, 'shopper', payload, ctx);
+  if (stop) return stop;
+  return saveShopper(ss, payload, ctx, false);
 }
 /* ══════════════════════════════════════════════════════════════
    미스터리쇼퍼 제출 코드 (검표) — 설계: `_보관/설계/쇼퍼_제출코드_설계.md`

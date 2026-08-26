@@ -418,6 +418,7 @@ async function initShopperForm(opts) {
       }),
     };
     const btn = $('#submitBtn');
+    const btnLabel = btn.textContent;   // 되묻기에서 취소했을 때 되돌려 놓을 원래 글자
     btn.disabled = true; btn.textContent = ADMIN ? '저장 중…' : '전송 중…';
     try {
       /* ★관리자와 고객이 서로 다른 액션으로 보낸다★
@@ -425,7 +426,20 @@ async function initShopperForm(opts) {
          따로 받아야 한다. 둘 다 'shopper'로 보내면, 로그인 강제(AUTH_ENFORCE)를 켜는 순간
          토큰이 없는 고객 설문이 전부 거부되어 조사 자체가 멈춘다.
          서버는 survey.submit을 anon으로 열어 두고, 그 응답은 공식 CS 평균 집계에서 제외한다. */
-      const r = await Api.submit(ADMIN ? 'shopper' : 'survey', payload);
+      let r = await Api.submit(ADMIN ? 'shopper' : 'survey', payload);
+      /* ★이번 달에 이미 낸 기록이 있으면 서버가 멈추고 되묻는다★ (2026-08-26) — QSC 점검과
+         같은 규칙이다. 매장을 잘못 고르는 사고를 여기서 잡는다.
+         ★고객 설문(ADMIN이 아닐 때)에는 오지 않는다★ — survey.submit은 이 검사를 하지 않는다.
+           고객은 '이미 있나요'를 판단할 수 없고, 그쪽은 제출 코드가 1회용으로 통제한다. */
+      if (ADMIN && r && !r.ok && r.code === 'CONFLICT' && r.existing) {
+        if (!Api.askOverwrite(payload.store, r.existing)) {
+          btn.disabled = false; btn.textContent = btnLabel;
+          return;   // 작성한 내용은 그대로 남는다 — 매장만 다시 고르면 된다
+        }
+        btn.textContent = '앞 제출을 정리하는 중…';
+        payload.overwrite = true;
+        r = await Api.submit('shopper', payload);
+      }
       if (r.ok) {
         localStorage.removeItem(DRAFT_KEY);
         if (ADMIN) {

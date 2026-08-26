@@ -605,15 +605,7 @@
          하루에 여러 매장을 도는 날 매장을 잘못 고르면 멀쩡한 매장 자료가 그대로 사라졌다.
          ★매장 확인을 먼저 권하는 문구를 넣는다★ — '덮어쓸까요?'만 물으면 사람은 그냥 예를 누른다. */
       if (r && !r.ok && r.code === 'CONFLICT' && r.existing) {
-        const e = r.existing;
-        const msg = payload.store + '\n' + e.date + (e.time ? ' ' + e.time : '') +
-          ' 에 이미 제출된 기록이 있습니다.\n' +
-          (e.score == null ? '' : '   QSC ' + Number(e.score).toFixed(1) + '점' + (e.grade ? ' · ' + e.grade : '') + '\n') +
-          (e.inspector ? '   점검자 ' + e.inspector + '\n' : '') +
-          '\n★매장을 잘못 고르지 않으셨는지 먼저 확인해 주세요.★\n' +
-          '다른 매장이라면 [취소]를 누르고 매장을 다시 골라 주세요.\n\n' +
-          '앞 제출을 모두 지우고 지금 내용으로 새로 쓸까요?';
-        if (!confirm(msg)) {
+        if (!Api.askOverwrite(payload.store, r.existing)) {
           btn.disabled = false; btn.textContent = '제출';
           return;   // 작성한 내용은 그대로 남는다 — 매장만 다시 고르면 된다
         }
