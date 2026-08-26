@@ -25,7 +25,10 @@ var Menu = (function () {
        '전체 대시보드'·'개선요청사항'으로 통일했다. index.html의 정적 카드 문구도 같이 바뀌어 있다. */
     { key: 'dashboard', title: 'QSC 전체 대시보드',   desc: '전 매장 위생·CS·개선 현황',        href: 'dashboard.html', order: 30 },
     { key: 'store',     title: '매장 QSC현황',        desc: '개선요청사항 확인과 개선 보고',    href: 'store.html',     order: 40 },
-    { key: 'codes',     title: '제출 코드 관리',      desc: '고객 설문 QR·제출 코드 발급',      href: 'codes.html',     order: 50 },
+    /* ★home:false★ — 홈에는 안 두고 '관리자 도구'(admin.html) 안에서 연다 (2026-08-26).
+       등록표에서 아예 빼지 않는 이유: 서버가 내려주는 메뉴 목록에는 codes가 그대로 들어 있어,
+       등록표가 모르면 apply()가 '모르는 키'로 경고를 찍고 권한 수에서도 빠진다. */
+    { key: 'codes',     title: '제출 코드 관리',      desc: '고객 설문 QR·제출 코드 발급',      href: 'codes.html',     order: 50, home: false },
     /* 계정 관리는 맨 아래(order 60)다. 매일 쓰는 화면이 아니라 매장에서 "로그인이 안 돼요"
        연락이 왔을 때만 여는 도구이므로, 자주 쓰는 카드를 아래로 밀지 않는다.
        권한은 서버 '역할' 탭의 accounts 줄이 정한다 — 여기서 역할 이름을 비교하지 않는다. */
@@ -101,6 +104,9 @@ var Menu = (function () {
     var shown = 0;
     REG.slice().sort(function (a, b) { return a.order - b.order; }).forEach(function (r) {
       var card = nav.querySelector('[data-menu="' + r.key + '"]');
+      /* home:false 는 홈에 두지 않는 화면이다(다른 화면 안에서 연다). 권한은 그대로 인정하되
+         카드는 만들지 않고, 옛 index.html이 캐시에 남아 카드가 있으면 지운다. */
+      if (r.home === false) { if (card) card.remove(); return; }
       if (!perm[r.key]) { if (card) card.remove(); return; }
       if (!card) card = build(r);
       setBadge(card, perm[r.key]);

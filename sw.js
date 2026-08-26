@@ -8,7 +8,7 @@
 /* ⚠버전은 여기 한 곳만 고친다. html 쪽 ?v=N 과 숫자를 맞출 것.
    예전엔 아래 목록에도 ?v=30 을 일일이 적어서, VER만 올리고 목록을 안 고쳐
    새 파일이 캐시에 안 담기는 사고가 반복됐다. 이제 v()가 붙여주므로 어긋날 수 없다. */
-const VER = 'v66';
+const VER = 'v67';
 const CACHE = 'qsc-app-' + VER;
 const QS = '?v=' + VER.slice(1); // 'v36' → '?v=45'
 function v(path) { return path + QS; }
