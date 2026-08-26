@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v51', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v52', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -5022,6 +5022,52 @@ function fnMergeAuth(ctx, payload) {
      그 달에 남는 자료가 하나도 없으면 → 그 달 탭을 통째로 지운다 (원래 없던 상태로 돌아간다)
      남는 자료가 있으면              → ★건드리지 않고 손으로 정리하라고 알린다★
    회차가 여럿 섞인 탭에서 한 회차분만 골라내는 것은 조용히 틀리기 쉽다. 틀리느니 멈춘다. */
+/* 개선요청 표를 비운다 — 본사 몫인 B(기한)·D(사진)·J(문장)만.
+   ★C는 건드리지 않는다★ — 상태 수식이 들어 있고, 지우면 그 줄만 영원히 빈 상태가 된다.
+   ★K~O도 건드리지 않는다★ — 매장 몫이다(담당부서·담당자·진행/완료 내용·개선 후 사진).
+   ★매장이 이미 적은 줄이 하나라도 있으면 아무것도 지우지 않고 그 사실을 돌려준다★ —
+     본사의 실수를 되돌리면서 매장이 한 일을 지우면 안 된다.
+     기록 경로(writeStoreQscInto의 재제출 처리)가 쓰는 판정과 같은 규칙이다. */
+function wipeImprove(sh) {
+  const IC = impCols(sh);
+  const newFmt = !!(IC.ok && IC.isNew && IC.audit);
+  let headRow = -1;
+  if (IC.ok) headRow = IC.row0 - 1;
+  else {
+    const colB = (grid(sh, 1, 2, 60, 1) || { getValues: function () { return []; } }).getValues();
+    for (let i = 0; i < colB.length; i++) {
+      const v = String(colB[i][0]).trim();
+      if (v.toUpperCase().indexOf('NO') === 0 || v === '기한') { headRow = i + 1; break; }
+    }
+  }
+  if (headRow < 0) return { ok: false, n: 0, why: '개선요청 표 머리글을 못 찾았습니다' };
+
+  const lastRow = tableEndRow(sh) || sh.getMaxRows();
+  const bodyN = Math.max(0, lastRow - headRow);
+  if (!bodyN) return { ok: true, n: 0 };
+  const bodyR = grid(sh, headRow + 1, 2, bodyN, 14);   // B~O
+  const body = bodyR ? bodyR.getValues() : [];
+  let filled = 0, touched = 0;
+  for (let i = 0; i < body.length; i++) {
+    if (String(body[i][8] == null ? '' : body[i][8]).trim() === '') continue;   // J열(본문)이 비면 빈 줄
+    filled = i + 1;
+    for (let c = 9; c <= 13; c++) {                                             // K~O(매장 몫)
+      if (String(body[i][c] == null ? '' : body[i][c]).trim() !== '') { touched++; break; }
+    }
+  }
+  if (!filled) return { ok: true, n: 0 };
+  if (touched) {
+    return { ok: false, n: filled, why: '매장이 이미 개선 내용을 적은 줄이 ' + touched + '건 있습니다' };
+  }
+  const bcW = grid(sh, headRow + 1, newFmt ? IC.due : 2, filled, newFmt ? 1 : 2);
+  const dW = grid(sh, headRow + 1, 4, filled, 1);
+  const jW = grid(sh, headRow + 1, 10, filled, 1);
+  if (bcW) bcW.clearContent();
+  if (dW) dW.clearContent();
+  if (jW) jW.clearContent();
+  return { ok: true, n: filled };
+}
+
 /* 그 매장의 제출 목록 — 최근 것부터. 되돌리기 화면이 '무엇을 지울지 고르게' 하려고 쓴다.
    ★지우지 않는다★ — 읽기만 한다. 실제 삭제는 아래 fnUndoSubmit이 날짜를 받았을 때만 한다. */
 function undoList(store) {
@@ -5101,11 +5147,16 @@ function fnUndoSubmit(ctx, payload) {
   const round = doQsc ? pick('QSC_회차', 2, 4, 3) : { sh: null, rows: [], monthLeft: 0 };
   const detail = doQsc ? pick('QSC_상세', 1, 3, 2) : { sh: null, rows: [], monthLeft: 0 };
   const shop = doShop ? pick('쇼퍼_응답', 2, 4, 0) : { sh: null, rows: [], monthLeft: 0 };
+  /* ★쇼퍼_비고도 그 제출이 쓴 것이다★ (2026-08-26) — 종전에는 빼먹어서, 되돌린 뒤에도
+     문항별 이유·비고가 시트에 남았다. 점수는 쇼퍼_응답에서만 계산하므로 점수는 안 틀렸지만,
+     '되돌렸다'고 해 놓고 기록이 남아 있는 것은 그 자체로 틀린 상태다. */
+  const shopMemo = doShop ? pick('쇼퍼_비고', 2, 4, 0) : { sh: null, rows: [], monthLeft: 0 };
   const na = (doQsc && time === '') ? pick('NA프리셋', 3, 1, 0) : { sh: null, rows: [], monthLeft: 0 };
 
-  const hit = round.rows.length + detail.rows.length + shop.rows.length + na.rows.length;
+  const hit = round.rows.length + detail.rows.length + shop.rows.length + shopMemo.rows.length + na.rows.length;
   log.push('QSC_회차 ' + round.rows.length + '건 · QSC_상세 ' + detail.rows.length +
-    '건 · 쇼퍼_응답 ' + shop.rows.length + '건 · NA프리셋 ' + na.rows.length + '건');
+    '건 · 쇼퍼_응답 ' + shop.rows.length + '건 · 쇼퍼_비고 ' + shopMemo.rows.length +
+    '건 · NA프리셋 ' + na.rows.length + '건');
 
   /* ★찾은 것이 하나도 없으면 여기서 끝낸다★ — 아래로 내려가면 안 된다.
      내려가면 "그 달에 남는 자료가 없다"가 참이 되어 ★매장 파일 탭을 지우겠다★고 나선다.
@@ -5126,16 +5177,41 @@ function fnUndoSubmit(ctx, payload) {
       + (oneSided ? "한쪽만(kind='" + kind + "') 되돌리기 때문입니다"
         : '그 달에 QSC ' + round.monthLeft + '건 · 쇼퍼 ' + shop.monthLeft + '건이 남습니다')
       + '. 점수 칸만 비우고 개선요청 행은 손으로 정리하십시오'));
+  /* ★방문일·방문시간·개선요청은 QSC가 쓴 것이다★ — 그래서 그 달에 QSC가 하나도 안 남을 때만
+     되돌린다. 남아 있으면 그 줄들이 남은 회차의 것일 수 있어 가릴 방법이 없다(행에 회차 표식이 없다). */
+  if (doQsc && !monthEmpty) {
+    log.push(round.monthLeft === 0
+      ? ('매장 파일 ' + tab + ' 탭: 방문일·방문시간·개선요청 행도 함께 비웁니다 ' +
+        '(매장이 이미 개선 내용을 적은 줄이 있으면 그때는 멈추고 알려 드립니다)')
+      : ('매장 파일 ' + tab + ' 탭: ★개선요청 행은 그대로 둡니다★ — 그 달에 QSC ' + round.monthLeft +
+        '건이 남아 어느 줄이 이 제출 것인지 가릴 수 없습니다'));
+  }
   log.push('통합시트 ' + ym + ' ' + (doQsc ? 'QSC' : '') + (doQsc && doShop ? '·' : '') + (doShop ? 'MS' : '') + ' 점수 칸을 비웁니다');
 
   if (!apply) return { ok: true, preview: true, store: store, date: date, plan: log };
 
+  /* ★사진 파일 ID를 행을 지우기 전에 모아 둔다★ — QSC_상세 사진열(13번째)에 주소가 남아 있고,
+     그 주소 안에 파일 ID가 들어 있다. 행을 먼저 지우면 어느 사진이 이 제출 것인지 영영 알 수 없다. */
+  const photoIds = [];
+  if (detail.sh && detail.rows.length) {
+    const lastD = detail.sh.getLastRow();
+    const colR = grid(detail.sh, 2, 13, Math.max(0, lastD - 1), 1);
+    const col = colR ? colR.getValues() : [];
+    detail.rows.forEach(function (r) {
+      String((col[r - 2] || [''])[0] || '').split(/\s+/).forEach(function (u) {
+        const m = u.match(/[-\w]{25,}/);
+        if (m && photoIds.indexOf(m[0]) < 0) photoIds.push(m[0]);
+      });
+    });
+  }
+
   /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
-  [round, detail, shop, na].forEach(function (t) {
+  [round, detail, shop, shopMemo, na].forEach(function (t) {
     if (!t.sh || !t.rows.length) return;
     t.rows.slice().sort(function (a, b) { return b - a; }).forEach(function (r) { t.sh.deleteRow(r); });
   });
-  done.push('응답 시트 ' + (round.rows.length + detail.rows.length + shop.rows.length + na.rows.length) + '행 삭제');
+  done.push('응답 시트 ' + (round.rows.length + detail.rows.length + shop.rows.length +
+    shopMemo.rows.length + na.rows.length) + '행 삭제');
 
   const fileId = storeFileId(store);
   if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
@@ -5154,7 +5230,25 @@ function fnUndoSubmit(ctx, payload) {
     else {
       if (doQsc) setByLabelAny(sh2, L_QSC, '');
       if (doShop) setByLabelAny(sh2, L_MS, '');
-      done.push('매장 파일 ' + tab + ' 탭: 점수 칸만 비웠습니다 ★개선요청 행은 손으로 지우십시오★');
+      const parts = ['점수 칸을 비웠습니다'];
+      /* 방문일·방문시간·개선요청은 QSC가 쓴 것이다. 그 달에 QSC가 하나도 안 남고, 탭의 방문일이
+         지금 되돌리는 날짜와 같을 때만 되돌린다 — 그 조건이면 표의 모든 줄이 이 제출 것이다. */
+      const tabDate = dateOfCell(labelValue(labelMap(sh2),
+        ['방문일', '방문일자', '점검일', '점검일자']).v, fileTz(ss2));
+      if (doQsc && round.monthLeft === 0 && tabDate === date) {
+        setByLabel(sh2, '방문일', '');
+        setByLabel(sh2, '방문시간', '');
+        parts.push('방문일·방문시간을 비웠습니다');
+        const w = wipeImprove(sh2);
+        if (w.ok && w.n) parts.push('개선요청 ' + w.n + '행을 비웠습니다');
+        else if (w.ok) parts.push('개선요청 행은 원래 없었습니다');
+        else parts.push('★개선요청 ' + (w.n || 0) + '행은 손으로 지우십시오★ — ' + w.why);
+      } else if (doQsc) {
+        parts.push('★개선요청 행은 손으로 지우십시오★ — ' + (round.monthLeft
+          ? '그 달에 QSC ' + round.monthLeft + '건이 남아 어느 줄이 이 제출 것인지 가릴 수 없습니다'
+          : '탭의 방문일이 ' + date + '가 아닙니다'));
+      }
+      done.push('매장 파일 ' + tab + ' 탭: ' + parts.join(' · '));
     }
   }
 
@@ -5164,6 +5258,18 @@ function fnUndoSubmit(ctx, payload) {
     if (doQsc) { const a = writeDashboard(store, date, '', 0); done.push('통합시트 QSC 칸: ' + (a.ok ? a.cell + ' 비움' : a.error)); }
     if (doShop) { const b = writeDashboard(store, date, '', 2); done.push('통합시트 MS 칸: ' + (b.ok ? b.cell + ' 비움' : b.error)); }
   }
+  /* ★지우지 않고 휴지통으로 보낸다★ — 되돌리기를 잘못 눌렀을 때 되찾을 수 있어야 한다
+     (구글 드라이브 휴지통 30일). 이 저장소의 "코드가 사진을 지우지 않는다" 정책은
+     '어느 사진이 어느 제출 것인지 모르는' 정리 작업을 두고 한 말이고, 여기는 정확히 안다. */
+  if (photoIds.length) {
+    let okN = 0, badN = 0;
+    photoIds.forEach(function (id) {
+      try { DriveApp.getFileById(id).setTrashed(true); okN++; } catch (e) { badN++; }
+    });
+    done.push('사진 ' + okN + '장을 휴지통으로 보냈습니다' +
+      (badN ? ' (' + badN + '장은 못 찾았습니다 — 이미 지워졌을 수 있습니다)' : ''));
+  }
+
   dropDashCache(date);
   dropStoreCache(store, tab);
   auditLog(ctx, 'admin.undoSubmit', store, '성공', '', date + (time ? ' ' + time : '') + ' / ' + kind + ' / ' + done.join(' · '));
