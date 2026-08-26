@@ -650,6 +650,15 @@
   ['store', 'date', 'inspector'].forEach(function (id) {
     $('#' + id).addEventListener('input', saveDraft);
   });
+
+  /* ★매장·날짜를 고르는 순간 '이번 달에 이미 있나'를 배경에서 물어본다★ (2026-08-26)
+     74문항을 채우시는 동안 답이 오므로 제출할 때 더 기다릴 것이 없다.
+     안내일 뿐이고 ★판정은 제출 순간에 서버가★ 한다(guardResubmit). */
+  const askDup = Api.watchDup($('#dupNote'), 'qsc.status',
+    function () { return $('#store').value; },
+    function () { return $('#date').value; });
+  $('#store').addEventListener('change', askDup);
+  $('#date').addEventListener('change', askDup);
   TimePick.onChange('time', saveDraft);
 
   // ---------- 초기화 ----------

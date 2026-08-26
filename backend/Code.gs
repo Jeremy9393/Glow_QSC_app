@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v54', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v55', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -299,6 +299,11 @@ function actionTable() {
        버킷은 survey와 같은 'anon'이라 이 요청이 몰려도 로그인(auth 버킷)은 막히지 않는다. */
     'config.stores':      { menu: '', act: '', scope: 'none', anon: true, max: 1 * KB, fn: fnConfigStores },
     'qsc.submit':         { menu: 'qsc', act: '쓰기', scope: 'none', legacy: true, idem: true, max: 12 * MB, fn: fnQscSubmit },
+    /* ★가벼운 사전 조회★ (2026-08-26) — 매장을 고르는 순간 '이번 달에 이미 있나'를 묻는다.
+       제출과 같은 권한(쓰기)을 요구한다: 낼 수 있는 사람만 물어볼 수 있으면 충분하고,
+       읽기/쓰기를 갈라 두면 매장 계정에 열릴 여지가 생긴다. 사진이 없어 1KB면 충분하다. */
+    'qsc.status':         { menu: 'qsc', act: '쓰기', scope: 'none', max: 1 * KB, fn: fnQscStatus },
+    'shopper.status':     { menu: 'shopper', act: '쓰기', scope: 'none', max: 1 * KB, fn: fnShopperStatus },
     'shopper.submit':     { menu: 'shopper', act: '쓰기', scope: 'none', legacy: true, idem: true, max: 3 * MB, fn: fnShopperSubmit },
     'survey.submit':      { menu: '', act: '', scope: 'none', anon: true, idem: true, max: surveyMax, fn: fnSurveySubmit },
     'dashboard.get':      { menu: 'dashboard', act: '읽기', scope: 'list', max: 2 * KB, fn: fnDashboard },
@@ -2712,6 +2717,24 @@ function guardResubmit(ss, kind, payload, ctx) {
     }
   }
   return null;
+}
+
+/* ★작성을 시작할 때 미리 알려 주기 위한 조회★ (2026-08-26)
+   종전에는 74문항을 다 적고 [제출]을 누른 뒤에야 '이미 있습니다'를 알 수 있었다.
+   ★잃는 것은 사진 업로드가 아니라 그 앞의 작성 시간이다★ — 잘못 고른 매장으로 점검표를
+   통째로 적고 나서야 알게 되는 것이 이 화면의 가장 비싼 사고다(담당자 지적).
+   그래서 매장·날짜를 고르는 순간 배경에서 이걸 부른다. 제출 때 추가로 기다릴 것이 없다.
+   ★판정은 여전히 제출 순간에 서버가 한다★ — 이건 안내일 뿐이고, 마지막 관문은 guardResubmit이다
+   (화면 안내가 낡았거나 그 사이 남이 냈어도 통과시키면 안 된다). */
+function fnQscStatus(ctx, payload) {
+  return { ok: true, kind: 'qsc',
+    existing: prevSubmitsOf(SpreadsheetApp.openById(SPREADSHEET_ID), 'qsc',
+      payload && payload.store, payload && payload.date) };
+}
+function fnShopperStatus(ctx, payload) {
+  return { ok: true, kind: 'shopper',
+    existing: prevSubmitsOf(SpreadsheetApp.openById(SPREADSHEET_ID), 'shopper',
+      payload && payload.store, payload && payload.date) };
 }
 
 function fnQscSubmit(ctx, payload) {

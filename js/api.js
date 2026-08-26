@@ -155,6 +155,46 @@ const Api = (function () {
     return r;
   }
 
+  /* ★'이번 달에 이미 있습니다' 안내를 한 곳에서 그린다★ (2026-08-26)
+     QSC 점검과 미스터리쇼퍼가 같은 말을 해야 사람이 헷갈리지 않는다.
+     el 은 안내를 담을 요소, action 은 'qsc.status' 또는 'shopper.status'.
+     ★조용히 실패한다★ — 이건 편의 안내이고 판정은 제출 때 서버가 한다.
+       못 물어봤다고 경고창을 띄우면, 할 수 있는 조치가 없는데 작성만 끊긴다. */
+  function watchDup(el, action, getStore, getDate) {
+    if (!el) return function () { };
+    let timer = null;
+    let last = '';
+    let seq = 0;
+    function paint(list) {
+      if (!list || !list.length) { el.textContent = ''; el.style.display = 'none'; return; }
+      const lines = list.map(function (e) {
+        return '   · ' + e.date + (e.time ? ' ' + e.time : '') +
+          (e.route ? ' · ' + e.route : '') + (e.who ? ' · ' + e.who : '') +
+          (typeof e.score === 'number' ? ' · ' + e.score.toFixed(1) + '점' : '');
+      });
+      // 서버 문자열이라 textContent로만 넣는다 (이 앱의 XSS 방어 관례)
+      el.textContent = '이 매장은 이번 달에 이미 제출된 기록이 ' + list.length + '건 있습니다.\n' +
+        lines.join('\n') +
+        '\n계속 작성하시면 제출할 때 덮어쓸지 여쭤봅니다. 다른 매장이라면 지금 바꿔 주세요.';
+      el.style.display = '';
+    }
+    function ask() {
+      const store = (getStore() || '').trim();
+      const date = (getDate() || '').trim();
+      const key = store + '|' + date.slice(0, 7);
+      if (!store || !date) { last = ''; paint(null); return; }
+      if (key === last) return;         // 같은 매장·같은 달이면 다시 묻지 않는다
+      last = key;
+      const my = ++seq;
+      call(action, { store: store, date: date }).then(function (r) {
+        if (my !== seq) return;         // 늦게 온 답이 새 선택을 덮지 않게
+        if (r && r.ok) paint(r.existing);
+      }).catch(function () { /* 안내는 없어도 된다 — 판정은 제출 때 서버가 한다 */ });
+    }
+    /* 날짜 입력은 한 글자마다 이벤트가 온다. 조금 기다렸다 묻는다(분당 요청 상한도 지킨다). */
+    return function () { clearTimeout(timer); timer = setTimeout(ask, 400); };
+  }
+
   /* ★재제출 되묻기 문구는 한 곳에만 둔다★ — QSC 점검과 미스터리쇼퍼가 같은 말을 해야
      사람이 헷갈리지 않는다(서버 규칙도 하나다). true면 '덮어쓴다'는 뜻이다.
      ★매장 확인을 먼저 권한다★ — '덮어쓸까요?'만 물으면 사람은 읽지 않고 예를 누른다.
@@ -200,7 +240,7 @@ const Api = (function () {
     try { return JSON.parse(localStorage.getItem('qsc-live-config') || 'null'); } catch (e) { return null; }
   }
 
-  return { call: call, submit: submit, getConfig: getConfig, askOverwrite: askOverwrite, CONFIG: CONFIG };
+  return { call: call, submit: submit, getConfig: getConfig, askOverwrite: askOverwrite, watchDup: watchDup, CONFIG: CONFIG };
 })();
 
 /* auth.js가 서버 주소를 window.Api에서 찾는다(주소 단일 출처). 최상위 const는 window에
