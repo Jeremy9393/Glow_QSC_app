@@ -35,6 +35,26 @@
   let loading = false;
   let scrolled = false;   // 자기 매장 자동 스크롤은 진입 시 1회만 (기간을 바꿀 때마다 튀면 거슬린다)
 
+  /* 진입 직후 '불러오는 중입니다…'와 빈 표를 왕복이 끝날 때까지(2초, 콜드 스타트면 11초) 보여주던
+     자리에 지난번 받아 둔 표를 먼저 그려 둔다(2026-08-26).
+     ★진입 1회뿐이다★ — 새로고침·기간 변경 때는 쓰지 않는다:
+       ㆍ기간을 바꾸는 순간 다른 달 표를 그리면 renderPeriods가 select 값까지 그 달로 되돌려
+         방금 고른 기간과 싸운다(사용자가 고른 것이 취소된 것처럼 보인다).
+       ㆍ점검·오류로 표를 지운 뒤 새로고침을 누를 때마다 옛 숫자가 다시 깜빡이면,
+         지우는 이유였던 '오래된 숫자를 최신인 양 보여주지 않는다'가 무의미해진다. */
+  let firstPaint = true;
+
+  /* 진입 직후 그린 캐시 표가 아직 화면에 떠 있는가.
+     아래 loading 게이트가 기간 선택을 버릴 때, 버려도 되는 화면인지(캐시본)
+     건드리면 안 되는 화면인지(서버에서 받아 그린 표)를 가르는 데만 쓴다. */
+  let staleShown = false;
+
+  /* ★마지막 요청만 화면에 반영한다★ — 지금은 아래 loading 게이트가 겹침을 막지만, 그 게이트는
+     시트 읽기 쿼터를 지키려는 장치이지 순서를 지키려는 장치가 아니다. 겹침이 한 번이라도 새면
+     늦게 도착한 옛 기간 응답이 새 기간 표를 덮어 ★기간 select와 숫자가 어긋난 채로 남는다★ —
+     화면이 틀렸다는 것조차 알 수 없는 상태라, 게이트와 별개로 순서 가드를 둔다. */
+  let reqSeq = 0;
+
   // ---------- 작은 도구들 ----------
 
   // 이번 달 기간 키. codes-app.js의 cycle()과 같은 계산이지만 대시보드 기간 키는 'YYYY-MM' 형식이다.
@@ -301,17 +321,23 @@
     setNote($('#warnNote'), msgs.join(' · '));
   }
 
-  function renderTrust(data, offline) {
+  /* stale = 캐시본을 먼저 그려 두고 서버 응답을 기다리는 중(제3의 상태).
+     offline과 뭉뚱그리지 않는다 — 오프라인은 '이게 지금 받을 수 있는 전부'라는 뜻이고,
+     stale은 '곧 바뀐다'는 뜻이라 점장이 기다려야 할지 말지가 정반대다. */
+  function renderTrust(data, offline, stale) {
     /* "왜 안 바뀌지" 문의를 없애는 한 줄. 관리자가 통합시트를 브라우저에서 직접 고치면 백엔드는
        알 수 없고 캐시 TTL이 유일한 방어선이므로, 기준 시각을 상시 표기한다. */
     let n = minsAgo(data && data.updatedAt);
     if (n == null && data && typeof data.cacheAge === 'number') n = Math.round(data.cacheAge / 60);
     const when = (n == null) ? '방금' : (n <= 0 ? '방금' : n + '분 전');
-    $('#trust').textContent = '본사 통합시트 입력 기준 · ' + when + (offline ? ' (저장된 화면)' : '');
-    $('#freshInfo').textContent = offline ? '오프라인' : when;
+    /* 캐시본을 그리는 동안에도 '몇 분 전 기준'은 그대로 적는다 — 옛 숫자라는 사실을 지우지 않기
+       위해서다. 다만 그 옆에 갱신 중임을 반드시 붙인다(꼬리표 없는 옛 숫자가 이 화면 최악의 사고다). */
+    $('#trust').textContent = '본사 통합시트 입력 기준 · ' + when
+      + (offline ? ' (저장된 화면)' : (stale ? ' (지난번 받아둔 화면 · 갱신 중)' : ''));
+    $('#freshInfo').textContent = offline ? '오프라인' : (stale ? '갱신 중…' : when);
   }
 
-  function render(data, offline) {
+  function render(data, offline, stale) {
     // period는 필수 필드지만, 옛 스냅샷을 그릴 때 없을 수 있어 화면이 통째로 죽지 않도록 채워 둔다.
     if (!data.period) data.period = { key: $('#period').value || curPeriod(), label: '', type: 'month' };
     const hasHC = !(data.cols && data.cols.hasHygieneCs === false);
@@ -320,7 +346,7 @@
     renderHead(data.cols, hasHC);
     renderRows(data, hasHC);
     renderWarn(data, offline);
-    renderTrust(data, offline);
+    renderTrust(data, offline, stale);
   }
 
   // ---------- 불러오기 ----------
@@ -344,11 +370,58 @@
     setNote($('#stateNote'), '');
   }
 
+  /* 서버를 기다리는 동안 지난번 표를 먼저 그린다. 그렸으면 true.
+     ★같은 기간의 스냅샷일 때만 그린다★ — 지난달에 보고 이번 달에 들어오면 스냅샷은 지난달 것이라,
+       그리는 순간 select가 지난달로 되돌아가고 점장은 이번 달 표를 보고 있다고 착각한 채
+       지난달 숫자를 읽는다. 기간이 다르면 그냥 예전처럼 '불러오는 중'만 보여주는 편이 안전하다.
+     문구는 render() 뒤에 적는다 — renderRows가 '표시할 매장이 없습니다'로 stateNote를 덮을 수 있다. */
+  function showStale(key) {
+    const snap = snapRead();
+    if (!snap || !snap.period || snap.period.key !== key) return false;
+    render(snap, false, true);
+    setNote($('#stateNote'), '지난번 받아둔 화면입니다. 최신 자료를 불러오는 중입니다…');
+    return true;
+  }
+
+  /* 캐시본을 그려 둔 채로 non-ok 응답을 받았을 때 표를 즉시 비운다.
+     ★서버가 "지금은 못 준다"고 답했는데 지난 표가 남아 있으면, 문구만 오류이고 숫자는 최신처럼
+       읽힌다★ — 점검 때 스냅샷을 덮지 않는 이유(showMaint 위 주석)·오류 때 스냅샷을 쓰지 않는
+       이유(load 끝 주석)와 같은 원칙이다. 캐시를 먼저 그리기로 한 이상 되돌리는 쪽도 있어야 한다. */
+  function clearStale() {
+    staleShown = false;
+    $('#rankBody').innerHTML = '';
+    $('#rankHead').innerHTML = '';
+    $('#stats').innerHTML = '';
+    setNote($('#adminNote'), '');
+    setNote($('#warnNote'), '');
+    $('#trust').textContent = '';
+    $('#freshInfo').textContent = '';
+  }
+
   async function load(key) {
-    if (loading) return;
+    /* 이미 요청이 달리는 중이면 이번 선택은 버린다(시트 읽기를 겹쳐 쓰지 않는다).
+       ★버릴 때 캐시 표를 남겨 두면 안 된다★ — 진입 직후 캐시 표가 떠 있는 동안 기간을 바꾸면
+         숫자는 지난 기간 그대로인데 select만 새 기간을 가리켜, 점장은 자기가 고른 달의 숫자라고
+         믿고 다른 달 숫자를 읽는다. 곧 도착할 응답이 select를 원래 기간으로 되돌리기 전까지
+         화면 전체가 거짓말을 하는 셈이라, 표를 지우고 기다리게 하는 편이 낫다.
+       ★버렸다는 사실도 알린다★ — 눌렀는데 아무 반응이 없으면 앱이 멈춘 것으로 읽힌다. */
+    if (loading) {
+      if (staleShown) clearStale();
+      setNote($('#stateNote'), '아직 불러오는 중입니다. 잠시 후 기간을 다시 선택해 주세요.');
+      return;
+    }
     loading = true;
+    const seq = ++reqSeq;
     $('#reloadBtn').disabled = true;
-    setNote($('#stateNote'), '불러오는 중입니다…');
+
+    /* 진입 1회에 한해 캐시본을 먼저 그린다. 못 그리면(캐시 없음·다른 기간) 예전 그대로 빈 표 + 안내.
+       staleShown은 '이 화면의 숫자가 캐시본이다'라는 표식이라, 아래 non-ok 분기와 위 loading
+       게이트에서 지울 근거가 된다.
+       ★이미 서버에서 받아 그려 둔 표는 여기에 걸리지 않는다★ — 새로고침이 실패했을 때
+         멀쩡히 받아 둔 표까지 지우는 것은 기존 동작이 아니다. */
+    staleShown = firstPaint ? showStale(key) : false;
+    firstPaint = false;
+    if (!staleShown) setNote($('#stateNote'), '불러오는 중입니다…');
 
     const OFFMSG = '연결이 되지 않아 불러오지 못했습니다. 잠시 후 새로고침해 주세요.';
     let res = null;
@@ -356,11 +429,20 @@
       res = await Api.call('dashboard.get', { period: key });
     } catch (e) {
       /* Api.call은 네트워크 실패를 던지지 않고 code:'NETWORK'로 돌려준다(아래에서 받는다).
-         여기까지 오는 것은 Api 자체가 없거나 예상 못 한 예외뿐이라, 그때도 화면은 비우지 않는다. */
+         여기까지 오는 것은 Api 자체가 없거나 예상 못 한 예외뿐이라, 서버에서 받아 그려 둔 표는
+         그대로 둔다. 다만 캐시본은 여기서도 내린다 — 바로 아래 showSnapshot이 같은 틱에 다시
+         그려 주므로 보통은 아무 차이가 없지만, 스냅샷을 못 읽는 순간이면 '갱신 중' 꼬리표가 붙은
+         옛 표가 갱신도 없이 눌러앉는다. non-ok 분기와 같은 규칙을 예외 경로에도 똑같이 적용한다. */
+      if (seq !== reqSeq) return;
+      if (staleShown) clearStale();
       showSnapshot(OFFMSG);
       loading = false; $('#reloadBtn').disabled = false;
       return;
     }
+
+    /* 지나간 요청의 응답은 여기서 버린다. loading·버튼도 건드리지 않는다 —
+       아직 달리고 있는 최신 요청이 끝날 때 정리하게 두어야 버튼이 일찍 풀리지 않는다. */
+    if (seq !== reqSeq) return;
 
     loading = false;
     $('#reloadBtn').disabled = false;
@@ -370,8 +452,16 @@
       showMaint('');           // 정상 응답이 왔다 = 점검이 풀렸다
       snapWrite(res);
       render(res, false);
+      staleShown = false;   // 이제 화면 숫자는 서버가 준 것이다 — 캐시본 표식을 내린다
       return;
     }
+
+    /* 여기부터는 전부 non-ok다. 캐시본을 그려 둔 화면이라면 ★분기를 나누기 전에 먼저 지운다★ —
+       뒤에 오는 분기 중 하나라도(FORBIDDEN·APP_OUTDATED·SERVER_ERROR…) 문구만 바꾸고 표를 그대로
+       두면, 그 순간 화면은 '오류 문구 + 지난달 숫자'가 된다. 지우는 쪽을 위에 두면 나중에 분기가
+       하나 늘어도 캐시본이 남는 경로가 생기지 않는다.
+       NETWORK·MAINT는 곧바로 자기 화면을 다시 그리므로 같은 틱 안에서 덮여 깜빡이지 않는다. */
+    if (staleShown) clearStale();
 
     /* 오류 분기는 code 상수로만 한다. 한국어 문구로 분기하면 서버가 문구를 다듬는 날 조용히 깨진다.
        error 문구는 사용자에게 보여줄 용도로만 쓴다. */
@@ -411,6 +501,9 @@
   // 오프라인 진입이면 네트워크를 기다리지 않고 저장해 둔 화면을 먼저 그린다.
   if (navigator.onLine === false) {
     showSnapshot('오프라인입니다. 저장된 화면이 없어 표시할 내용이 없습니다.');
+    /* 이미 '오프라인'으로 그렸다 — 바로 뒤 load가 같은 표를 '갱신 중'으로 덮었다가 NETWORK 응답에
+       다시 '오프라인'으로 되돌리면, 잠깐이라도 곧 갱신될 것처럼 보였다가 아니라고 말하는 꼴이다. */
+    firstPaint = false;
   }
   await load(curPeriod());
 })();
