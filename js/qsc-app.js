@@ -18,12 +18,22 @@
   const updaters = {};
   const cardEls = {};
   let photoTarget = null;
+  /* 사진 임시저장(IndexedDB)이 이 기기에서 살아 있는가.
+     사생활 보호 모드·용량 초과처럼 못 쓰는 기기가 있어, 되는 곳에서만 켠다.
+     qsc.html의 뒤로가기 확인창도 이 값을 보고 문구를 고른다(window.QscPhotoDraft). */
+  let photoDraftOn = false;
+  window.QscPhotoDraft = { on: false };
+  function setPhotoDraft(on) { photoDraftOn = on; window.QscPhotoDraft.on = on; }
 
   function sevLabel(sev) { return sev === 'S1' ? '★★' : sev === 'S2' ? '★' : ''; }
 
   $('#resetBtn').onclick = function () {
     if (!confirm('모든 입력(건수·사진·비고)을 지우고 새 점검을 시작할까요?')) return;
     localStorage.removeItem(DRAFT_KEY);
+    /* 사진도 지운다. ★다만 붙잡고 기다리지 않는다★ — reload가 트랜잭션을 끊어도
+       다음 실행의 초기화 블록이 '임시저장이 없으면 사진도 비운다'로 마무리해 준다.
+       기다리게 만들면 IndexedDB가 막힌 기기에서 [초기화]가 영영 안 되는 쪽이 더 나쁘다. */
+    PhotoDraft.clear().catch(function () { /* 아래 초기화 블록이 마무리한다 */ });
     location.reload();
   };
 
@@ -133,10 +143,119 @@
       inspector: $('#inspector').value,
       values: state.values, memos: state.memos, t: Date.now(),
     }));
-    $('#saveNote').textContent = '이 기기에 자동 임시저장됨 (사진 제외) · ' + new Date().toLocaleTimeString('ko-KR');
+    $('#saveNote').textContent = '이 기기에 자동 임시저장됨 ' +
+      (photoDraftOn ? '(사진 포함)' : '(사진 제외)') + ' · ' + new Date().toLocaleTimeString('ko-KR');
   }
   function loadDraft() {
     try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { return null; }
+  }
+
+  /* ---------- 사진 임시저장 (IndexedDB) ---------- (2026-08-26 추가)
+     ★사진만 임시저장에서 빠져 있었다★ — 장당 약 180KB(js/ui-photo.js)라 localStorage 5MB로는
+       몇 장도 담을 수 없었다. 그래서 화면을 떠나거나, iOS가 메모리 압박으로 탭을 되살리거나
+       (카메라 앱을 오갈 때 흔하다), 실수로 뒤로가기를 통과하면 문항 답과 비고는 남는데
+       그날 찍은 사진만 통째로 사라졌다. IndexedDB에는 그 용량 한도가 없어 사진만 여기로 옮긴다.
+
+     ★그래도 정본은 localStorage 임시저장이다★ — 비우는 타이밍 때문이다.
+       [초기화]와 제출 후 초기화는 localStorage를 지우고 곧바로 location.reload()를 부르는데,
+       비동기 IndexedDB 삭제를 reload 직전에 던지면 트랜잭션이 중간에 끊겨 사진이 살아남을 수 있다.
+       그러면 지난 회차 사진이 다음 점검에 되살아나 그대로 제출되는, 되돌릴 수 없는 사고가 된다.
+       그래서 지우기를 붙잡고 기다리는 대신 ★들어올 때 판정한다★ — 이 파일 맨 아래 초기화 블록의
+       '임시저장이 없으면 IndexedDB도 비운다'가 마지막 관문이다.
+
+     모든 작업은 한 줄(queue)로 세운다 — 들어오자마자 던진 비우기가 그 뒤에 찍은 사진을
+     지워 버리는 순서 사고를 없앤다. */
+  const PhotoDraft = (function () {
+    const DB_NAME = 'qsc-photo-draft';
+    const STORE = 'qsc';        // 화면별로 스토어를 나눠 둔다(매장 개선보고가 들어와도 섞이지 않게)
+    let dbp = null;
+    let queue = Promise.resolve();
+
+    function usable() {
+      try { return typeof indexedDB !== 'undefined' && !!indexedDB; } catch (e) { return false; }
+    }
+    function open() {
+      if (dbp) return dbp;
+      const p = new Promise(function (resolve, reject) {
+        let req;
+        try { req = indexedDB.open(DB_NAME, 1); } catch (e) { return reject(e); }
+        req.onupgradeneeded = function () {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+        };
+        req.onsuccess = function () { resolve(req.result); };
+        req.onerror = function () { reject(req.error || new Error('IndexedDB 열기 실패')); };
+        req.onblocked = function () { reject(new Error('IndexedDB 잠김')); };
+      });
+      /* 한 번 실패한 약속을 계속 물려주면 그 뒤 시도가 전부 같은 이유로 죽는다 — 다음엔 다시 연다. */
+      p.catch(function () { if (dbp === p) dbp = null; });
+      dbp = p;
+      return p;
+    }
+    function work(mode, fn) {
+      return open().then(function (db) {
+        return new Promise(function (resolve, reject) {
+          let t;
+          try { t = db.transaction(STORE, mode); } catch (e) { return reject(e); }
+          let out = null;
+          t.oncomplete = function () { resolve(out); };
+          t.onerror = function () { reject(t.error || new Error('IndexedDB 오류')); };
+          t.onabort = function () { reject(t.error || new Error('IndexedDB 중단')); };
+          // 두 번째 인자로 받은 함수에 결과를 넘기면 oncomplete가 그것을 돌려준다
+          try { fn(t.objectStore(STORE), function (v) { out = v; }); } catch (e) { reject(e); }
+        });
+      });
+    }
+    function enq(fn) {
+      const run = queue.then(fn, fn);
+      queue = run.catch(function () { return null; });   // 한 번 실패해도 줄은 이어진다
+      return run;
+    }
+
+    return {
+      usable: usable,
+      // 한 문항의 사진 전부를 그 자리에 맞춰 둔다 (빈 배열이면 그 자리를 지운다)
+      put: function (no, list) {
+        return enq(function () {
+          return work('readwrite', function (s) {
+            if (list && list.length) s.put(list.slice(), String(no));
+            else s.delete(String(no));
+          });
+        });
+      },
+      // { 문항번호: [dataURL, …] }
+      all: function () {
+        return enq(function () {
+          return work('readonly', function (s, done) {
+            const out = {};
+            const req = s.openCursor();
+            req.onsuccess = function () {
+              const c = req.result;
+              if (!c) { done(out); return; }
+              if (Array.isArray(c.value) && c.value.length) out[String(c.key)] = c.value.slice();
+              c.continue();
+            };
+          });
+        });
+      },
+      clear: function () {
+        return enq(function () { return work('readwrite', function (s) { s.clear(); }); });
+      },
+    };
+  })();
+
+  /* 사진이 바뀔 때마다 그 문항 자리만 다시 써 둔다.
+     실패하면 ★약속을 거둔다★ — '사진 포함'이라고 적어 둔 채 실제로는 저장이 안 되고 있는 것이
+     가장 나쁘다. 대신 경고창은 띄우지 않는다(입력 중에 뜨는 팝업은 할 수 있는 조치가 없으면서
+     입력만 끊는다 — 이 파일의 매장 목록 갱신 실패 처리와 같은 규칙). */
+  function photoSave(no) {
+    if (!photoDraftOn) return;
+    PhotoDraft.put(no, state.photos[no]).catch(function (e) {
+      setPhotoDraft(false);
+      console.warn('[qsc] 사진 임시저장 실패 — 이번 회차는 사진이 저장되지 않습니다', e);
+      $('#saveNote').textContent = '이 기기에 자동 임시저장됨 (사진은 저장하지 못했습니다) · ' +
+        new Date().toLocaleTimeString('ko-KR');
+    });
   }
 
   // ---------- 사진 ---------- (줄이기는 js/ui-photo.js의 공통 부품 — 매장 개선보고와 같은 규격)
@@ -144,11 +263,18 @@
     const files = Array.from(e.target.files);
     e.target.value = '';
     if (photoTarget == null || !files.length) return;
+    /* 줄이기(shrink)는 await이라, 그 사이에 다른 문항의 [사진]을 누르면 photoTarget이 바뀐다.
+       지금 값을 붙잡아 두지 않으면 사진이 엉뚱한 문항에 붙는다. */
+    const no = photoTarget;
     for (const f of files) {
       const url = await PhotoPick.shrink(f);
-      (state.photos[photoTarget] = state.photos[photoTarget] || []).push(url);
+      (state.photos[no] = state.photos[no] || []).push(url);
     }
-    updaters[photoTarget]();
+    updaters[no]();
+    photoSave(no);
+    /* 사진만 붙이고 나가도 임시저장(정본)이 남게 한다 — 정본이 없으면 다음 실행에서
+       사진도 함께 비워지므로, 사진이 있는데 정본이 없는 상태를 만들면 안 된다. */
+    saveDraft();
   });
 
   // ---------- 문항 카드 ----------
@@ -242,7 +368,11 @@
         const im = document.createElement('img');
         im.src = url;
         im.onclick = function () {
-          if (confirm('이 사진을 삭제할까요?')) { ph.splice(i, 1); update(); }
+          if (!confirm('이 사진을 삭제할까요?')) return;
+          ph.splice(i, 1);
+          update();
+          photoSave(it.no);   // 지운 것도 임시저장에 반영한다(안 하면 다시 들어올 때 되살아난다)
+          saveDraft();
         };
         thumbs.appendChild(im);
       });
@@ -497,6 +627,7 @@
         alert(done);
         if (confirm('입력을 초기화할까요? (새 점검 시작)')) {
           localStorage.removeItem(DRAFT_KEY);
+          PhotoDraft.clear().catch(function () { /* 아래 초기화 블록이 마무리한다 */ });
           location.reload();
         }
       } else alert('저장 실패: ' + (r.error || '알 수 없는 오류'));
@@ -529,4 +660,38 @@
     TimePick.set('time', TimePick.now());
   }
   recompute();
+
+  /* ---------- 사진 임시저장 되살리기 ----------
+     ★정본(localStorage 임시저장)이 있을 때만 되살린다★. 정본이 없으면 남아 있는 사진을 비운다 —
+     이것이 [초기화]·제출 후 초기화의 마지막 관문이다(위 PhotoDraft 주석 참조).
+     reload가 삭제 트랜잭션을 끊고 지나가도 지난 회차 사진이 다음 점검에 되살아나지 않는다. */
+  if (PhotoDraft.usable()) {
+    setPhotoDraft(true);
+    if (!draft) {
+      PhotoDraft.clear().catch(function (e) {
+        setPhotoDraft(false);
+        console.warn('[qsc] 사진 임시저장을 비우지 못했습니다', e);
+      });
+    } else {
+      PhotoDraft.all().then(function (map) {
+        let n = 0;
+        Object.keys(map).forEach(function (no) {
+          if (!updaters[no]) return;   // 평가표가 바뀌어 사라진 문항 — 조용히 버린다
+          /* 읽어 오는 사이에 사용자가 이미 그 문항에 사진을 붙였다면 그쪽이 최신이다.
+             (읽기는 수십 ms라 실제로는 거의 못 겹치지만, 겹치는 순간 방금 찍은 사진이 사라진다) */
+          if (state.photos[no] && state.photos[no].length) return;
+          state.photos[no] = map[no];
+          updaters[no]();
+          n += map[no].length;
+        });
+        if (n) {
+          $('#saveNote').textContent = '임시저장 불러옴 · 사진 ' + n + '장 포함 (' +
+            new Date(draft.t).toLocaleString('ko-KR') + ')';
+        }
+      }).catch(function (e) {
+        setPhotoDraft(false);
+        console.warn('[qsc] 사진 임시저장을 읽지 못했습니다', e);
+      });
+    }
+  }
 })();
