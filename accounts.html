@@ -10,14 +10,14 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=67">
+<link rel="stylesheet" href="css/app.css?v=68">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼.
      ★우측에는 '새로고침' 하나만 둔다. auth.js가 여기에 [로그아웃]을 하나 더 끼워 넣으므로
        버튼을 더 얹으면 폰 가로폭에서 제목이 잘린다. 무거운 조작(시트 동기화)은 카드 안에 둔다. -->
 <header class="topbar">
-  <a class="back" href="index.html">←</a>
+  <a class="back" href="admin.html">←</a>
   <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">계정 관리 <span class="sub">관리자</span></span></div>
   <button id="reloadBtn" class="resetBtn">새로고침</button>
 </header>
@@ -111,10 +111,10 @@
      매장 계정이 이 주소를 직접 치면 accounts-app.js가 다 돈 뒤에야 막혔다. 키를 주면
      앱 스크립트가 실리기 전에 안내 후 홈으로 간다. 권한 사본이 없을 때(menus()===null)는
      guard가 막지 않으므로, accounts-app.js 쪽 판정도 그대로 남겨 두 겹으로 둔다. -->
-<script src="js/auth.js?v=67"></script>
+<script src="js/auth.js?v=68"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts');</script>
-<script src="js/api.js?v=67"></script>
-<script src="js/accounts-app.js?v=67"></script>
+<script src="js/api.js?v=68"></script>
+<script src="js/accounts-app.js?v=68"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

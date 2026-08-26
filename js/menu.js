@@ -32,7 +32,8 @@ var Menu = (function () {
     /* 계정 관리는 맨 아래(order 60)다. 매일 쓰는 화면이 아니라 매장에서 "로그인이 안 돼요"
        연락이 왔을 때만 여는 도구이므로, 자주 쓰는 카드를 아래로 밀지 않는다.
        권한은 서버 '역할' 탭의 accounts 줄이 정한다 — 여기서 역할 이름을 비교하지 않는다. */
-    { key: 'accounts',  title: '계정 관리',           desc: '매장 계정 비밀번호와 사용 여부',   href: 'accounts.html',  order: 60 },
+    /* home:false — 홈에는 안 두고 '관리자 도구'(admin.html) 안에서 연다 (2026-08-26) */
+    { key: 'accounts',  title: '계정 관리',           desc: '매장 계정 비밀번호와 사용 여부',   href: 'accounts.html',  order: 60, home: false },
   ];
 
   function byKey() {
