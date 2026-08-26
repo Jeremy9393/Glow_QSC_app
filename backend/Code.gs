@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v52', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v53', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -2626,8 +2626,66 @@ function readDashboardRows() {
 
 /* ---------- 기능층: 제출 ---------- */
 
+/* 그 매장·그 날짜의 QSC 제출 요약 (없으면 null). 되묻기 문구에 쓴다.
+   여러 줄이면 마지막(가장 나중에 들어온) 것을 준다. */
+function qscPrevOf(ss, store, dateStr) {
+  const key = normStore(store);
+  const date = String(dateStr || '').trim();
+  if (!key || !date) return null;
+  const sh = ss.getSheetByName('QSC_회차');
+  if (!sh) return null;
+  const last = sh.getLastRow();
+  if (last < 2) return null;
+  const tz = ssTz();
+  // 제출시각 · 점검일자 · 방문시간 · 매장명 · 점검자 · QSC점수 · 등급
+  const rng = grid(sh, 2, 1, last - 1, 7);
+  const vals = rng ? rng.getValues() : [];
+  let out = null;
+  for (let i = 0; i < vals.length; i++) {
+    if (normStore(vals[i][3]) !== key) continue;
+    if (dateOfCell(vals[i][1], tz) !== date) continue;
+    out = {
+      date: date,
+      time: String(vals[i][2] == null ? '' : vals[i][2]).trim(),
+      inspector: String(vals[i][4] == null ? '' : vals[i][4]).trim(),
+      score: (typeof vals[i][5] === 'number') ? vals[i][5] : null,
+      grade: String(vals[i][6] == null ? '' : vals[i][6]).trim(),
+    };
+  }
+  return out;
+}
+
+/* ★같은 매장·같은 날짜에 이미 낸 기록이 있으면 저장하기 전에 되묻는다★ (2026-08-26)
+
+   종전에는 아무것도 묻지 않고 덮어썼다 — 그것도 반만. 통합시트·매장 파일 점수 칸은 덮어쓰고,
+   QSC_회차·QSC_상세는 행이 또 쌓이고, 사진은 드라이브에 두 벌이 되었다.
+   ★진짜 위험은 그 조용함이었다★ — 하루에 여러 매장을 도는 날 매장을 잘못 고르면,
+   멀쩡한 매장의 점수와 개선요청이 아무 말 없이 그 자리에서 사라진다(담당자 지적).
+
+   점검은 한 회차 = 한 건이므로 '이미 있음'은 곧 재제출이거나 매장 오선택이다 — 둘 다 물어야 한다.
+   예라고 답하면 앞 것을 ★통째로 되돌린 뒤★ 쓴다: 반쯤 덮어쓰고 반쯤 쌓이던 것을 없앤다.
+
+   ⚠미스터리쇼퍼·고객 설문에는 이 검사를 하지 않는다 — 그쪽은 ★여러 건이 정상★이고
+     (고객이 각자 낸다) 점수도 그 달 평균이라 앞 자료가 사라지지 않는다. 물을 이유가 없다. */
 function fnQscSubmit(ctx, payload) {
-  return saveQsc(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx);
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const prev = qscPrevOf(ss, payload && payload.store, payload && payload.date);
+  if (prev && !(payload && payload.overwrite === true)) {
+    return {
+      ok: false, code: 'CONFLICT',
+      error: '이 매장은 그 날짜에 이미 제출된 기록이 있습니다.',
+      existing: prev,
+    };
+  }
+  if (prev) {
+    /* 사람이 '덮어씁니다'를 눌렀다 — 되돌리기를 그대로 태운다(한 곳에서만 지우는 규칙을 갖는다). */
+    const u = fnUndoSubmit(ctx, { store: payload.store, date: payload.date, kind: 'qsc', apply: true });
+    if (!u || u.ok !== true) {
+      return { ok: false, code: 'SERVER_ERROR',
+        error: '앞 제출을 정리하지 못해 ★아무것도 저장하지 않았습니다★: ' + ((u && u.error) || '알 수 없는 이유') };
+    }
+  }
+  return saveQsc(ss, payload, ctx);
 }
 function fnShopperSubmit(ctx, payload) {
   return saveShopper(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx, false);
