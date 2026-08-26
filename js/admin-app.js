@@ -79,55 +79,40 @@
       return;
     }
     const items = r.items || [];
-    if (!items.length) {
-      subList.appendChild(note(store + ' — 되돌릴 제출이 없습니다.'));
-      return;
-    }
 
-    /* ★날짜 한 줄로 묶는다★ (2026-08-26) — 종전에는 QSC·MS를 따로 줄로 놓고 항상 kind를 보냈다.
-       그런데 서버는 ★양쪽을 함께 되돌릴 때만★ 매장 파일 탭까지 정리한다(한쪽만 지우면 반대쪽
-       자료가 그 탭에 남아 있으니 당연한 규칙이다). 그래서 종류별로 나눠 놓은 화면은 개선요청
-       행을 영영 못 지우고 있었다 — 기능을 하나 잃고 있던 셈이다.
-       기본은 '그 날짜 제출을 통째로', 한쪽만 지우는 것은 작은 버튼으로 남긴다.
-       ★시간(time)은 보내지 않는다★ — 보내면 서버가 '그 회차만'으로 읽어 NA프리셋과
-       매장 파일 정리를 건너뛴다. 이 화면의 기본 동작은 '그 날짜 전부'다. */
-    const byDate = {};
-    items.forEach(function (it) {
-      const g = byDate[it.date] || (byDate[it.date] = { date: it.date, kinds: {}, times: [] });
-      g.kinds[it.kind] = true;
-      if (it.time && g.times.indexOf(it.time) < 0) g.times.push(it.time);
-    });
+    /* ★「QSC 평가표」·「MS 평가표」 두 묶음으로 보여 준다★ (2026-08-26 담당자 지시)
+       담당자가 내는 것이 그 두 가지라, 되돌리는 자리도 그 두 가지로 보이는 것이 맞다.
+       ★종전에는 날짜로 묶고 '통째로'만 되돌렸다★ — 서버가 양쪽을 함께 되돌릴 때만
+         매장 파일을 정리했기 때문이다. 그 제약은 사라졌다: 한쪽만 되돌려도 점수·방문일·
+         개선요청 행까지 다 지운다(탭만 안 지우는데, 빈 양식이라 다음에 그대로 쓰인다).
+       ★빈 묶음도 자리는 남긴다★ — '없다'는 것도 봐야 하는 정보다. 줄이 사라지면
+         '아직 안 불러왔나' 싶어진다. */
+    ['qsc', 'shopper'].forEach(function (k) {
+      const mine = items.filter(function (it) { return it.kind === k; });
 
-    Object.keys(byDate).sort().reverse().forEach(function (d) {
-      const g = byDate[d];
-      const kinds = Object.keys(g.kinds);
-      const label = kinds.map(function (k) { return KIND[k]; }).join(' · ') +
-        (g.times.length ? ' · ' + g.times.join(', ') : '');
+      const head = document.createElement('p');
+      head.className = 'f';
+      head.textContent = (k === 'qsc' ? '📋 ' : '🛍 ') + KIND[k];
+      subList.appendChild(head);
 
-      const row = document.createElement('div');
-      row.className = 'codeRow unused';
-      row.innerHTML = '<span class="st">' + (g.kinds.qsc ? '📋' : '') + (g.kinds.shopper ? '🛍' : '') +
-        '</span><span class="nm"></span><span class="info"></span>' +
-        '<span class="act"><button class="miniBtn warn" data-k="">되돌리기</button></span>';
-      $('.nm', row).textContent = g.date;
-      $('.info', row).textContent = label;
-      if (kinds.length > 1) {
-        // 한쪽만 지우는 길도 남긴다 — 그때 무엇이 정리되지 않는지는 서버가 결과에 적어 준다
-        const act = $('.act', row);
-        ['qsc', 'shopper'].forEach(function (k) {
-          const b = document.createElement('button');
-          b.className = 'miniBtn';
-          b.dataset.k = k;
-          b.textContent = (k === 'qsc' ? 'QSC만' : 'MS만');
-          act.appendChild(b);
-        });
+      if (!mine.length) {
+        subList.appendChild(note('되돌릴 제출이 없습니다.'));
+        return;
       }
-      row.querySelectorAll('button').forEach(function (b) {
-        b.onclick = function () { preview(store, g.date, b.dataset.k, label); };
+      mine.forEach(function (it) {
+        const row = document.createElement('div');
+        row.className = 'codeRow unused';
+        row.innerHTML = '<span class="st">' + (k === 'qsc' ? '📋' : '🛍') + '</span>' +
+          '<span class="nm"></span><span class="info"></span>' +
+          '<span class="act"><button class="miniBtn warn">되돌리기</button></span>';
+        $('.nm', row).textContent = it.date;
+        $('.info', row).textContent = it.time ? it.time + ' 제출분' : '';
+        $('button', row).onclick = function () { preview(store, it.date, k, KIND[k]); };
+        subList.appendChild(row);
       });
-      subList.appendChild(row);
     });
-    subList.appendChild(note('[되돌리기]는 그 날짜 제출을 통째로 되돌립니다. 누르면 무엇을 지울지 먼저 보여 드립니다.'));
+
+    subList.appendChild(note('[되돌리기]를 누르면 무엇을 지울지 먼저 보여 드립니다. 그때 확인하셔야 실제로 지웁니다.'));
   }
 
   // ---------- 미리보기 → 실행 ----------
@@ -150,7 +135,7 @@
 
     const head = document.createElement('p');
     head.className = 'f';
-    head.textContent = store + ' · ' + date + ' · ' + (kind ? KIND[kind] + '만' : label);
+    head.textContent = store + ' · ' + date + ' · ' + (kind ? KIND[kind] : label);
     undoPlan.appendChild(head);
     list(undoPlan, r.plan || [], '지울 것');
     undoPlan.appendChild(note('아직 아무것도 지우지 않았습니다. 아래를 누르면 그때 지웁니다. 사진은 휴지통으로 가고, 나머지는 되돌릴 수 없습니다.'));
