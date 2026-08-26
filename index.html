@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=64">
+<link rel="stylesheet" href="css/app.css?v=65">
 </head>
 <body>
 <div class="home">
@@ -61,6 +61,17 @@
       <span class="tag">관리자</span>
       <span class="arrow">›</span>
     </a>
+    <!-- ★data-menu 값이 'admin-tools'인 이유★ — js/menu.js 등록표(REG)에 없는 키라
+         Menu.apply()가 이 카드를 아예 손대지 않는다(모르는 카드는 지우지도 남기지도 않는다).
+         여닫는 것은 아래 applyAdminTools()가 직접 한다 — '계정 관리'와 같은 방식이다.
+         ★권한은 accounts 쓰기★ — 서버의 admin.* 액션이 전부 menu:'accounts'로 등록돼 있어서다.
+         여기에 새 메뉴 키를 만들면 구글시트 「역할」 탭까지 고쳐야 하고, 고치기 전까지는
+         관리자에게도 안 보인다. 기본값은 숨김이다 — 권한을 모르는 동안 보이면 안 되는 카드다. -->
+    <a class="menuCard" data-menu="admin-tools" href="admin.html" style="display:none">
+      <span class="mi"><span class="mt">관리자 도구</span><span class="md">제출 되돌리기, 쓰기 스위치</span></span>
+      <span class="tag">관리자</span>
+      <span class="arrow">›</span>
+    </a>
   </nav>
   <p class="note" id="menuNote" style="display:none"></p>
   <div class="homeFoot">
@@ -76,9 +87,9 @@
      api.js는 이 화면이 직접 부르지는 않지만 계속 싣는다 — window.Api를 붙여
      auth.js가 서버 주소를 자기 폴백 상수가 아니라 CONFIG에서 읽게 하기 위해서다.
      (endpoint()는 호출 시점에 읽으므로 auth.js보다 뒤에 실려도 된다) -->
-<script src="js/auth.js?v=64"></script>
-<script src="js/menu.js?v=64"></script>
-<script src="js/api.js?v=64"></script>
+<script src="js/auth.js?v=65"></script>
+<script src="js/menu.js?v=65"></script>
+<script src="js/api.js?v=65"></script>
 <script>
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
@@ -214,6 +225,21 @@
     return menuKnows('accounts') ? 0 : 1;
   }
 
+  /* ★'관리자 도구' 카드도 이 화면이 직접 여닫는다★ (2026-08-26) — 등록표에 없는 키라
+     Menu.apply()가 손대지 않기 때문이다('계정 관리'와 같은 구조).
+     ★읽기로는 열지 않는다★ — 이 화면의 두 기능(제출 되돌리기·쓰기 스위치)은 둘 다 쓰기다.
+       읽기 권한만 있는 사람에게 보여 주면 눌러 봐야 서버가 거절하는 카드가 된다. */
+  function applyAdminTools(menus) {
+    const card = nav.querySelector('[data-menu="admin-tools"]');
+    if (!card) return 0;
+    const m = granted(menus, 'accounts');
+    const on = !!(m && m.write);
+    card.style.display = on ? '' : 'none';
+    if (!on) return 0;
+    nav.appendChild(card);   // 등록표 카드들이 재배치된 뒤라 맨 아래로 간다
+    return 1;                // 등록표가 모르는 카드이므로 내가 센다
+  }
+
   function applyMenus(menus) {
     if (!menus) return;                       // 오프라인 등 — 정적 카드를 그대로 둔다
     let left = menus.length;
@@ -221,6 +247,7 @@
       left = Menu.apply(menus, nav);
     }
     left += applyAccounts(menus);
+    left += applyAdminTools(menus);
     /* 권한이 하나도 없으면 빈 화면 대신 이유를 말해 준다.
        ★'권한이 없습니다'로 끝내지 않는다★ — 매장 직원이 보는 화면이고, 잘못한 사람이 없는
          상황이다. 무엇을 하면 되는지까지 적어야 "앱이 고장났다"가 아니라 문의로 이어진다. */

@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v49', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v50', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -5022,6 +5022,38 @@ function fnMergeAuth(ctx, payload) {
      그 달에 남는 자료가 하나도 없으면 → 그 달 탭을 통째로 지운다 (원래 없던 상태로 돌아간다)
      남는 자료가 있으면              → ★건드리지 않고 손으로 정리하라고 알린다★
    회차가 여럿 섞인 탭에서 한 회차분만 골라내는 것은 조용히 틀리기 쉽다. 틀리느니 멈춘다. */
+/* 그 매장의 제출 목록 — 최근 것부터. 되돌리기 화면이 '무엇을 지울지 고르게' 하려고 쓴다.
+   ★지우지 않는다★ — 읽기만 한다. 실제 삭제는 아래 fnUndoSubmit이 날짜를 받았을 때만 한다. */
+function undoList(store) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const tz = ssTz();
+  const key = normStore(store);
+  const seen = {};
+  const out = [];
+  function scan(shName, dateCol, storeCol, timeCol, kind) {
+    const sh = ss.getSheetByName(shName);
+    if (!sh) return;
+    const last = sh.getLastRow();
+    if (last < 2) return;
+    const rng = grid(sh, 2, 1, last - 1, sh.getLastColumn());
+    const vals = rng ? rng.getValues() : [];
+    for (let i = 0; i < vals.length; i++) {
+      if (normStore(vals[i][storeCol - 1]) !== key) continue;
+      const d = dateOfCell(vals[i][dateCol - 1], tz);
+      if (!d) continue;
+      const t = timeCol ? timeKeyOf(vals[i][timeCol - 1], tz) : '';
+      const k = kind + '|' + d + '|' + t;
+      if (seen[k]) continue;         // 한 회차가 여러 줄(문항별)이어도 한 건으로 센다
+      seen[k] = true;
+      out.push({ kind: kind, date: d, time: t });
+    }
+  }
+  scan('QSC_회차', 2, 4, 3, 'qsc');
+  scan('쇼퍼_응답', 2, 4, 0, 'shopper');
+  out.sort(function (a, b) { return a.date < b.date ? 1 : (a.date > b.date ? -1 : 0); });
+  return { ok: true, preview: true, list: true, store: store, items: out.slice(0, 60) };
+}
+
 function fnUndoSubmit(ctx, payload) {
   const p = payload || {};
   const store = String(p.store || '').trim();
@@ -5030,6 +5062,10 @@ function fnUndoSubmit(ctx, payload) {
   const kind = String(p.kind || 'both');
   const apply = p.apply === true;
   if (!store) return err('BAD_REQUEST', '매장명을 주십시오.');
+  /* ★날짜를 안 주면 '무엇이 있는지'만 알려 준다★ (2026-08-26) — 화면에서 고르게 하려는 것이다.
+     날짜를 외워서 정확히 타이핑해야 했던 것이 이 기능의 가장 큰 벽이었다.
+     한 글자만 틀려도 0건으로 끝나고, 담당자는 '되돌릴 게 없다'고 잘못 읽는다. */
+  if (!date) return undoList(store);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('BAD_REQUEST', '날짜는 2026-10-01 모양으로 주십시오.');
   if (['both', 'qsc', 'shopper'].indexOf(kind) < 0) return err('BAD_REQUEST', "kind는 'qsc'·'shopper'·'both' 중 하나입니다.");
 
