@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v48', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v49', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -2642,7 +2642,14 @@ function fnShopperSubmit(ctx, payload) {
                                                     → 서버 판정 → 저장 + 그 코드 즉시 소멸
 
    ★시트가 원장이다★ — `쇼퍼_코드` 탭. 화면은 그 시트를 보여 주는 창이고, 충돌하면 시트가 이긴다.
-     발급 건마다 1행이 남고(취소·재발급 이력이 전부 보인다), 화면은 매장별 최신 1건만 보여 준다.
+     발급 건마다 1행이 남고(취소·재발급 이력이 전부 보인다), 화면은 ★살아 있는 코드★만 보여 준다.
+
+   ★열쇠는 코드 번호다★ (2026-08-26 단순화) — 예전에는 (회차 YYMM · 매장)이 열쇠였다.
+     그래서 한 매장에 이번 달 코드가 딱 한 장만 살 수 있었고, 한 번 제출하면 그 달엔 더 못 냈다.
+     그 두 규칙 때문에 발급 화면이 26개 매장 × 이번 달 격자, 곧 조사 진척 관리표가 되어 있었다.
+     이제 코드는 그냥 1회용 표다: 몇 장이든 낼 수 있고, 쓰이거나 시간이 지나거나 취소하면 죽는다.
+     ⚠매장에 묶인 것은 그대로다 — 코드에 적힌 매장과 제출한 매장이 다르면 통과하지 않는다.
+     '회차' 칸은 남겨 두지만 이제 ★기록용★이다(발급한 달). 판정에 쓰지 않는다.
 
    ★시도 횟수 제한은 선택이 아니라 필수다★ — 6자리(100만 조합)에 활성 코드가 26개면
      무작위 1회 적중률이 2.6/10만이다. 자동화로 초당 수십 번 두드리면 뚫린다.
@@ -2661,38 +2668,47 @@ function codeSheet(ss) {
   return sheet(ss, CODE_SHEET, CODE_HEADER);
 }
 
-/* 회차 = YYMM. 방문날짜가 있으면 그 달, 없으면 이번 달. */
-function codeCycle(dateStr) {
-  if (dateStr && validYm(yymm(dateStr))) return yymm(dateStr);
-  return curYymm();
-}
-
-/* 시트를 통째로 읽어 '매장 → 최신 1건'으로 접는다.
-   ★뒤에 있는 행이 이긴다★ — 발급 건마다 1행이 쌓이므로 마지막 줄이 지금 상태다. */
-function codesMap(ss, cycle) {
+/* 시트 뒷부분을 그대로 읽어 온다(접지 않는다).
+   발급은 행 추가, 사용·취소는 그 행 수정이라 ★코드 하나 = 행 하나★다. */
+function codeRows(ss) {
   const sh = codeSheet(ss);
   const last = sh.getLastRow();
-  const out = {};
-  if (last < 2) return out;
+  if (last < 2) return [];
   const n = Math.min(4000, last - 1);
   const rng = grid(sh, last - n + 1, 1, n, CODE_HEADER.length);
   const vals = rng ? rng.getValues() : [];
+  const out = [];
   for (let i = 0; i < vals.length; i++) {
-    if (String(vals[i][0]).trim() !== cycle) continue;
-    const store = String(vals[i][1] || '').trim();
-    if (!store) continue;
-    out[normStore(store)] = {
-      store: store,
-      code: String(vals[i][2] || '').trim(),
+    const code = String(vals[i][2] || '').trim();
+    if (!code) continue;
+    out.push({
+      cycle: String(vals[i][0] || '').trim(),      // 발급한 달 — 기록용
+      store: String(vals[i][1] || '').trim(),
+      code: code,
       issuedAt: msOf(vals[i][3]),
       expiresAt: msOf(vals[i][4]),
       state: String(vals[i][5] || '').trim() || '미사용',
       usedAt: msOf(vals[i][6]),
       note: String(vals[i][7] || '').trim(),
       row: last - n + 1 + i,
-    };
+    });
   }
   return out;
+}
+
+/* 지금 쓸 수 있는 코드인가. ★만료 판정은 읽는 시점에 한다★ — 시트에 '만료'를 적어 두지 않는다.
+   적어 두면 그 줄을 누가 언제 갱신하느냐는 문제가 새로 생긴다. */
+function codeAlive(r) {
+  if (!r) return false;
+  if (r.state === '사용됨' || r.state === '취소됨' || r.state === '삭제됨') return false;
+  return !(r.expiresAt && r.expiresAt <= Date.now());
+}
+
+/* 코드 번호로 찾는다. 같은 번호가 여러 줄이면 ★마지막 줄이 이긴다★(방어적 — 보통 한 줄이다). */
+function codeFind(ss, code) {
+  const rows = codeRows(ss);
+  for (let i = rows.length - 1; i >= 0; i--) if (rows[i].code === code) return rows[i];
+  return null;
 }
 
 function msOf(v) {
@@ -2704,20 +2720,6 @@ function msOf(v) {
     const d = new Date(t);
     return isNaN(d.getTime()) ? null : d.getTime();
   } catch (e) { return null; }
-}
-
-/* 화면이 쓰는 말로 바꾼다. 만료 판정은 ★읽는 시점★에 한다 — 시트에 '만료'를 적어 두지 않는다.
-   적어 두면 그 줄을 누가 언제 갱신하느냐는 문제가 새로 생긴다. */
-function codeView(rec) {
-  if (!rec) return null;
-  let state = 'unused';
-  if (rec.state === '사용됨') state = 'used';
-  else if (rec.state === '취소됨' || rec.state === '삭제됨') state = 'none';
-  else if (rec.expiresAt && rec.expiresAt <= Date.now()) state = 'expired';
-  return {
-    code: rec.code, issuedAt: rec.issuedAt, expiresAt: rec.expiresAt,
-    state: state, usedAt: rec.usedAt, note: rec.note,
-  };
 }
 
 function newCode() {
@@ -2738,20 +2740,15 @@ function codeExpiry(ttl, tz) {
 
 /* ---------- 화면용 액션 (전부 관리자 인증) ---------- */
 
+/* ★살아 있는 것만 돌려준다★ — 쓰인 코드·취소된 코드·지난 코드는 화면에서 사라진다.
+   이력은 시트에 전부 남아 있으므로 굳이 화면이 이고 다닐 이유가 없다(그것이 격자의 시작이었다). */
 function fnCodesList(ctx, payload) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const cycle = codeCycle(payload && payload.ym);
-  const raw = codesMap(ss, cycle);
-  const map = {};
-  let issued = 0, used = 0;
-  Object.keys(raw).forEach(function (k) {
-    const v = codeView(raw[k]);
-    if (!v) return;
-    map[raw[k].store] = v;
-    if (v.state !== 'none') issued++;
-    if (v.state === 'used') used++;
+  const live = codeRows(ss).filter(codeAlive).map(function (r) {
+    return { code: r.code, store: r.store, issuedAt: r.issuedAt, expiresAt: r.expiresAt };
   });
-  return { ok: true, cycle: cycle, map: map, issued: issued, used: used, fetchedAt: nowIso() };
+  live.sort(function (a, b) { return (b.issuedAt || 0) - (a.issuedAt || 0); });   // 최근 발급 순
+  return { ok: true, live: live, fetchedAt: nowIso() };
 }
 
 function fnCodesIssue(ctx, payload) {
@@ -2762,49 +2759,51 @@ function fnCodesIssue(ctx, payload) {
 
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const tz = ss.getSpreadsheetTimeZone();
-  const cycle = codeCycle(payload && payload.ym);
 
   const lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
   try {
-    /* ★같은 회차·매장에 살아 있는 코드가 있으면 막는다★ (설계 §3)
-       두 장이 돌아다니면 어느 것이 유효한지 아무도 모르게 된다. 취소하고 다시 내야 한다. */
-    const cur = codeView(codesMap(ss, cycle)[store]);
-    if (cur && cur.state === 'unused') {
-      return err('CONFLICT', '이 매장에 아직 살아 있는 코드가 있습니다. 취소한 뒤 다시 발급해 주세요.');
+    /* ★발급을 막지 않는다★ (2026-08-26) — 예전에는 '이 매장에 살아 있는 코드가 있다' ·
+       '이번 회차 제출이 끝났다' 두 가지로 거절했다. 한 매장에 여러 장이 돌아다녀도 이제는
+       어느 것이 유효한지 서버가 코드 번호로 정확히 가른다(각각 1회용이고 각각 따로 죽는다).
+       ★단 하나 지킬 것은 번호가 겹치지 않는 것★ — 이제 코드 번호가 열쇠라, 살아 있는 두 장이
+       같은 번호면 어느 매장 것인지 서버도 못 가른다. */
+    const taken = {};
+    codeRows(ss).forEach(function (r) { if (codeAlive(r)) taken[r.code] = true; });
+    let code = '';
+    for (let i = 0; i < 50; i++) { const c = newCode(); if (!taken[c]) { code = c; break; } }
+    if (!code) {
+      return err('SERVER_ERROR', '새 코드를 만들지 못했습니다. 살아 있는 코드를 정리한 뒤 다시 시도해 주세요.');
     }
-    if (cur && cur.state === 'used') {
-      return err('CONFLICT', '이 매장은 이번 회차 제출이 끝났습니다.');
-    }
-    const code = newCode();
     const now = new Date();
     const exp = new Date(codeExpiry(ttl, tz));
-    codeSheet(ss).appendRow(safeRow([cycle, store, code, now, exp, '미사용', '',
+    codeSheet(ss).appendRow(safeRow([curYymm(), store, code, now, exp, '미사용', '',
       '발급: ' + (ctx ? ctx.id : '')]));
     return {
-      ok: true, cycle: cycle, store: store,
-      rec: { code: code, issuedAt: now.getTime(), expiresAt: exp.getTime(), state: 'unused', usedAt: null },
+      ok: true, store: store,
+      rec: { code: code, store: store, issuedAt: now.getTime(), expiresAt: exp.getTime() },
     };
   } finally { try { lock.releaseLock(); } catch (e) { } }
 }
 
+/* ★코드 번호로 취소한다★ — 한 매장에 여러 장이 살 수 있게 되었으므로 매장 이름으로는
+   어느 장을 죽여야 할지 정할 수 없다. */
 function fnCodesRevoke(ctx, payload) {
-  const store = normStore(payload && payload.store);
-  if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
+  const code = String((payload && payload.code) || '').replace(/\D/g, '');
+  if (!code) return err('BAD_REQUEST', '취소할 코드를 지정해 주세요.');
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const cycle = codeCycle(payload && payload.ym);
 
   const lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
   try {
-    const rec = codesMap(ss, cycle)[store];
-    if (!rec || !rec.row) return err('NOT_FOUND', '취소할 코드가 없습니다.');
+    const rec = codeFind(ss, code);
+    if (!rec || !rec.row) return err('NOT_FOUND', '그 코드를 찾지 못했습니다.');
     if (rec.state === '사용됨') return err('CONFLICT', '이미 제출에 사용된 코드입니다.');
     const sh = codeSheet(ss);
     const c = grid(sh, rec.row, 6, 1, 3);   // 상태 · 사용시각 · 메모
     if (!c) return err('SERVER_ERROR', '코드 시트 칸을 찾지 못했습니다.');
     c.setValues([['취소됨', '', safe('취소: ' + (ctx ? ctx.id : ''))]]);
-    return { ok: true, cycle: cycle, store: store };
+    return { ok: true, code: code, store: rec.store };
   } finally { try { lock.releaseLock(); } catch (e) { } }
 }
 
@@ -2836,15 +2835,17 @@ function submitWithCode(ss, p, ctx) {
     return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
   }
   const store = normStore(p && p.store);
-  const cycle = codeCycle(p && p.date);
+  if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
 
   const lock = LockService.getScriptLock();
   try { lock.waitLock(25000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
   try {
-    const rec = codesMap(ss, cycle)[store];
+    /* ★코드 번호로 찾는다★ (2026-08-26) — 예전에는 (회차·매장)으로 찾았고, 그래서 방문날짜가
+       발급한 달과 다르면 멀쩡한 코드가 '맞지 않는다'로 튕겼다. 이제 날짜는 아무 상관이 없다. */
+    const rec = codeFind(ss, code);
     /* ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
        다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
-    if (!rec || rec.code !== code) { codeFailBump(); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
+    if (!rec || normStore(rec.store) !== store) { codeFailBump(); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
     if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
     if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
     if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');

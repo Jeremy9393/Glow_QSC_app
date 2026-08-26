@@ -8,13 +8,12 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=63">
+<link rel="stylesheet" href="css/app.css?v=64">
 </head>
 <body>
 <header class="topbar">
   <a class="back" href="shopper.html">←</a>
   <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">제출 코드 관리 <span class="sub">관리자</span></span></div>
-  <span class="sub" id="cycleInfo"></span>
 </header>
 <div class="wrap">
   <!-- 2026-08-24: '구글 연동 전' 안내를 지웠다. ★이미 연동되어 있다★ —
@@ -38,9 +37,14 @@
   </section>
 
   <section class="card">
-    <h2>이번 회차 현황</h2>
+    <!-- ★지금 살아 있는 코드만 보여 준다★ (2026-08-26) — 쓰인 코드·취소된 코드·지난 코드는
+         여기서 사라진다. 예전에는 26개 매장 × 이번 달 격자였고, 그것이 코드 발급 화면을
+         조사 진척 관리표로 만들고 있었다. 진척은 「QSC 전체 대시보드」의 MS 점수가 보여 준다. -->
+    <h2>살아 있는 코드</h2>
     <div class="codeSum" id="sum"></div>
     <div class="codeList" id="list"></div>
+    <p class="note">한 매장에 여러 장을 내도 됩니다. 각각 1회용이고 각각 따로 만료됩니다.<br>
+      발급·사용·취소 이력은 「QSC관리자 시트」의 <b>쇼퍼_코드</b> 탭에 전부 남습니다.</p>
   </section>
 </div>
 
@@ -65,10 +69,10 @@
        개입할 자리가 없다 — 즉 이 한 줄이 유일한 방어다.
        guard('codes')는 Auth.menus()를 아는 상태에서 codes 읽기 권한이 없을 때만
        denyHome()으로 안내 후 홈으로 보낸다(모르면 통과 — 저장소가 비워진 기기 보호). -->
-<script src="js/auth.js?v=63"></script>
+<script src="js/auth.js?v=64"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('codes');</script>
-<script src="js/api.js?v=63"></script>
-<script src="js/codes-app.js?v=63"></script>
+<script src="js/api.js?v=64"></script>
+<script src="js/codes-app.js?v=64"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
