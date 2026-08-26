@@ -449,6 +449,16 @@ async function initShopperForm(opts) {
           if (r.dashboard && r.dashboard.skipped && r.dashboard.monthAvg != null) {
             done += '\n\n▶ 통합시트 CS 칸에 입력\n   ' + Number(r.dashboard.monthAvg).toFixed(1) + '% (이번 달 평균)';
           }
+          /* ★밸브가 잠겨 있으면 반드시 말한다★ — QSC 점검 화면과 같은 규칙(js/qsc-app.js).
+             ok:true 인데 skipped 인 경우가 '조용한 실패'가 되던 자리다. */
+          const sf = r.storeFile;
+          if (sf && sf.skipped) {
+            done += '\n\n★매장 파일에는 기록하지 않았습니다★' +
+              '\n   ' + (sf.note || '매장 파일 쓰기가 꺼져 있습니다') +
+              '\n   담당자에게 확인해 주세요.';
+          } else if (sf && sf.ok === false) {
+            done += '\n\n⚠ 매장 파일에는 기록하지 못했습니다\n   ' + (sf.error || '알 수 없는 이유');
+          }
           alert(done);
           location.reload();
         } else {

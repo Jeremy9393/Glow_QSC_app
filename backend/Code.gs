@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v55', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v56', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3065,7 +3065,7 @@ function saveQsc(ss, p, ctx) {
       try { extra.storeFile = writeStoreQsc(p, photoMap); }
       catch (err) { extra.storeFile = { ok: false, error: opErr('매장 파일 기록', err) }; }
     } else {
-      extra.storeFile = { ok: true, skipped: true, note: '매장 파일 기록 꺼짐 (시험 운영)' };
+      extra.storeFile = { ok: true, skipped: true, note: '매장 파일 쓰기가 꺼져 있습니다 (STORE_FILE_WRITE)' };
     }
   }
   dropDashCache(p.date);
@@ -3138,7 +3138,7 @@ function saveShopper(ss, p, ctx, isSurvey) {
     try {
       extra.storeFile = STORE_FILE_WRITE
         ? writeStoreShopper(p.store, p.date, avg / 100)
-        : { ok: true, skipped: true, note: '매장 파일 기록 꺼짐 (시험 운영)' };
+        : { ok: true, skipped: true, note: '매장 파일 쓰기가 꺼져 있습니다 (STORE_FILE_WRITE)' };
     } catch (err) { extra.storeFile = { ok: false, error: opErr('매장 파일 기록', err) }; }
   }
   dropDashCache(p.date);
@@ -4958,6 +4958,16 @@ function switchesSet_(on) {
   Logger.log(out);
   return out;
 }
+/* 편집기에서 하나만:  switchOne('STORE_FILE_WRITE', false) */
+function switchOne(name, on) {
+  if (SWITCHES.indexOf(name) < 0) {
+    const msg = '모르는 스위치입니다: ' + name + '  (쓸 수 있는 이름: ' + SWITCHES.join(' · ') + ')';
+    Logger.log(msg);
+    return msg;
+  }
+  PROPS.setProperty(name, on === true ? 'true' : 'false');
+  return switchesShow();
+}
 function switchesOn() { return switchesSet_(true); }
 function switchesOff() { return switchesSet_(false); }
 
@@ -5402,18 +5412,60 @@ function fnUndoSubmit(ctx, payload) {
      await Api.call('admin.switches', {on:false})    ← 세 개를 끈다   (되돌리기)
 
    ★기본이 '보기'다★ — on을 빠뜨렸다고 켜지는 일은 없다. 바꾼 경우에만 감사로그에 남는다. */
+/* ★밸브 셋을 하나씩 여닫는다★ (2026-08-26) — 종전에는 세 개가 함께만 움직였다.
+   멈추고 싶은 자리가 서로 다르기 때문에 따로 잠글 수 있어야 한다:
+     STORE_FILE_WRITE     매장 파일에 쓰는 것 전부 (점수·방문일·★개선요청 표★)
+     STORE_IMPROVE_WRITE  ★매장이★ 답을 쓰는 것 (담당부서·진행/완료 내용·개선 후 사진)
+     DASHBOARD_WRITE      통합시트 [데이터] 그 달 점수 칸
+
+   부르는 법
+     {}                                  지금 상태만 본다 (아무것도 안 바꾼다)
+     {on:true} / {on:false}              세 개를 한꺼번에 (종전 그대로)
+     {set:{STORE_FILE_WRITE:false}}      하나만
+     {set:{DASHBOARD_WRITE:true, STORE_FILE_WRITE:true}}   골라서 여럿
+
+   ★모르는 이름·엉뚱한 값은 거절한다★ — 조용히 무시하면 껐다고 믿는 채로 계속 써진다.
+     이 액션이 막으려는 사고가 바로 그것이라, 여기서 조용하면 안 된다. */
 function fnSwitches(ctx, payload) {
-  const on = payload && payload.on;
-  const changed = (on === true || on === false);
-  if (changed) {
-    SWITCHES.forEach(function (k) { PROPS.setProperty(k, on ? 'true' : 'false'); });
-    auditLog(ctx, 'admin.switches', '', '성공', '',
-      (on ? '켬' : '끔') + ': ' + SWITCHES.join(' · '));
+  const p = payload || {};
+  const want = {};
+
+  if (p.set !== undefined) {
+    if (!p.set || typeof p.set !== 'object' || Array.isArray(p.set)) {
+      return err('BAD_REQUEST', "set 은 {STORE_FILE_WRITE:false} 모양이어야 합니다.");
+    }
+    const keys = Object.keys(p.set);
+    const bad = keys.filter(function (k) { return SWITCHES.indexOf(k) < 0; });
+    if (bad.length) {
+      return err('BAD_REQUEST', '모르는 스위치입니다: ' + bad.join(', ') +
+        '  (쓸 수 있는 이름: ' + SWITCHES.join(' · ') + ')');
+    }
+    const badv = keys.filter(function (k) { return p.set[k] !== true && p.set[k] !== false; });
+    if (badv.length) {
+      return err('BAD_REQUEST', 'true 나 false 로만 주십시오: ' + badv.join(', '));
+    }
+    keys.forEach(function (k) { want[k] = p.set[k] === true; });
   }
+
+  // {on:…} 은 세 개 전부. set 과 함께 오면 set 이 이긴다(더 구체적인 지시라서).
+  if (p.on === true || p.on === false) {
+    SWITCHES.forEach(function (k) { if (!(k in want)) want[k] = (p.on === true); });
+  }
+
+  const moved = [];
+  Object.keys(want).forEach(function (k) {
+    const before = PROPS.getProperty(k) === 'true';
+    if (before === want[k]) return;                  // 이미 그 상태면 건드리지 않는다
+    PROPS.setProperty(k, want[k] ? 'true' : 'false');
+    moved.push(k + ' ' + (before ? '켜짐' : '꺼짐') + '→' + (want[k] ? '켜짐' : '꺼짐'));
+  });
+  if (moved.length) auditLog(ctx, 'admin.switches', '', '성공', '', moved.join(' · '));
+
   const now = {};
   SWITCHES.forEach(function (k) { now[k] = PROPS.getProperty(k) === 'true'; });
-  return { ok: true, changed: changed, switches: now };
+  return { ok: true, changed: moved.length > 0, moved: moved, switches: now };
 }
+
 
 /* 지금 사진이 드라이브를 얼마나 쓰고 있는지 연도별로 알려준다 (앱스 스크립트에서 직접 실행).
    무료 15GB 안에서 도니, 모르는 채 차오르지 않게 가끔 확인할 것.
