@@ -6,6 +6,12 @@
    미응답은 빈칸으로 두면 채점에서 자동 제외 — 비고만 적어도 응답으로 인정 */
 async function initShopperForm(opts) {
   const ADMIN = !!opts.admin;
+  /* 하단 진행률의 '0 / 40'은 HTML에 박혀 있는 옛 문항 수다(지금은 38문항).
+     실제 문항 수는 master.json을 받아야 알 수 있으므로, 그 전까지는 ★틀린 숫자 대신 상태 문구★를 띄운다
+     — 틀린 숫자를 맞는 것처럼 보여 주는 것이 '불러오는 중'보다 나쁘다.
+     진짜 값은 맨 아래 recompute()가 allQs.length로 덮어쓴다(문항이 늘고 줄어도 따라간다). */
+  const progEl = document.querySelector('#prog');
+  if (progEl) progEl.textContent = '문항 불러오는 중…';
   const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
   const $ = function (s, el) { return (el || document).querySelector(s); };
 
@@ -132,19 +138,70 @@ async function initShopperForm(opts) {
   }
 
   // ---------- 매장 목록 ----------
-  const live = await Api.getConfig();
-  const stores = (live && live.stores && live.stores.length) ? live.stores : (master.stores || []);
-  stores.forEach(function (s) {
-    const o = document.createElement('option');
-    o.value = s; o.textContent = s;
-    $('#store').appendChild(o);
-  });
-  // QR 링크의 ?store= 파라미터로 매장 자동 선택·고정
+  /* ★서버 응답을 기다리지 않는다★ (2026-08-26)
+     종전에는 여기서 await Api.getConfig()로 왕복(실측 2초 · 콜드 스타트 11초)을 기다렸고,
+     아래에 있는 문항 렌더·임시저장 복원까지 전부 그 뒤로 밀렸다. QR로 들어온 손님은 그동안
+     안내문만 있고 문항이 하나도 없는 화면을 본다 — 설문을 시작하기도 전에 되돌아 나가는 화면이다.
+     그래서 화면은 ★즉시★ 그리고(마지막 성공본 캐시 → 없으면 master.json 저장본),
+     실시간 목록은 배경으로 받아 도착하면 갈아끼운다. */
   const preStore = new URLSearchParams(location.search).get('store');
-  if (preStore && stores.indexOf(preStore) >= 0) {
-    $('#store').value = preStore;
-    $('#store').disabled = true;
+  const storeSel = $('#store');
+
+  // api.js가 config.get 성공본을 넣어 두는 자리 — 키를 여기서 새로 만들지 않고 그대로 읽기만 한다
+  function cachedStores() {
+    try {
+      const c = JSON.parse(localStorage.getItem('qsc-live-config') || 'null');
+      if (c && c.stores && c.stores.length) return c.stores;
+    } catch (e) { /* 캐시가 깨졌으면 아래 master.json 저장본으로 */ }
+    return null;
   }
+
+  /* ★option만 갈아끼우는 함수가 아니다★ — ?store= 자동선택·고정(disabled)까지 한 몸으로 묶었다.
+     배경 갱신에서 이 게이트를 다시 태우지 않으면, master.json이 낡아 preStore가 처음 목록에
+     없던 손님의 드롭다운이 잠기지 않은 채 남는다. 그 손님이 옛 매장명을 골라 제출하면 서버가
+     제출코드 대조에 실패해 '제출 코드가 맞지 않습니다'로 되돌려 보내고 실패 카운터만 올라간다.
+     ★목록을 다시 그리는 곳은 이 함수 하나뿐이어야 한다.★ */
+  function fillStores(list) {
+    const keep = storeSel.value;                              // 사람이 이미 고른 값은 다시 그려도 잃지 않는다
+    while (storeSel.options.length > 1) storeSel.remove(1);   // 첫 안내 문구는 META_FIELDS 한 곳에만 두려고 남긴다
+    list.forEach(function (s) {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s;
+      storeSel.appendChild(o);
+    });
+    if (keep && list.indexOf(keep) >= 0) storeSel.value = keep;
+    /* QR 링크의 ?store= 파라미터로 매장 자동 선택·고정.
+       ★잠금은 매번 새로 판단한다 — 먼저 풀고 다시 건다★.
+       위의 함정(처음엔 없던 매장이 갱신본에 나타남)에는 그 반대짝이 있다: 캐시·master.json에는
+       있던 매장이 갱신본에서 사라지는 경우다(통합시트에서 이름을 바꾸거나 숨겼을 때 —
+       옛 이름으로 찍혀 돌아다니는 QR이 정확히 이 경우다).
+       그때 잠금을 풀지 않으면 고른 값은 목록에서 빠져 ''이 되는데 드롭다운은 회색으로 잠긴 채라,
+       손님은 매장을 고를 수도 제출할 수도 없이 '매장명을 선택해 주세요'만 반복해서 보게 된다.
+       (제출 검증이 focus를 주는 대상도 잠긴 칸이라 아무 일도 일어나지 않는다 — 막다른 길이다) */
+    storeSel.disabled = false;
+    if (preStore && list.indexOf(preStore) >= 0) {
+      storeSel.value = preStore;
+      storeSel.disabled = true;
+    }
+  }
+
+  let stores = cachedStores() || (master.stores || []);
+  fillStores(stores);
+
+  /* 실시간 목록은 배경으로. ★내용이 실제로 달라졌을 때만★ 다시 그린다 —
+     매번 다시 그리면 손님이 드롭다운을 펼쳐 둔 순간에 목록이 닫히거나 튄다(거의 항상 같은 목록이다).
+     못 받아도 여기서 사람을 붙잡지 않는다: 매장 목록은 마지막 성공본으로 계속 쓸 수 있고
+     (api.js의 폴백 체인이 그러라고 있는 것), 정말 막힌 상황이면 제출할 때 서버가 사유를 돌려준다.
+     .catch는 예상 밖 예외가 조용히 삼켜지지 않게 콘솔에 남기려고 둔다. */
+  Api.getConfig().then(function (live) {
+    if (!live || !live.stores || !live.stores.length) return;
+    if (live.stores.length === stores.length &&
+        live.stores.every(function (s, i) { return s === stores[i]; })) return;
+    stores = live.stores;
+    fillStores(stores);
+  }).catch(function (e) {
+    console.warn('매장 목록 갱신 실패 — 이 기기에 저장된 목록으로 계속합니다', e);
+  });
 
   if (ADMIN) {
     if ($('#verInfo')) $('#verInfo').textContent = '평가표 ' + master.version + ' 기준';
@@ -176,6 +233,9 @@ async function initShopperForm(opts) {
   }
 
   function saveDraft() {
+    /* ★임시저장에 제출 코드를 넣지 않는다★ — 코드는 제출 순간에만 물어 그 자리에서 쓰고 버린다.
+       한 번이라도 여기 들어가면 공용 기기(매장 태블릿·시연용 폰)의 localStorage에 남아,
+       다음에 설문지를 연 사람이 그 코드로 아무 매장에나 제출할 수 있게 된다. 칸을 늘릴 때 주의. */
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
       store: $('#store').value, date: $('#date').value, time: TimePick.get('time'),
       staff: $('#staff').value, order: $('#order').value, demo: $('#demo').value,

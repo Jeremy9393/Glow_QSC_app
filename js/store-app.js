@@ -51,7 +51,12 @@
   let curStore = '';
   let curYm = '';
   let data = null;                        // 마지막 store.get 응답
-  let fromSnap = false;                   // 지금 화면이 오프라인 스냅샷인가
+  let fromSnap = false;                   // 지금 화면이 스냅샷(지난번 받아 둔 사본)인가
+  /* 그 스냅샷을 ★전파가 되는 곳에서★ 띄워 둔 채 서버 응답을 기다리는 중인가.
+     fromSnap 하나로는 '지금 오프라인이다'와 '지금 받아오는 중이다'가 구별되지 않는데,
+     둘에 같은 문구를 쓰면 멀쩡히 연결된 매장이 '오프라인'이라는 글자를 보고 본사에 전화한다.
+     저장을 잠그는 판정(writable)은 둘 다 같으므로 이 변수는 ★문구를 가르는 데만★ 쓴다. */
+  let revalidating = false;
   let loading = false;
   let maint = '';                         // 점검 모드 문구 (''이면 점검 아님)
   let modes = [];                         // 그려져 있는 항목 카드들의 applyMode 목록
@@ -312,11 +317,38 @@
     // 담당 매장이 1곳이면 서버가 payload.store를 아예 읽지 않는다(§8-3). 보낼 이유가 없다.
     if (scope.list.length > 1 && curStore) payload.store = curStore;
 
+    /* ★지난번 받아 둔 사본을 먼저 그려 둔다 (2026-08-26)★
+       store.get 왕복이 2초, 잠들어 있던 서버면 11초다. 그동안 '불러오는 중…' 한 줄뿐이면
+       매장은 멈춘 줄 알고 다시 누르거나 앱을 닫는다 — 손에 목록을 들고 있으면서
+       빈 화면을 보여 줄 이유가 없다. 응답이 오면 아래에서 실데이터로 다시 그린다.
+       ★오프라인이면 하지 않는다★ — 그때는 아래 스냅샷 분기가 '오프라인' 문구까지 붙여
+         그리므로, 여기서 미리 그리면 같은 화면을 두 번 그리고 문구만 엇갈린다.
+       ★paintClose()는 부르지 않는다★ — [월 채점 확정]은 되돌릴 수 없는 버튼이라
+         옛 사본의 확정 여부로 켜 두면 안 된다. 실데이터가 온 뒤에만 판단한다. */
+    if (online()) {
+      const pre = snapGet();
+      /* ★'탭이 아직 없다'는 사본은 미리 그리지 않는다★ — 그 응답도 ok라서 사본으로 남는데
+         (서버 store.get: exists:false + items:[]), 그리면 renderAll()이 화면을 비운 자리에
+         '아래는 지난번에 받아 둔 내용입니다'만 남아 없는 것을 가리키는 문장이 된다.
+         보여 줄 것이 없으면 종전대로 '불러오는 중…' 한 줄로 기다리는 편이 맞다. */
+      if (pre && pre.exists !== false) {
+        data = pre; fromSnap = true; revalidating = true;
+        renderAll();                      // 저장·검수는 writable()·canAudit()이 fromSnap을 보고 잠근다
+        // 낡은 사본을 최신인 양 보여주지 않으려면, 지금 무엇을 보고 있는지 글로 말해 줘야 한다
+        showState('최신 내용을 불러오는 중입니다… 아래는 지난번에 받아 둔 내용입니다.');
+        /* 달·매장을 바꿔 다시 부른 경우, 직전 달의 확정 안내가 남아 이번 달 것처럼 읽힌다.
+           paintClose()를 부르는 대신 접어 둔다 — 켜는 판단은 실데이터 몫이다. */
+        const closeBox = $('#closeBox');
+        if (closeBox) closeBox.style.display = 'none';
+      }
+    }
+
     let res = null;
     if (online()) {
       try { res = await Api.call('store.get', payload); } catch (e) { res = null; }
     }
     loading = false;
+    revalidating = false;                 // 응답이 왔든 실패했든 '받아오는 중'은 여기서 끝난다
     $('#listNote').textContent = '';
 
     // api.js는 던지지 않고 code:'NETWORK'로 돌려준다 — 오프라인 판정은 이 코드까지 봐야 한다
@@ -360,8 +392,12 @@
   /* ★검수는 본사만 한다★ — improve.audit의 서버 권한(menu:'accounts')과 ★같은 어휘★를 쓴다.
      여기서 역할 이름('관리자')을 비교하지 않는다. 두 곳이 다른 근거로 판정하면, 시트에서
      권한을 거둔 뒤에도 버튼은 남아 눌리고 서버에서만 막히는 상태가 된다. */
+  /* ★스냅샷 화면에서는 검수 칸을 만들지 않는다(!fromSnap)★ — 서버(fnImproveAudit)에 확정월
+     가드가 없어서, '이 달은 이미 확정됐다'를 막는 것은 이 화면의 closedAt() 하나뿐이다.
+     옛 사본의 closedAt으로 판정하면 확정된 달을 다시 검수해 굳은 점수와 화면이 갈라진다.
+     실데이터가 온 뒤 paintAudit()이 다시 불리므로, 늦게 켜질 뿐 사라지지 않는다. */
   function canAudit() {
-    try { return !!(Auth.can('accounts', '쓰기') && !maint && online()); } catch (e) { return false; }
+    try { return !!(Auth.can('accounts', '쓰기') && !maint && online() && !fromSnap); } catch (e) { return false; }
   }
 
   /* 이 달이 확정되었나 — 서버(store.get)가 준 값만 본다. 화면이 날짜로 추측하지 않는다. */
@@ -831,9 +867,13 @@
       if (btn) btn.disabled = !w;
       /* 왜 저장이 안 되는지 카드마다 알려준다 — 버튼만 회색이면 고장으로 오해한다.
          점검 문구 본문은 상단 maintNote에 한 번만 두고, 여기서는 '지금 저장이 안 된다'만 짧게 알린다. */
+      /* ★'받아오는 중'과 '오프라인'을 갈라 적는다★ — 잠기는 이유는 같아도 매장이 할 일이 다르다.
+         앞은 몇 초 기다리면 되는 일이고, 뒤는 자리를 옮겨야 하는 일이다. 연결된 매장에
+         '오프라인'이라고 적으면 기다리면 될 것을 본사에 전화한다. */
       if (!w) {
         noteEl.className = 'itemNote';
         noteEl.textContent = maint ? '점검 중에는 저장할 수 없습니다.'
+          : revalidating ? '최신 내용을 불러오는 중입니다. 잠시만 기다려 주세요.'
           : (fromSnap ? '오프라인에서는 저장할 수 없습니다.' : '');
       }
     }

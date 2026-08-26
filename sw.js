@@ -1,10 +1,14 @@
 ﻿/* 오프라인 대응 서비스 워커.
-   전략: 네트워크 우선(항상 최신) → 실패 시 캐시(오프라인에서도 앱 실행).
+   전략은 두 갈래다.
+   ① 화면(html)·데이터(json) = 네트워크 우선(항상 최신) → 실패 시 캐시(오프라인에서도 앱 실행).
+   ② 주소에 버전이 박힌 js/css(?v=N)와 폰트·아이콘 = 캐시 우선 → 없을 때만 네트워크.
+   ②를 따로 뗀 이유: 전파가 나쁜 매장에서 fetch는 '실패'로 끝나지 않고 한참 매달린다.
+   그러면 catch 폴백이 제때 안 터져 첫 화면이 통째로 멈춰 있었다(페이지당 왕복 ~11회).
    제출(POST)과 외부 주소(앱스 스크립트)는 건드리지 않는다 — 오프라인 제출 큐는 추후. */
 /* ⚠버전은 여기 한 곳만 고친다. html 쪽 ?v=N 과 숫자를 맞출 것.
    예전엔 아래 목록에도 ?v=30 을 일일이 적어서, VER만 올리고 목록을 안 고쳐
    새 파일이 캐시에 안 담기는 사고가 반복됐다. 이제 v()가 붙여주므로 어긋날 수 없다. */
-const VER = 'v61';
+const VER = 'v62';
 const CACHE = 'qsc-app-' + VER;
 const QS = '?v=' + VER.slice(1); // 'v36' → '?v=45'
 function v(path) { return path + QS; }
@@ -53,10 +57,25 @@ self.addEventListener('fetch', function (e) {
   const fresh = e.request.mode === 'navigate' ||
     url.pathname.endsWith('.html') || url.pathname.endsWith('.json');
 
-  e.respondWith(
-    (fresh ? fetch(url.href, { cache: 'reload' }) : fetch(e.request)).then(function (res) {
-      const copy = res.clone();
-      caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
+  /* ★캐시를 먼저 보는 것은 딱 이 두 부류★ — 주소에 버전이 박힌 js/css(?v=N)와,
+     내용이 바뀌지 않는 폰트·아이콘. 버전이 주소에 들어 있으니 캐시에 있는 사본은 곧
+     '그 버전의 사본'이고, 새로 배포하면 VER이 올라 주소 자체가 달라진다 — 낡은 것을
+     최신인 양 내줄 여지가 없다.
+     ★fresh(화면·데이터)는 절대 넣지 않는다★. !fresh를 앞에 둔 것은 나중에 누가 json에
+     ?v=N을 붙이더라도 화면·데이터가 이쪽으로 새지 않게 못을 박아두려는 것이다.
+     data/master.json도 .json이라 fresh 쪽에 그대로 남는다(2026-08-13 '옛 화면이 굳는' 사고). */
+  const cacheFirst = !fresh && (url.search.indexOf('v=') !== -1 ||
+    url.pathname.indexOf('fonts/') !== -1 || url.pathname.indexOf('icons/') !== -1);
+
+  function fromNetwork() {
+    return (fresh ? fetch(url.href, { cache: 'reload' }) : fetch(e.request)).then(function (res) {
+      /* ★성공한 응답만 담는다★ — 캐시 우선으로 바꾼 뒤로는, 배포가 퍼지는 틈에 한 번 받은
+         404가 캐시에 눌러앉아 다음 VER 올림까지 계속 그대로 나간다. 안 담아두면
+         다음 요청이 다시 네트워크로 가므로 전파가 끝나는 대로 저절로 복구된다. */
+      if (res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
+      }
       return res;
     }).catch(function () {
       // 오프라인 — 마지막으로 받아둔 사본으로 실행
@@ -72,6 +91,15 @@ self.addEventListener('fetch', function (e) {
         if (e.request.mode === 'navigate') return caches.match('index.html');
         return Response.error();
       });
-    })
+    });
+  }
+
+  e.respondWith(
+    /* 캐시 조회 자체가 튕기는 기기(저장소 잠김·시크릿 창 등)에서 화면이 통째로 죽으면 안 되니
+       조회 실패는 '사본 없음'으로 보고 네트워크로 넘긴다 — 그 경우 종전 동작 그대로가 된다. */
+    cacheFirst
+      ? caches.match(e.request).catch(function () { return null; })
+        .then(function (m) { return m || fromNetwork(); })
+      : fromNetwork()
   );
 });

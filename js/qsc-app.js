@@ -37,13 +37,56 @@
   // 방문 시간(시·분) 드롭다운 — 쇼퍼 화면과 같은 부품(js/ui-time.js)
   $('#timeBox').innerHTML = TimePick.html('time');
 
-  // 매장 목록: 연동 후엔 통합시트 실시간(숨김 제외) > 오프라인 캐시 > master.json 저장본 순
-  const live = await Api.getConfig();
-  const stores = (live && live.stores && live.stores.length) ? live.stores : (master.stores || []);
-  stores.forEach(function (s) {
-    const o = document.createElement('option');
-    o.value = s; o.textContent = s;
-    $('#store').appendChild(o);
+  /* 매장 목록: 연동 후엔 통합시트 실시간(숨김 제외) > 오프라인 캐시 > master.json 저장본 순.
+     ★서버를 기다리지 않는다★ (2026-08-26) — 종전에는 여기서 await 하는 바람에 74문항 렌더도
+     임시저장 복원도 전부 그 뒤로 밀렸다. 앱스 스크립트 왕복이 2초, 콜드 스타트면 11초라
+     화면을 열 때마다 그만큼 빈 화면을 보고 있어야 했다.
+     api.js가 마지막 성공본을 'qsc-live-config'에 넣어 두므로 그걸로 즉시 다 그려 놓고,
+     서버 응답은 배경에서 받아 목록만 갈아 끼운다(같은 키를 읽는다 — api.js와 짝). */
+  let live = null;
+  try { live = JSON.parse(localStorage.getItem('qsc-live-config') || 'null'); } catch (e) { live = null; }
+  // 임시저장에서 되살린 매장이 캐시 목록엔 없고 서버 목록에만 있을 때(신규 매장 + 낡은 캐시)를 위한 자리
+  let pendingStore = '';
+  const storeSel = $('#store');
+  const storeHead = storeSel.firstElementChild; // '매장 선택' 안내 옵션 — 재구성해도 이 줄은 살려 둔다
+  function storeList(cfg) {
+    return (cfg && cfg.stores && cfg.stores.length) ? cfg.stores : (master.stores || []);
+  }
+  /* 갱신은 ★전면 재구성 + 선택값 재적용★ 으로만 한다.
+     append로 덧붙이면 캐시본과 서버본이 겹쳐 같은 매장이 두 번 보이고,
+     선택값을 되돌려 놓지 않으면 select가 ''로 리셋된 채 아무 입력이나 일어나는 순간
+     saveDraft가 draft.store를 빈 값으로 덮어쓴다 — 작성 중인 점검이 매장 없이 남는 사고다. */
+  function renderStores() {
+    const keep = storeSel.value || pendingStore;
+    storeSel.innerHTML = '';
+    if (storeHead) storeSel.appendChild(storeHead);
+    storeList(live).forEach(function (s) {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s;
+      storeSel.appendChild(o);
+    });
+    if (keep) storeSel.value = keep; // 목록에 없으면 ''이 된다(= 아직 못 찾음)
+    /* 제자리를 찾았으면 구조용 값은 버리고, ★못 찾았으면 계속 들고 간다★.
+       되살린 매장뿐 아니라 '이미 골라 둔 매장이 서버 목록에서 빠진' 경우(통합시트에서 숨김
+       처리된 매장)에도 select가 ''로 비는데, 그때 이름을 놓아 버리면 바로 다음 saveDraft가
+       draft.store를 빈 값으로 덮어쓴다 — 작성 중이던 점검이 매장 없이 남는 그 사고다. */
+    pendingStore = storeSel.value ? '' : keep;
+  }
+  renderStores();
+  // 배경 갱신 — 이 응답이 도착할 때는 문항 렌더도 임시저장 복원도 이미 끝나 있다
+  Api.getConfig().then(function (cfg) {
+    // 서버 주소가 없거나(연동 전) 서버·캐시 어느 쪽도 못 읽은 경우 — 지금 그려 둔 목록을 그대로 둔다
+    if (!cfg) return;
+    const before = JSON.stringify(storeList(live));
+    live = cfg; // naPresetFor는 부를 때마다 live를 보므로 NA 프리셋도 이걸로 최신이 된다
+    // 목록이 그대로면 손대지 않는다 — 마침 드롭다운을 열어 놓고 고르는 중일 수 있다
+    if (JSON.stringify(storeList(live)) !== before) renderStores();
+  }).catch(function (e) {
+    /* getConfig는 실패해도 캐시본을 돌려주게 돼 있어 여기까지 오는 것은 예외적이다.
+       그래도 경고창은 띄우지 않는다 — 매장 목록은 캐시본이 살아 있어 점검 작성에 지장이 없고,
+       작성 중에 뜨는 팝업은 점장이 할 수 있는 조치가 없으면서 입력만 끊는다.
+       (진짜 못 쓰는 상황이면 제출 단계에서 서버 문구로 드러난다) */
+    console.warn('[qsc] 매장 목록 갱신 실패 — 캐시 목록으로 계속합니다', e);
   });
 
   // 매장별 NA 자동 기억: 서버(지난 회차, 연동 후) > 이 기기 기억 순으로 제안
@@ -82,7 +125,11 @@
   // ---------- 임시저장 ----------
   function saveDraft() {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
-      store: $('#store').value, date: $('#date').value, time: TimePick.get('time'),
+      /* store에 pendingStore를 겹쳐 두는 이유 (2026-08-26): 서버 목록이 도착하기 전에는
+         되살린 매장이 드롭다운에 없어 select가 ''일 수 있다. 그 몇 초 사이에 비고 한 글자만
+         쳐도 이 함수가 돌면서 저장해 둔 매장명을 빈 값으로 지워 버린다 — 되살릴 값을 잃는 것이
+         가장 비싼 사고이므로, 아직 못 찾은 매장명은 그대로 들고 간다. */
+      store: $('#store').value || pendingStore, date: $('#date').value, time: TimePick.get('time'),
       inspector: $('#inspector').value,
       values: state.values, memos: state.memos, t: Date.now(),
     }));
@@ -466,6 +513,9 @@
   const draft = loadDraft();
   if (draft) {
     $('#store').value = draft.store || '';
+    /* 캐시 목록에 없는 매장이면 위 한 줄로는 안 들어가고 select가 ''로 남는다(신규 매장 + 낡은 캐시).
+       배경 갱신이 서버 목록을 가져오면 그때 다시 넣도록 이름을 들고 있는다. */
+    if (draft.store && !$('#store').value) pendingStore = draft.store;
     $('#date').value = draft.date || todayStr();
     // 점검은 현장에서 바로 쓰므로 시간은 '지금'을 기본값으로 (임시저장이 있으면 그 값 유지)
     TimePick.set('time', draft.time || TimePick.now());
