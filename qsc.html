@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=62">
+<link rel="stylesheet" href="css/app.css?v=63">
 </head>
 <body>
 <header class="topbar">
@@ -65,12 +65,12 @@
      ★이 화면에서는 auth.js의 guard()를 절대 부르지 않는다 — 리다이렉트는 금지다.
        앱 주소가 공개라 언젠가 AUTH_ENFORCE를 켜야 하는데, 이때 이 화면이 토큰을 못 붙이면
        관리자 본인의 제출까지 막힌다. 그래서 '싣되 튕기지는 않는' 절충이 이 구조다. -->
-<script src="js/auth.js?v=62"></script>
-<script src="js/scoring.js?v=62"></script>
-<script src="js/api.js?v=62"></script>
-<script src="js/ui-time.js?v=62"></script>
-<script src="js/ui-photo.js?v=62"></script>
-<script src="js/qsc-app.js?v=62"></script>
+<script src="js/auth.js?v=63"></script>
+<script src="js/scoring.js?v=63"></script>
+<script src="js/api.js?v=63"></script>
+<script src="js/ui-time.js?v=63"></script>
+<script src="js/ui-photo.js?v=63"></script>
+<script src="js/qsc-app.js?v=63"></script>
 <script>
 /* 부드러운 가드 — 제출 버튼만 잠그고, 작성은 그대로 둔다.
    ★js/qsc-app.js는 한 줄도 고치지 않는다. 그 파일은 제출을 시도한 뒤에만 disabled를 되돌리므로,
@@ -147,8 +147,11 @@
 })();
 
 /* 뒤로가기를 눌렀을 때 한 번 되묻는다.
-   ★사진은 임시저장에 들어가지 않는다★ (js/qsc-app.js의 saveDraft는 values·memos만 담고,
-     화면에도 '사진 제외'라고 적혀 있다.) 즉 이 화면을 떠나는 순간이 곧 사진 유실이다.
+   사진도 2026-08-26부터 이 기기에 남는다(js/qsc-app.js의 PhotoDraft — IndexedDB).
+   ★다만 그것이 안 되는 기기가 있다★ — 사생활 보호 모드·용량 초과 등. 되는지 여부를
+     qsc-app.js가 window.QscPhotoDraft.on 에 적어 두므로 문구는 그 값을 보고 고른다.
+     값이 없으면(스크립트가 아직 안 돌았거나 못 실렸으면) '안 남는다' 쪽으로 읽는다 —
+     안 되는 기기에서 "사진도 남습니다"라고 말하는 것이 이 화면 최악의 거짓말이다.
    본문 맨 아래 전폭 '← 뒤로'(auth.js의 mountBack이 붙인다)는 74문항 스크롤의 종점이라
    오조작이 잦은 자리인데, 지금까지 확인 한 번 없이 화면을 떠났다.
    ★beforeunload를 쓰지 않는 이유★ — qsc-app.js는 제출 성공 뒤 초기화 동의를 받아
@@ -172,7 +175,10 @@
       if (el.id === 'backBottom' || (el.className && String(el.className).indexOf('back') === 0)) break;
     }
     if (!el || el === document) return;
-    if (confirm('작성 중인 내용이 있습니다. 사진은 임시저장에 남지 않습니다.\n이 화면을 나가시겠습니까?')) return;
+    var keeps = !!(window.QscPhotoDraft && window.QscPhotoDraft.on);
+    if (confirm(keeps
+      ? '작성 중인 내용이 있습니다.\n입력과 사진은 이 기기에 임시저장되어, 다시 들어오면 그대로 있습니다.\n이 화면을 나가시겠습니까?'
+      : '작성 중인 내용이 있습니다. 사진은 임시저장에 남지 않습니다.\n이 화면을 나가시겠습니까?')) return;
     e.preventDefault();
     e.stopPropagation();   // capture 단계라 버튼의 onclick까지 막힌다
   }, true);

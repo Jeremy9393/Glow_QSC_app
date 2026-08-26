@@ -23,6 +23,9 @@
      오프라인이 되는 순간 ★A의 매장★에 '▶ 우리 매장' 표시와 강조가 붙고 store.html 링크까지
      걸린 채 그 행으로 자동 스크롤된다. 서버는 멀쩡한데 화면이 남의 담당을 알려주는 셈이다. */
   const SNAP_BASE = 'qsc-dash-snap-v1';
+  /* 기간을 여러 개 오가도 저장소가 무한히 늘지 않게 (매장 화면 store-app.js와 같은 방식·같은 이름).
+     응답 하나가 수 KB라 용량이 문제는 아니고, 남겨 두는 키가 끝없이 쌓이지 않게 하려는 것이다. */
+  const SNAP_MAX = 8;
   function snapWho() {
     try {
       const u = (Auth.user && Auth.user()) || null;
@@ -33,20 +36,29 @@
   function snapName() { return SNAP_BASE + '|' + snapWho(); }
 
   let loading = false;
+  let inflightKey = '';   // 지금 달리고 있는 요청의 기간
   let scrolled = false;   // 자기 매장 자동 스크롤은 진입 시 1회만 (기간을 바꿀 때마다 튀면 거슬린다)
 
-  /* 진입 직후 '불러오는 중입니다…'와 빈 표를 왕복이 끝날 때까지(2초, 콜드 스타트면 11초) 보여주던
-     자리에 지난번 받아 둔 표를 먼저 그려 둔다(2026-08-26).
-     ★진입 1회뿐이다★ — 새로고침·기간 변경 때는 쓰지 않는다:
-       ㆍ기간을 바꾸는 순간 다른 달 표를 그리면 renderPeriods가 select 값까지 그 달로 되돌려
-         방금 고른 기간과 싸운다(사용자가 고른 것이 취소된 것처럼 보인다).
-       ㆍ점검·오류로 표를 지운 뒤 새로고침을 누를 때마다 옛 숫자가 다시 깜빡이면,
-         지우는 이유였던 '오래된 숫자를 최신인 양 보여주지 않는다'가 무의미해진다. */
-  let firstPaint = true;
+  /* 왕복이 끝날 때까지(2초, 콜드 스타트면 11초) '불러오는 중입니다…'와 빈 표를 보여주던 자리에
+     지난번 받아 둔 표를 먼저 그린다(2026-08-26).
+     ★기간별로 따로 담아 둔다★ (2026-08-26 확장) — 예전에는 계정당 한 칸이라 마지막 응답만
+       남았고, 그래서 '진입 1회'로 제한할 수밖에 없었다(다른 달 표를 그리면 renderPeriods가
+       select까지 그 달로 되돌려, 점장이 고른 달의 숫자라고 믿고 다른 달 숫자를 읽게 된다).
+       이제 고른 그 달의 표만 그리므로 select와 숫자가 어긋날 수 없고, 10월→9월→10월처럼
+       오갈 때마다 기다리지 않아도 된다. 그려 둔 뒤에는 언제나 배경에서 다시 받아 온다
+       (서버가 이미 300초 캐시를 물고 있으므로 왕복을 '아낀다'고 건너뛰지는 않는다 —
+        제출이 있으면 서버가 그 캐시를 바로 버리는데, 화면이 자기 캐시를 믿으면 그게 안 보인다). */
 
-  /* 진입 직후 그린 캐시 표가 아직 화면에 떠 있는가.
-     아래 loading 게이트가 기간 선택을 버릴 때, 버려도 되는 화면인지(캐시본)
-     건드리면 안 되는 화면인지(서버에서 받아 그린 표)를 가르는 데만 쓴다. */
+  /* 지금 화면에 그려져 있는 ★서버 응답★의 기간. 캐시본·오류·점검 화면이면 ''.
+     같은 기간을 새로고침할 때 옛 숫자가 잠깐 깜빡였다가 돌아오는 일을 막는 데 쓴다. */
+  let shownKey = '';
+
+  /* 지금 화면 위에는 캐시본을 그리면 안 된다(오류·점검·오프라인 안내를 띄워 둔 상태).
+     표를 비운 이유가 '오래된 숫자를 최신인 양 보여주지 않는다'인데, 다음 조작에서 옛 숫자를
+     되살리면 그 비움이 통째로 무의미해진다. 정상 응답이 한 번 오면 풀린다. */
+  let noStale = false;
+
+  // 지금 화면에 떠 있는 표가 캐시본인가 (non-ok 응답이 오면 지워야 할 표식)
   let staleShown = false;
 
   /* ★마지막 요청만 화면에 반영한다★ — 지금은 아래 loading 게이트가 겹침을 막지만, 그 게이트는
@@ -92,6 +104,7 @@
   function showMaint(msg) {
     setNote($('#maintNote'), msg || '');
     if (!msg) return;
+    shownKey = '';   // 표를 비웠다 = 화면에 서버 숫자가 남아 있지 않다
     $('#rankBody').innerHTML = '';
     $('#rankHead').innerHTML = '';
     $('#stats').innerHTML = '';
@@ -351,34 +364,77 @@
 
   // ---------- 불러오기 ----------
 
-  function snapRead() {
-    try { return JSON.parse(localStorage.getItem(snapName()) || 'null'); } catch (e) { return null; }
+  /* 저장 형태: { '2026-10': {응답…, _at: 저장시각}, '2026-09': {…} } — 계정당 한 칸 안에 기간별로.
+     ★옛 형태도 읽을 수 있어야 한다★ — 앱 v62까지 이 칸에는 마지막 응답 하나가 통째로 들어 있었다.
+       그걸 기간별 지도로 잘못 읽으면 rows·cols·stats를 기간 키인 줄 알고 화면이 깨진다. */
+  function snapAll() {
+    let o = null;
+    try { o = JSON.parse(localStorage.getItem(snapName()) || 'null'); } catch (e) { o = null; }
+    if (!o || typeof o !== 'object') return {};
+    if (o.rows || o.cols || o.ok) {                 // 옛 형태 — 그 기간 한 칸짜리 지도로 바꿔서 쓴다
+      const k = o.period && o.period.key;
+      if (!k) return {};
+      const m = {};
+      m[k] = o;
+      return m;
+    }
+    return o;
   }
-  function snapWrite(data) {
+
+  function snapPut(key, data) {
     try {
-      localStorage.setItem(snapName(), JSON.stringify(data));
+      const a = snapAll();
+      const copy = JSON.parse(JSON.stringify(data));   // _at을 살아 있는 응답 객체에 묻히지 않게
+      copy._at = Date.now();
+      a[key] = copy;
+      const keys = Object.keys(a).sort(function (x, y) { return (a[x]._at || 0) - (a[y]._at || 0); });
+      while (keys.length > SNAP_MAX) delete a[keys.shift()];   // 오래 안 본 기간부터 버린다
+      localStorage.setItem(snapName(), JSON.stringify(a));
       /* 계정 없이 저장하던 시절의 한 칸을 치운다 — 남겨 두면 그 안의 mine 표식이
          계속 기기에 남는다(읽지는 않지만 지울 이유가 있는 값이다). */
       localStorage.removeItem(SNAP_BASE);
     } catch (e) { /* 용량 초과 등 — 스냅샷은 편의 기능이라 실패해도 화면은 정상 */ }
   }
 
-  function showSnapshot(reason) {
-    const snap = snapRead();
+  /* 한 기간의 저장본. 없으면 null.
+     ★'몇 분 전'이 정직하게 늙게 만든다★ — updatedAt(서버가 찍은 시각)이 있으면 그대로 두면 되지만,
+       그것이 없을 때 쓰는 cacheAge는 '받아 온 그 순간의 나이'라, 손대지 않으면 사흘 묵은 저장본이
+       '3분 전'이라고 말한다. 이 화면에서 꼬리표 없는 옛 숫자가 가장 나쁜 사고다. */
+  function snapGet(key) {
+    const e = snapAll()[key];
+    if (!e || !e.period || e.period.key !== key) return null;
+    if (!e.updatedAt && typeof e.cacheAge === 'number' && e._at) {
+      e.cacheAge = e.cacheAge + Math.max(0, Math.round((Date.now() - e._at) / 1000));
+    }
+    return e;
+  }
+
+  // 오프라인에 그려 줄 것 — 그 기간이 있으면 그것, 없으면 가장 최근에 받아 둔 기간
+  function snapAny(key) {
+    const a = snapAll();
+    if (key && a[key]) return snapGet(key);
+    const keys = Object.keys(a).sort(function (x, y) { return (a[y]._at || 0) - (a[x]._at || 0); });
+    return keys.length ? snapGet(keys[0]) : null;
+  }
+
+  function showSnapshot(reason, key) {
+    const snap = snapAny(key);
     if (!snap) { setNote($('#stateNote'), reason); return; }
     render(snap, true);
+    shownKey = '';   // 저장본이지 서버 숫자가 아니다
     setNote($('#stateNote'), '');
   }
 
-  /* 서버를 기다리는 동안 지난번 표를 먼저 그린다. 그렸으면 true.
-     ★같은 기간의 스냅샷일 때만 그린다★ — 지난달에 보고 이번 달에 들어오면 스냅샷은 지난달 것이라,
-       그리는 순간 select가 지난달로 되돌아가고 점장은 이번 달 표를 보고 있다고 착각한 채
-       지난달 숫자를 읽는다. 기간이 다르면 그냥 예전처럼 '불러오는 중'만 보여주는 편이 안전하다.
+  /* 서버를 기다리는 동안 ★그 기간의★ 지난번 표를 먼저 그린다. 그렸으면 true.
+     ★기간이 다른 표는 절대 그리지 않는다★ — 그리는 순간 renderPeriods가 select까지 그 달로
+       되돌려, 점장은 자기가 고른 달의 숫자라고 믿고 다른 달 숫자를 읽는다.
+       기간별로 담아 두므로(snapGet이 기간까지 대조한다) 없으면 예전처럼 '불러오는 중'만 보여준다.
      문구는 render() 뒤에 적는다 — renderRows가 '표시할 매장이 없습니다'로 stateNote를 덮을 수 있다. */
   function showStale(key) {
-    const snap = snapRead();
-    if (!snap || !snap.period || snap.period.key !== key) return false;
+    const snap = snapGet(key);
+    if (!snap) return false;
     render(snap, false, true);
+    shownKey = '';   // 캐시본이지 서버 숫자가 아니다
     setNote($('#stateNote'), '지난번 받아둔 화면입니다. 최신 자료를 불러오는 중입니다…');
     return true;
   }
@@ -389,6 +445,7 @@
        이유(load 끝 주석)와 같은 원칙이다. 캐시를 먼저 그리기로 한 이상 되돌리는 쪽도 있어야 한다. */
   function clearStale() {
     staleShown = false;
+    shownKey = '';
     $('#rankBody').innerHTML = '';
     $('#rankHead').innerHTML = '';
     $('#stats').innerHTML = '';
@@ -399,29 +456,34 @@
   }
 
   async function load(key) {
-    /* 이미 요청이 달리는 중이면 이번 선택은 버린다(시트 읽기를 겹쳐 쓰지 않는다).
-       ★버릴 때 캐시 표를 남겨 두면 안 된다★ — 진입 직후 캐시 표가 떠 있는 동안 기간을 바꾸면
-         숫자는 지난 기간 그대로인데 select만 새 기간을 가리켜, 점장은 자기가 고른 달의 숫자라고
-         믿고 다른 달 숫자를 읽는다. 곧 도착할 응답이 select를 원래 기간으로 되돌리기 전까지
-         화면 전체가 거짓말을 하는 셈이라, 표를 지우고 기다리게 하는 편이 낫다.
-       ★버렸다는 사실도 알린다★ — 눌렀는데 아무 반응이 없으면 앱이 멈춘 것으로 읽힌다. */
-    if (loading) {
-      if (staleShown) clearStale();
-      setNote($('#stateNote'), '아직 불러오는 중입니다. 잠시 후 기간을 다시 선택해 주세요.');
+    /* ★같은 기간을 겹쳐 부르지만 않는다★ — 시트 읽기를 두 번 하지 않으려는 장치다.
+       (새로고침 버튼은 도는 동안 비활성이라 여기 걸릴 일이 드물지만 남겨 둔다.)
+       ★다른 기간이면 버리지 않는다★ (2026-08-26) — 예전에는 이것도 버리고 '아직 불러오는 중'만
+         남겼다. 기간별 캐시가 생긴 뒤로는 고른 달의 표가 곧바로 떠 있는데 그 선택을 버리면,
+         잠시 뒤 도착한 옛 응답이 select를 원래 기간으로 되돌려 사용자가 고른 것이 취소된 것처럼
+         보인다. 늦게 온 옛 응답은 아래 reqSeq 가드가 화면에 못 닿게 버린다. */
+    if (loading && key === inflightKey) {
+      setNote($('#stateNote'), '이미 불러오는 중입니다. 잠시만 기다려 주세요.');
       return;
     }
     loading = true;
+    inflightKey = key;
     const seq = ++reqSeq;
     $('#reloadBtn').disabled = true;
 
-    /* 진입 1회에 한해 캐시본을 먼저 그린다. 못 그리면(캐시 없음·다른 기간) 예전 그대로 빈 표 + 안내.
-       staleShown은 '이 화면의 숫자가 캐시본이다'라는 표식이라, 아래 non-ok 분기와 위 loading
-       게이트에서 지울 근거가 된다.
-       ★이미 서버에서 받아 그려 둔 표는 여기에 걸리지 않는다★ — 새로고침이 실패했을 때
-         멀쩡히 받아 둔 표까지 지우는 것은 기존 동작이 아니다. */
-    staleShown = firstPaint ? showStale(key) : false;
-    firstPaint = false;
-    if (!staleShown) setNote($('#stateNote'), '불러오는 중입니다…');
+    /* 그 기간의 캐시본을 먼저 그린다. 못 그리면(캐시 없음) 예전 그대로 빈 표 + 안내.
+       ★같은 기간을 새로고침할 때는 그리지 않는다★(key === shownKey) — 화면에 이미 서버가 준
+         숫자가 떠 있는데 옛 숫자로 한 번 깜빡였다 돌아오는 것은 개선이 아니라 불안이다.
+       ★오류·점검 화면 위에도 그리지 않는다★(noStale) — 표를 비운 이유가 그것이었다.
+       staleShown은 '이 화면의 숫자가 캐시본이다'라는 표식이라, 아래 non-ok 분기에서 지울 근거가 된다. */
+    staleShown = (!noStale && key !== shownKey) ? showStale(key) : false;
+    if (!staleShown) {
+      /* ★다른 달을 기다리는 동안 지난 달 표를 남겨 두지 않는다★ — select는 새 달을 가리키는데
+         숫자는 지난 달 그대로면, 점장은 자기가 고른 달의 숫자라고 믿고 다른 달 숫자를 읽는다.
+         (shownKey가 있을 때만 지운다 — 오프라인·오류 안내 화면은 자기 문구를 지키게 둔다) */
+      if (shownKey && key !== shownKey) clearStale();
+      setNote($('#stateNote'), '불러오는 중입니다…');
+    }
 
     const OFFMSG = '연결이 되지 않아 불러오지 못했습니다. 잠시 후 새로고침해 주세요.';
     let res = null;
@@ -434,8 +496,9 @@
          그려 주므로 보통은 아무 차이가 없지만, 스냅샷을 못 읽는 순간이면 '갱신 중' 꼬리표가 붙은
          옛 표가 갱신도 없이 눌러앉는다. non-ok 분기와 같은 규칙을 예외 경로에도 똑같이 적용한다. */
       if (seq !== reqSeq) return;
+      noStale = true;
       if (staleShown) clearStale();
-      showSnapshot(OFFMSG);
+      showSnapshot(OFFMSG, key);
       loading = false; $('#reloadBtn').disabled = false;
       return;
     }
@@ -450,9 +513,14 @@
     if (res && res.ok) {
       setNote($('#stateNote'), '');
       showMaint('');           // 정상 응답이 왔다 = 점검이 풀렸다
-      snapWrite(res);
+      /* 저장은 ★서버가 실제로 답한 기간★으로 한다 — 요청한 키와 다를 수 있고(기간 보정),
+         그때 요청 키로 담아 두면 다음에 그 키를 열 때 다른 달 표가 캐시본으로 뜬다. */
+      const got = (res.period && res.period.key) || key;
+      snapPut(got, res);
       render(res, false);
       staleShown = false;   // 이제 화면 숫자는 서버가 준 것이다 — 캐시본 표식을 내린다
+      noStale = false;      // 오류·점검이 풀렸다 — 캐시본을 다시 그려도 된다
+      shownKey = got;
       return;
     }
 
@@ -461,6 +529,7 @@
        두면, 그 순간 화면은 '오류 문구 + 지난달 숫자'가 된다. 지우는 쪽을 위에 두면 나중에 분기가
        하나 늘어도 캐시본이 남는 경로가 생기지 않는다.
        NETWORK·MAINT는 곧바로 자기 화면을 다시 그리므로 같은 틱 안에서 덮여 깜빡이지 않는다. */
+    noStale = true;
     if (staleShown) clearStale();
 
     /* 오류 분기는 code 상수로만 한다. 한국어 문구로 분기하면 서버가 문구를 다듬는 날 조용히 깨진다.
@@ -470,7 +539,7 @@
 
     /* NETWORK는 서버 코드가 아니라 api.js가 붙이는 클라이언트 전용 코드다(오프라인·DNS 실패).
        ★이것을 서버 오류와 같이 취급하면 지하 매장에서 스냅샷이 뜨지 않고 오류 문구만 남는다. */
-    if (code === 'NETWORK') { showSnapshot(OFFMSG); return; }
+    if (code === 'NETWORK') { showSnapshot(OFFMSG, key); return; }
 
     // 점검 중. 오류가 아니므로 스냅샷도 오류 문구도 아닌, 담당자가 적어 둔 안내를 그대로 보여 준다.
     if (code === 'MAINT') {
@@ -500,10 +569,10 @@
 
   // 오프라인 진입이면 네트워크를 기다리지 않고 저장해 둔 화면을 먼저 그린다.
   if (navigator.onLine === false) {
-    showSnapshot('오프라인입니다. 저장된 화면이 없어 표시할 내용이 없습니다.');
+    showSnapshot('오프라인입니다. 저장된 화면이 없어 표시할 내용이 없습니다.', curPeriod());
     /* 이미 '오프라인'으로 그렸다 — 바로 뒤 load가 같은 표를 '갱신 중'으로 덮었다가 NETWORK 응답에
        다시 '오프라인'으로 되돌리면, 잠깐이라도 곧 갱신될 것처럼 보였다가 아니라고 말하는 꼴이다. */
-    firstPaint = false;
+    noStale = true;
   }
   await load(curPeriod());
 })();

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>사진 임시저장(IndexedDB) 자가 점검</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; line-height: 1.6; }
+  h1 { font-size: 18px; }
+  #out { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px; }
+  .ok { color: #147a3d; }
+  .no { color: #c0392b; font-weight: bold; }
+  .hd { color: #333; font-weight: bold; margin-top: 10px; display: block; }
+  #sum { margin-top: 14px; padding: 10px; border-radius: 6px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>사진 임시저장(IndexedDB) 자가 점검</h1>
+<p>
+  <code>js/qsc-app.js</code> 안의 <b>PhotoDraft</b> 부분을 그 자리에서 잘라내 그대로 돌립니다.
+  복사본이 아니라 실제로 쓰는 코드라, 코드를 고치면 이 점검도 따라 바뀝니다.<br>
+  ※ 점검용 저장소(<code>qsc-photo-draft</code>)를 실제로 쓰고 끝나면 비웁니다. 점검 화면의 사진과 같은 곳입니다 —
+  <b>작성 중인 점검이 있을 때는 열지 마세요.</b>
+</p>
+<div id="out">불러오는 중…</div>
+<div id="sum"></div>
+
+<script>
+var out = document.getElementById('out');
+var pass = 0, fail = 0;
+function line(cls, t) {
+  var s = document.createElement('span');
+  s.className = cls; s.textContent = t + '\n';
+  out.appendChild(s);
+}
+function head(t) { line('hd', t); }
+function is(name, got, want) {
+  var g = JSON.stringify(got), w = JSON.stringify(want);
+  if (g === w) { pass++; line('ok', '  ok   ' + name); }
+  else { fail++; line('no', '  실패 ' + name + '\n         나온 값 ' + g + '\n         기대 값 ' + w); }
+}
+
+/* qsc-app.js 원문에서 PhotoDraft 조각만 잘라내 살려 낸다.
+   복사해 두면 본 코드가 바뀐 뒤에도 옛 코드를 통과시키는 시험이 된다 — 그것이 가장 나쁘다. */
+function loadPhotoDraft(src) {
+  var a = src.indexOf('const PhotoDraft = (function () {');
+  var b = src.indexOf('\n  /* 사진이 바뀔 때마다');
+  if (a < 0 || b < 0 || b < a) throw new Error('PhotoDraft 조각을 찾지 못했습니다 (표식이 바뀌었나요?)');
+  return new Function(src.slice(a, b) + '\n return PhotoDraft;')();
+}
+
+function bigPhoto(n) {           // 실제 사진과 비슷한 크기(약 180KB)의 문자열
+  return 'data:image/jpeg;base64,' + new Array(n).join('A');
+}
+
+(async function () {
+  out.textContent = '';
+  var src;
+  try {
+    src = await (await fetch('../js/qsc-app.js?t=' + Date.now())).text();
+  } catch (e) {
+    line('no', 'js/qsc-app.js 를 읽지 못했습니다 — 이 파일은 서버로 열어야 합니다(앱실행.bat).');
+    return;
+  }
+
+  var P = loadPhotoDraft(src);
+
+  head('[1] 이 기기에서 쓸 수 있는가');
+  is('usable()', P.usable(), true);
+
+  head('[2] 비어 있을 때');
+  await P.clear();
+  is('all() 은 빈 것', await P.all(), {});
+
+  head('[3] 넣고 읽기');
+  await P.put(3, ['가', '나']);
+  await P.put('7', ['다']);
+  is('두 문항이 담긴다', await P.all(), { '3': ['가', '나'], '7': ['다'] });
+
+  head('[4] 숫자로 넣고 문자로 꺼내도 같은 자리');
+  await P.put(3, ['가', '나', '라']);
+  is('덮어쓰기가 된다', (await P.all())['3'], ['가', '나', '라']);
+
+  head('[5] 빈 배열은 그 자리를 지운다 (사진을 전부 삭제한 경우)');
+  await P.put(3, []);
+  is('3번 자리가 사라진다', await P.all(), { '7': ['다'] });
+  await P.put(7, undefined);
+  is('undefined 도 지운다', await P.all(), {});
+
+  head('[6] ★순서★ — 들어오자마자 던진 비우기가 그 뒤 사진을 지우면 안 된다');
+  await P.put(1, ['옛것']);
+  var pClear = P.clear();          // 기다리지 않고
+  var pPut = P.put(2, ['새것']);   // 곧바로 새 사진을 넣는다
+  await Promise.all([pClear, pPut]);
+  is('비우기가 먼저, 새 사진은 남는다', await P.all(), { '2': ['새것'] });
+
+  head('[7] 반대 순서 — 넣은 뒤 비우면 아무것도 안 남는다');
+  var pPut2 = P.put(5, ['ㄱ']);
+  var pClear2 = P.clear();
+  await Promise.all([pPut2, pClear2]);
+  is('전부 비었다', await P.all(), {});
+
+  head('[8] 동시에 여러 문항');
+  await Promise.all([P.put(11, ['a']), P.put(12, ['b']), P.put(13, ['c']), P.put(14, ['d'])]);
+  is('네 문항 모두', Object.keys(await P.all()).sort(), ['11', '12', '13', '14']);
+
+  head('[9] ★앱을 껐다 켜도 남는가★ (새 인스턴스 = 새로고침)');
+  var P2 = loadPhotoDraft(src);
+  is('다른 인스턴스에서도 보인다', Object.keys(await P2.all()).sort(), ['11', '12', '13', '14']);
+  await P2.clear();
+  is('한쪽에서 비우면 다른 쪽도 빈다', await P.all(), {});
+
+  head('[10] 진짜 크기 — 사진 30장(약 5.4MB, localStorage로는 불가능한 크기)');
+  var t0 = performance.now();
+  for (var i = 1; i <= 10; i++) await P.put(100 + i, [bigPhoto(180000), bigPhoto(180000), bigPhoto(180000)]);
+  var t1 = performance.now();
+  var got = await P.all();
+  var t2 = performance.now();
+  var n = 0, bytes = 0;
+  Object.keys(got).forEach(function (k) { n += got[k].length; got[k].forEach(function (u) { bytes += u.length; }); });
+  is('30장이 그대로 있다', n, 30);
+  is('내용이 온전하다', got['101'][0] === bigPhoto(180000), true);
+  line('ok', '  ·    쓰기 ' + Math.round(t1 - t0) + 'ms · 읽기 ' + Math.round(t2 - t1) + 'ms · '
+    + (bytes / 1048576).toFixed(1) + 'MB');
+
+  head('[11] 뒷정리');
+  await P.clear();
+  is('점검용 자료를 남기지 않는다', await P.all(), {});
+
+  var sum = document.getElementById('sum');
+  sum.textContent = pass + '개 통과 · ' + fail + '개 실패';
+  sum.style.background = fail ? '#fdecea' : '#e8f6ee';
+  sum.style.color = fail ? '#c0392b' : '#147a3d';
+})().catch(function (e) {
+  line('no', '점검 도중 오류: ' + (e && e.message ? e.message : e));
+  var sum = document.getElementById('sum');
+  sum.textContent = '점검을 끝내지 못했습니다';
+  sum.style.background = '#fdecea'; sum.style.color = '#c0392b';
+});
+</script>
+</body>
+</html>

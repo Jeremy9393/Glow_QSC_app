@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>대시보드 기간별 캐시 자가 점검</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; line-height: 1.6; }
+  h1 { font-size: 18px; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px; }
+  .ok { color: #147a3d; } .no { color: #c0392b; font-weight: bold; }
+  .hd { color: #333; font-weight: bold; margin-top: 10px; display: block; }
+  #sum { margin-top: 14px; padding: 10px; border-radius: 6px; font-weight: bold; }
+  #stage { border: 1px dashed #bbb; padding: 8px; margin-top: 18px; opacity: .55; font-size: 12px; }
+  #stage h2 { font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>대시보드 기간별 캐시 자가 점검</h1>
+<p>
+  진짜 <code>js/dashboard-app.js</code>를 그대로 싣고, 서버(<code>Api</code>)와 로그인(<code>Auth</code>)만 가짜로
+  바꿔서 기간을 오가며 화면을 확인합니다. 아래 흐린 상자가 그 화면입니다.
+</p>
+<div id="log">준비 중…</div>
+<div id="sum"></div>
+
+<!-- ↓ dashboard.html 과 같은 뼈대 (js가 이 id들을 찾는다) -->
+<div id="stage">
+  <span id="whoInfo"></span> <span id="freshInfo"></span>
+  <button id="reloadBtn">새로고침</button>
+  <p id="maintNote" style="display:none"></p>
+  <p id="warnNote" style="display:none"></p>
+  <select id="period"></select>
+  <div id="stats"></div>
+  <h2>전 매장 현황</h2>
+  <p id="stateNote">불러오는 중입니다…</p>
+  <table><thead><tr id="rankHead"></tr></thead><tbody id="rankBody"></tbody></table>
+  <p id="adminNote" style="display:none"></p>
+  <p id="trust"></p>
+</div>
+
+<script>
+/* ---------- 가짜 로그인·서버 ---------- */
+var Auth = {
+  user: function () { return { id: 'moon', name: '문수' }; },
+  ensure: function () { return Promise.resolve(true); },
+  menus: function () { return ['dashboard', 'store', 'qsc']; },
+  hasMenu: function () { return true; },
+  can: function () { return true; },
+  clear: function () {},
+  loginUrl: function () { return 'login.html'; },
+};
+var PENDING = [];                       // 아직 답하지 않은 요청들
+var Api = {
+  call: function (action, payload) {
+    return new Promise(function (resolve) {
+      PENDING.push({ period: payload && payload.period, resolve: resolve });
+    });
+  },
+};
+function answer(period, res) {          // 그 기간의 대기 요청에 답한다
+  for (var i = 0; i < PENDING.length; i++) {
+    if (PENDING[i].period === period) {
+      var p = PENDING.splice(i, 1)[0];
+      p.resolve(res);
+      return true;
+    }
+  }
+  return false;
+}
+function res(key, extra) {
+  return Object.assign({
+    ok: true,
+    period: { key: key, label: key, type: 'month' },
+    periods: [{ key: '2026-08', label: '2026-08' }, { key: '2026-07', label: '2026-07' }, { key: '2026-06', label: '2026-06' }],
+    cols: { improve: '개선요청(건)', hasHygieneCs: true },
+    stats: { n: 26, scored: 26, avgTotal: 90 },
+    rows: [{ store: key + ' 매장', qsc: 90, cs: 95, improve: 1, total: 92.6, grade: 'A', rank: 1 }],
+    updatedAt: new Date().toISOString(), cacheAge: 0,
+  }, extra || {});
+}
+var KEY = 'qsc-dash-snap-v1|moon';
+localStorage.removeItem(KEY);
+</script>
+
+<script src="../js/dashboard-app.js"></script>
+
+<script>
+/* ---------- 점검 ---------- */
+var log = document.getElementById('log');
+var pass = 0, fail = 0;
+function line(cls, t) { var s = document.createElement('span'); s.className = cls; s.textContent = t + '\n'; log.appendChild(s); }
+function head(t) { line('hd', t); }
+function is(name, got, want) {
+  var g = JSON.stringify(got), w = JSON.stringify(want);
+  if (g === w) { pass++; line('ok', '  ok   ' + name); }
+  else { fail++; line('no', '  실패 ' + name + '\n         나온 값 ' + g + '\n         기대 값 ' + w); }
+}
+var $ = function (s) { return document.querySelector(s); };
+function tick(n) { return new Promise(function (r) { setTimeout(r, n || 30); }); }
+function view() {
+  return {
+    기간: $('#period').value,
+    줄수: $('#rankBody').rows.length,
+    첫줄: $('#rankBody').rows.length ? $('#rankBody').rows[0].cells[0].textContent : '',
+    신선도: $('#freshInfo').textContent,
+    안내: $('#stateNote').textContent,
+    점검안내: $('#maintNote').textContent,
+    믿음줄: $('#trust').textContent,
+  };
+}
+function pick(key) { $('#period').value = key; $('#period').onchange(); }
+
+(async function () {
+  log.textContent = '';
+  await tick(60);
+
+  head('[1] 첫 진입 — 캐시가 없으니 예전 그대로 기다린다');
+  is('요청은 이번 달로 한 건', PENDING.length && PENDING[0].period, '2026-08');
+  is("표는 비어 있고 '불러오는 중'", [view().줄수, view().안내], [0, '불러오는 중입니다…']);
+  answer('2026-08', res('2026-08')); await tick();
+  is('응답이 오면 표가 그려진다', [view().줄수, view().첫줄], [1, '2026-08 매장']);
+  is('갱신 중 꼬리표는 없다', view().신선도.indexOf('갱신') < 0, true);
+
+  head('[2] 다른 달로 — 캐시가 없으면 예전과 같다');
+  pick('2026-07'); await tick();
+  is('지난 달 표를 남기지 않는다', [view().줄수, view().안내], [0, '불러오는 중입니다…']);
+  answer('2026-07', res('2026-07')); await tick();
+  is('7월 표', view().첫줄, '2026-07 매장');
+
+  head('[3] ★핵심★ 되돌아오면 기다리지 않는다 (기간별 캐시)');
+  pick('2026-08'); await tick(5);
+  var v = view();
+  is('응답 전인데 8월 표가 이미 떠 있다', [v.줄수, v.첫줄], [1, '2026-08 매장']);
+  is('기간 select도 8월 그대로', v.기간, '2026-08');
+  is("'갱신 중…' 이라고 정직하게 적는다", v.신선도, '갱신 중…');
+  is("믿음줄에 '지난번 받아둔 화면'", v.믿음줄.indexOf('지난번 받아둔 화면') >= 0, true);
+  answer('2026-08', res('2026-08')); await tick();
+  is('실데이터가 오면 꼬리표가 사라진다', view().신선도.indexOf('갱신') < 0, true);
+
+  head('[4] 같은 달 새로고침 — 옛 숫자가 깜빡이지 않는다');
+  $('#reloadBtn').onclick(); await tick(5);
+  is('갱신 중 꼬리표가 붙지 않는다', view().신선도.indexOf('갱신') < 0, true);
+  is('표는 그대로 남아 있다', view().줄수, 1);
+  answer('2026-08', res('2026-08')); await tick();
+
+  head('[5] 오류가 오면 캐시 표를 즉시 걷어낸다');
+  pick('2026-07'); await tick(5);
+  is('7월 캐시본이 먼저 떴다', [view().줄수, view().신선도], [1, '갱신 중…']);
+  answer('2026-07', { ok: false, code: 'SERVER_ERROR', error: '잠시 후 다시 시도해 주세요.' }); await tick();
+  is('표가 비었다', view().줄수, 0);
+  is('오류 문구만 남는다', view().안내, '잠시 후 다시 시도해 주세요.');
+  is('믿음줄도 지워졌다', view().믿음줄, '');
+
+  head('[6] 오류 화면 위에는 캐시본을 다시 그리지 않는다');
+  pick('2026-08'); await tick(5);
+  is('빈 표 + 불러오는 중', [view().줄수, view().안내], [0, '불러오는 중입니다…']);
+  answer('2026-08', res('2026-08')); await tick();
+  is('정상 응답이 오면 풀린다', view().첫줄, '2026-08 매장');
+  pick('2026-07'); await tick(5);
+  is('빗장이 풀려 캐시본이 다시 뜬다', view().신선도, '갱신 중…');
+  answer('2026-07', res('2026-07')); await tick();
+
+  head('[7] 점검 중(MAINT) — 지난 숫자를 최신인 양 보여주지 않는다');
+  pick('2026-08'); await tick(5);
+  is('캐시본이 떴다', view().줄수, 1);
+  answer('2026-08', { ok: false, code: 'MAINT', error: '자료 정리 중입니다.' }); await tick();
+  is('표가 비었다', view().줄수, 0);
+  is('점검 안내만 남는다', view().점검안내, '자료 정리 중입니다.');
+  pick('2026-07'); await tick(5);
+  is('점검 중에는 캐시본도 안 그린다', view().줄수, 0);
+  answer('2026-07', res('2026-07')); await tick();
+  is('점검이 풀리면 안내가 사라진다', view().점검안내, '');
+
+  head('[8] 연결이 끊기면 그 달의 저장본을 보여 준다');
+  pick('2026-08'); await tick(5);
+  answer('2026-08', { ok: false, code: 'NETWORK', error: '' }); await tick();
+  is('8월 저장본이 오프라인으로 뜬다', view().첫줄, '2026-08 매장');
+  is("'오프라인'이라고 적는다", view().신선도, '오프라인');
+  is('믿음줄은 (저장된 화면)', view().믿음줄.indexOf('저장된 화면') >= 0, true);
+
+  head('[9] ★경합★ 늦게 온 옛 기간 응답이 새 기간 표를 덮지 않는다');
+  answer('2026-08', res('2026-08')); await tick();       // 정상으로 되돌려 놓는다
+  pick('2026-07'); await tick(5);                        // 7월 요청 시작 (답하지 않는다)
+  pick('2026-06'); await tick(5);                        // 곧바로 6월로 갈아탄다
+  is('선택이 버려지지 않는다', view().기간, '2026-06');
+  is('6월 요청도 나갔다', PENDING.filter(function (p) { return p.period === '2026-06'; }).length, 1);
+  answer('2026-06', res('2026-06')); await tick();
+  is('6월 표가 그려졌다', view().첫줄, '2026-06 매장');
+  answer('2026-07', res('2026-07', { rows: [{ store: '늦게 온 7월', total: 1 }] })); await tick();
+  is('★늦게 온 7월이 화면을 못 덮는다★', view().첫줄, '2026-06 매장');
+  is('기간 select도 그대로', view().기간, '2026-06');
+  is('새로고침 버튼이 잠겨 있지 않다', $('#reloadBtn').disabled, false);
+
+  head('[10] 옛 저장 형태(앱 v62)가 남아 있어도 안전한가');
+  localStorage.setItem(KEY, JSON.stringify(res('2026-08')));   // 응답 하나가 통째로 = 옛 형태
+  pick('2026-07'); await tick(5);
+  is('옛 형태에 없는 달이면 표를 비운다', view().줄수, 0);
+  answer('2026-07', res('2026-07')); await tick();
+  pick('2026-08'); await tick(5);
+  is('옛 형태의 8월은 캐시본으로 살아난다', [view().줄수, view().신선도], [1, '갱신 중…']);
+  answer('2026-08', res('2026-08')); await tick();
+  var mapNow = JSON.parse(localStorage.getItem(KEY));
+  is('새 형태(기간별 지도)로 갈아탔다', Object.keys(mapNow).sort(), ['2026-07', '2026-08']);
+
+  head('[11] 뒷정리');
+  localStorage.removeItem(KEY);
+  is('점검용 저장본을 남기지 않는다', localStorage.getItem(KEY), null);
+
+  var sum = document.getElementById('sum');
+  sum.textContent = pass + '개 통과 · ' + fail + '개 실패';
+  sum.style.background = fail ? '#fdecea' : '#e8f6ee';
+  sum.style.color = fail ? '#c0392b' : '#147a3d';
+})().catch(function (e) {
+  line('no', '점검 도중 오류: ' + (e && e.stack ? e.stack : e));
+  var sum = document.getElementById('sum');
+  sum.textContent = '점검을 끝내지 못했습니다';
+  sum.style.background = '#fdecea'; sum.style.color = '#c0392b';
+});
+</script>
+</body>
+</html>
