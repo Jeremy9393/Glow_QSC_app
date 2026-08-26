@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>QSC 점검 — GLOW SEOUL</title>
+<title>QSC 평가표 — GLOW SEOUL</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=71">
+<link rel="stylesheet" href="css/app.css?v=72">
 </head>
 <body>
 <header class="topbar">
   <a class="back" href="index.html">←</a>
-  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">QSC 점검 <span class="sub">관리자</span></span></div>
+  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">QSC 평가표 <span class="sub">관리자</span></span></div>
   <span class="sub" id="verInfo"></span>
   <button id="resetBtn" class="resetBtn">초기화</button>
 </header>
@@ -68,12 +68,12 @@
      ★이 화면에서는 auth.js의 guard()를 절대 부르지 않는다 — 리다이렉트는 금지다.
        앱 주소가 공개라 언젠가 AUTH_ENFORCE를 켜야 하는데, 이때 이 화면이 토큰을 못 붙이면
        관리자 본인의 제출까지 막힌다. 그래서 '싣되 튕기지는 않는' 절충이 이 구조다. -->
-<script src="js/auth.js?v=71"></script>
-<script src="js/scoring.js?v=71"></script>
-<script src="js/api.js?v=71"></script>
-<script src="js/ui-time.js?v=71"></script>
-<script src="js/ui-photo.js?v=71"></script>
-<script src="js/qsc-app.js?v=71"></script>
+<script src="js/auth.js?v=72"></script>
+<script src="js/scoring.js?v=72"></script>
+<script src="js/api.js?v=72"></script>
+<script src="js/ui-time.js?v=72"></script>
+<script src="js/ui-photo.js?v=72"></script>
+<script src="js/qsc-app.js?v=72"></script>
 <script>
 /* 부드러운 가드 — 제출 버튼만 잠그고, 작성은 그대로 둔다.
    ★js/qsc-app.js는 한 줄도 고치지 않는다. 그 파일은 제출을 시도한 뒤에만 disabled를 되돌리므로,
@@ -145,7 +145,7 @@
   /* 안내문을 통째로 갈아 끼운다 — 원래 문구의 '로그인' 링크를 남기면
      이미 로그인한 매장 직원이 로그인 화면을 오가며 같은 자리로 돌아온다.
      textContent라 링크는 함께 지워진다. */
-  if (note) note.textContent = '이 점검표는 감사총무팀 담당자용입니다. 매장 개선요청사항은 홈의 「매장 QSC현황」에서 확인하실 수 있습니다.';
+  if (note) note.textContent = '이 점검표는 감사총무팀 담당자용입니다. 매장 개선요청사항은 홈의 「매장별 QSC현황」에서 확인하실 수 있습니다.';
   lock('담당자만 제출할 수 있습니다');
 })();
 

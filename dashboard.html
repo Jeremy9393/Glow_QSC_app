@@ -3,23 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- 화면 이름은 'QSC 전체 대시보드'로 통일한다 (index.html 카드 문구 · js/menu.js REG와 한 글자까지 같다).
+<!-- 화면 이름은 '[감사총무팀_QSC]통합시트'로 통일한다 (index.html 카드 문구 · js/menu.js REG와
+     한 글자까지 같다). 2026-08-26에 'QSC 전체 대시보드'에서 바꿨다 — 이 화면이 보여 주는 것이
+     본사 통합시트 [데이터] 탭 그대로라서, 담당자가 부르던 이름을 그대로 쓰기로 했다.
      누른 카드 이름과 들어간 화면 제목이 다르면 "다른 화면에 왔다"는 문의가 생긴다.
      ★'순위표'라는 이름을 쓰지 않는다★ — 이 화면은 매장을 줄 세우려고 만든 것이 아니라
        전 매장 현황을 함께 보고 개선점을 찾으라고 만든 것이다. 이름이 목적을 배신하면 안 된다. -->
-<title>QSC 전체 대시보드 — GLOW SEOUL</title>
+<title>[감사총무팀_QSC]통합시트 — GLOW SEOUL</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=71">
+<link rel="stylesheet" href="css/app.css?v=72">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼. 조작 버튼은 '수동 새로고침' 하나뿐이다 —
      월 단위 데이터이고 시트 읽기 쿼터가 걸려 있어 자동 폴링을 하지 않는다. -->
 <header class="topbar">
   <a class="back" href="index.html">←</a>
-  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">QSC 전체 대시보드 <span class="sub" id="whoInfo"></span></span></div>
+  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">[감사총무팀_QSC]통합시트 <span class="sub" id="whoInfo"></span></span></div>
   <span class="sub" id="freshInfo"></span>
   <button id="reloadBtn" class="resetBtn">새로고침</button>
 </header>
@@ -60,9 +62,9 @@
   </section>
 </div>
 
-<script src="js/auth.js?v=71"></script>
-<script src="js/api.js?v=71"></script>
-<script src="js/dashboard-app.js?v=71"></script>
+<script src="js/auth.js?v=72"></script>
+<script src="js/api.js?v=72"></script>
+<script src="js/dashboard-app.js?v=72"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
