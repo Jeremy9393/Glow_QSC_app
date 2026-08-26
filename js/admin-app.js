@@ -76,38 +76,59 @@
       return;
     }
 
-    /* ★같은 날 같은 종류가 두 건이면 그때만 시간까지 넘긴다★ — 시간을 넘기면 서버가
-       NA프리셋 정리를 건너뛴다(그 회차만 지우는 뜻이라 그렇게 설계돼 있다).
-       한 건뿐인데 굳이 시간을 넘겨서 정리를 덜 하게 만들 이유가 없다. */
-    const dup = {};
+    /* ★날짜 한 줄로 묶는다★ (2026-08-26) — 종전에는 QSC·MS를 따로 줄로 놓고 항상 kind를 보냈다.
+       그런데 서버는 ★양쪽을 함께 되돌릴 때만★ 매장 파일 탭까지 정리한다(한쪽만 지우면 반대쪽
+       자료가 그 탭에 남아 있으니 당연한 규칙이다). 그래서 종류별로 나눠 놓은 화면은 개선요청
+       행을 영영 못 지우고 있었다 — 기능을 하나 잃고 있던 셈이다.
+       기본은 '그 날짜 제출을 통째로', 한쪽만 지우는 것은 작은 버튼으로 남긴다.
+       ★시간(time)은 보내지 않는다★ — 보내면 서버가 '그 회차만'으로 읽어 NA프리셋과
+       매장 파일 정리를 건너뛴다. 이 화면의 기본 동작은 '그 날짜 전부'다. */
+    const byDate = {};
     items.forEach(function (it) {
-      const k = it.kind + '|' + it.date;
-      dup[k] = (dup[k] || 0) + 1;
+      const g = byDate[it.date] || (byDate[it.date] = { date: it.date, kinds: {}, times: [] });
+      g.kinds[it.kind] = true;
+      if (it.time && g.times.indexOf(it.time) < 0) g.times.push(it.time);
     });
 
-    items.forEach(function (it) {
+    Object.keys(byDate).sort().reverse().forEach(function (d) {
+      const g = byDate[d];
+      const kinds = Object.keys(g.kinds);
+      const label = kinds.map(function (k) { return KIND[k]; }).join(' · ') +
+        (g.times.length ? ' · ' + g.times.join(', ') : '');
+
       const row = document.createElement('div');
       row.className = 'codeRow unused';
-      row.innerHTML = '<span class="st">' + (it.kind === 'qsc' ? '📋' : '🛍') + '</span>' +
-        '<span class="nm"></span><span class="info"></span>' +
-        '<span class="act"><button class="miniBtn warn">되돌리기</button></span>';
-      $('.nm', row).textContent = it.date;
-      $('.info', row).textContent = KIND[it.kind] + (it.time ? ' · ' + it.time : '');
-      $('button', row).onclick = function () {
-        const many = dup[it.kind + '|' + it.date] > 1;
-        preview(store, it, many ? it.time : '');
-      };
+      row.innerHTML = '<span class="st">' + (g.kinds.qsc ? '📋' : '') + (g.kinds.shopper ? '🛍' : '') +
+        '</span><span class="nm"></span><span class="info"></span>' +
+        '<span class="act"><button class="miniBtn warn" data-k="">되돌리기</button></span>';
+      $('.nm', row).textContent = g.date;
+      $('.info', row).textContent = label;
+      if (kinds.length > 1) {
+        // 한쪽만 지우는 길도 남긴다 — 그때 무엇이 정리되지 않는지는 서버가 결과에 적어 준다
+        const act = $('.act', row);
+        ['qsc', 'shopper'].forEach(function (k) {
+          const b = document.createElement('button');
+          b.className = 'miniBtn';
+          b.dataset.k = k;
+          b.textContent = (k === 'qsc' ? 'QSC만' : 'MS만');
+          act.appendChild(b);
+        });
+      }
+      row.querySelectorAll('button').forEach(function (b) {
+        b.onclick = function () { preview(store, g.date, b.dataset.k, label); };
+      });
       subList.appendChild(row);
     });
-    subList.appendChild(note('되돌리려는 줄의 [되돌리기]를 누르면, 무엇을 지울지 먼저 보여 드립니다.'));
+    subList.appendChild(note('[되돌리기]는 그 날짜 제출을 통째로 되돌립니다. 누르면 무엇을 지울지 먼저 보여 드립니다.'));
   }
 
   // ---------- 미리보기 → 실행 ----------
-  async function preview(store, it, time) {
+  /* kind가 빈 문자열이면 ★그 날짜 통째로★ 되돌린다(서버 기본값 'both'). */
+  async function preview(store, date, kind, label) {
     setHtml(undoPlan, '');
     undoPlan.appendChild(note('확인하는 중입니다…'));
-    const req = { store: store, date: it.date, kind: it.kind };
-    if (time) req.time = time;
+    const req = { store: store, date: date };
+    if (kind) req.kind = kind;
     const r = await Api.call('admin.undoSubmit', req).catch(function () { return null; });
     setHtml(undoPlan, '');
     if (!(r && r.ok)) {
@@ -121,16 +142,16 @@
 
     const head = document.createElement('p');
     head.className = 'f';
-    head.textContent = store + ' · ' + it.date + (time ? ' ' + time : '') + ' · ' + KIND[it.kind];
+    head.textContent = store + ' · ' + date + ' · ' + (kind ? KIND[kind] + '만' : label);
     undoPlan.appendChild(head);
     list(undoPlan, r.plan || [], '지울 것');
-    undoPlan.appendChild(note('아직 아무것도 지우지 않았습니다. 아래를 누르면 그때 지웁니다. 되돌릴 수 없습니다.'));
+    undoPlan.appendChild(note('아직 아무것도 지우지 않았습니다. 아래를 누르면 그때 지웁니다. 사진은 휴지통으로 가고, 나머지는 되돌릴 수 없습니다.'));
 
     const go = document.createElement('button');
     go.className = 'issueBtn warn';
     go.textContent = '정말 지웁니다';
     go.onclick = async function () {
-      if (!confirm(store + ' ' + it.date + '\n정말 지울까요? 되돌릴 수 없습니다.')) return;
+      if (!confirm(store + ' ' + date + '\n정말 지울까요? 사진은 휴지통으로 갑니다.')) return;
       go.disabled = true; go.textContent = '지우는 중…';
       req.apply = true;
       const d = await Api.call('admin.undoSubmit', req).catch(function () { return null; });
@@ -144,7 +165,9 @@
          통합시트 칸에 수식이 있어 건너뛴 경우가 여기 섞여 오고, 그건 사람이 손으로 마무리해야
          하는 일이다. 조용한 실패가 가장 나쁘다. */
       list(undoPlan, d.done || [], '한 일');
-      undoPlan.appendChild(note('★매장 파일의 개선요청 행은 자동으로 지우지 않습니다★ — 남아 있으면 손으로 지워 주세요.'));
+      /* ★'완료'로 끝내지 않는다★ — 위 목록에 손으로 마무리해야 하는 줄이 섞여 온다
+         (매장이 이미 적어서 개선요청을 못 지운 경우 등). 그 줄을 읽게 만드는 것이 이 화면의 일이다. */
+      undoPlan.appendChild(note('위 목록을 한 번 읽어 주세요. ★ 표시가 있는 줄만 손으로 마무리하시면 됩니다.'));
       loadList(store);
     };
     undoPlan.appendChild(go);
