@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v57', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v58', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -5299,12 +5299,16 @@ function fnUndoSubmit(ctx, payload) {
      한쪽만 되돌리는 경우(kind)에는 손대지 않은 쪽이 그대로 남으므로 탭을 지우지 않는다. */
   const oneSided = (kind !== 'both');
   const monthEmpty = !oneSided && (round.monthLeft === 0) && (shop.monthLeft === 0);
+  /* ★두 줄이 서로 어긋나지 않게 한다★ (2026-08-26) — 종전에는 여기서 '건드리지 않습니다 ·
+     개선요청은 손으로'라고 적어 놓고, 바로 아래에서 '개선요청 행도 함께 비웁니다'라고 적었다.
+     한쪽만 되돌릴 때도 개선요청을 지우도록 고친 뒤로 이 문구가 사실과 달라진 것이다.
+     미리보기는 사람이 읽고 [정말 지웁니다]를 누르는 근거라, 여기서 어긋나면 안 된다. */
+  const scoreCols = (doQsc ? 'QSC' : '') + (doQsc && doShop ? '·' : '') + (doShop ? 'MS' : '');
   log.push(monthEmpty
     ? ('매장 파일 ' + tab + ' 탭: 그 달에 남는 자료가 없어 통째로 지웁니다 (탭의 방문일이 ' + date + '일 때만)')
-    : ('매장 파일 ' + tab + ' 탭: ★건드리지 않습니다★ — '
-      + (oneSided ? "한쪽만(kind='" + kind + "') 되돌리기 때문입니다"
-        : '그 달에 QSC ' + round.monthLeft + '건 · 쇼퍼 ' + shop.monthLeft + '건이 남습니다')
-      + '. 점수 칸만 비우고 개선요청 행은 손으로 정리하십시오'));
+    : ('매장 파일 ' + tab + ' 탭: 탭은 그대로 두고 ' + scoreCols + ' 점수 칸을 비웁니다' +
+      (oneSided ? ' (한쪽만 되돌리기라 탭 자체는 지우지 않습니다 — 빈 양식으로 남고 다음에 그대로 쓰입니다)'
+        : ' — 그 달에 QSC ' + round.monthLeft + '건 · 쇼퍼 ' + shop.monthLeft + '건이 남습니다')));
   /* ★방문일·방문시간·개선요청은 QSC가 쓴 것이다★ — 그래서 그 달에 QSC가 하나도 안 남을 때만
      되돌린다. 남아 있으면 그 줄들이 남은 회차의 것일 수 있어 가릴 방법이 없다(행에 회차 표식이 없다). */
   if (doQsc && !monthEmpty) {
