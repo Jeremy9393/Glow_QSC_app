@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>미스터리쇼퍼 평가표 — GLOW SEOUL</title>
+<title>MS 평가표 — GLOW SEOUL</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=71">
+<link rel="stylesheet" href="css/app.css?v=72">
 </head>
 <body>
 <header class="topbar">
   <a class="back" href="index.html">←</a>
-  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">미스터리쇼퍼 평가표 <span class="sub">관리자</span></span></div>
+  <div class="tt"><span class="brand">GLOW SEOUL</span><span class="title">MS 평가표 <span class="sub">관리자</span></span></div>
   <span class="sub" id="verInfo"></span>
   <button id="resetBtn" class="resetBtn">초기화</button>
 </header>
@@ -56,11 +56,11 @@
      ★이 화면에서도 guard()는 절대 부르지 않는다 — 리다이렉트 금지.
        고객용 survey.html과 달리 이 화면은 관리자용이지만, 현장에서 작성 중이던 내용이
        로그인 화면으로 튕기며 날아가는 사고는 똑같이 비싸다. -->
-<script src="js/auth.js?v=71"></script>
-<script src="js/scoring.js?v=71"></script>
-<script src="js/api.js?v=71"></script>
-<script src="js/ui-time.js?v=71"></script>
-<script src="js/shopper-core.js?v=71"></script>
+<script src="js/auth.js?v=72"></script>
+<script src="js/scoring.js?v=72"></script>
+<script src="js/api.js?v=72"></script>
+<script src="js/ui-time.js?v=72"></script>
+<script src="js/shopper-core.js?v=72"></script>
 <script>
 initShopperForm({ admin: true });
 
@@ -131,7 +131,7 @@ initShopperForm({ admin: true });
 
   /* 안내문을 통째로 갈아 끼운다 — 원래 문구의 '로그인' 링크를 남기면
      이미 로그인한 매장 직원이 로그인 화면만 오가게 된다. textContent라 링크도 함께 지워진다. */
-  if (note) note.textContent = '이 평가표는 감사총무팀 담당자용입니다. 매장 개선요청사항은 홈의 「매장 QSC현황」에서 확인하실 수 있습니다.';
+  if (note) note.textContent = '이 평가표는 감사총무팀 담당자용입니다. 매장 개선요청사항은 홈의 「매장별 QSC현황」에서 확인하실 수 있습니다.';
   lock('담당자만 제출할 수 있습니다');
 })();
 

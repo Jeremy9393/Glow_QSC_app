@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=71">
+<link rel="stylesheet" href="css/app.css?v=72">
 </head>
 <body>
 <header class="topbar">
@@ -39,21 +39,14 @@
          await Api.call('admin.undoSubmit', {store:'금종제과', date:'2026-10-05'})   // 미리보기
          … 여기에 apply:true 를 더하면 실행. 무엇이 지워지는지는 작업재개.md 참조. -->
 
-  <section class="card">
-    <h2>쓰기 스위치</h2>
-    <!-- 스크립트 속성이 50개를 넘어 구글 설정 화면이 읽기 전용이 되었다.
-         그래서 이 세 개는 앱에서만 바꿀 수 있다(서버 admin.switches). -->
-    <p class="note">앱 제출이 <b>매장 파일과 통합시트에 실제로 기록될지</b>를 정합니다.
-      세 개가 함께 움직입니다.<br>
-      ⚠<b>끄면</b> 제출은 되지만 매장 파일·통합시트에는 아무것도 안 들어갑니다
-      (점수만 확인하고 싶을 때).</p>
-    <div id="swState" class="codeSum"></div>
-    <div class="bcAct">
-      <button class="miniBtn" id="swShow">지금 상태 보기</button>
-      <button class="miniBtn" id="swOn">세 개 켜기</button>
-      <button class="miniBtn warn" id="swOff">세 개 끄기</button>
-    </div>
-  </section>
+  <!-- 2026-08-26: 「쓰기 스위치」 칸은 뺐다 (담당자 판단).
+       ★서버 스위치 자체는 그대로 살아 있다★ — 매장 파일·통합시트 쓰기를 멈추는 차단기이고,
+       화면에 두면 잘못 눌러 꺼 둔 채 잊는 쪽이 더 위험하다(그 뒤 제출은 다 되는데 기록만 안 된다).
+       테스트 목적으로 끌 이유도 없어졌다 — 되돌리기가 그 제출이 쓴 자리를 전부 되돌린다.
+       급할 때는 콘솔로:
+         await Api.call('admin.switches', {})            // 지금 상태 보기
+         await Api.call('admin.switches', {on:false})    // 세 개 끄기 (차단)
+         await Api.call('admin.switches', {on:true})     // 다시 켜기 -->
 
 </div>
 
@@ -62,10 +55,9 @@
        권한의 정본이 그것이다. 여기에 새 메뉴 키를 만들면 구글시트 「역할」 탭까지 고쳐야 하고,
        고치기 전까지는 아무에게도 안 보인다. 같은 열쇠를 쓰는 편이 맞다.
      이것은 안내를 앞당기는 장치일 뿐 보안이 아니다 — 진짜 차단은 서버 ACTIONS 등록표와 can()이다. -->
-<script src="js/auth.js?v=71"></script>
+<script src="js/auth.js?v=72"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts');</script>
-<script src="js/api.js?v=71"></script>
-<script src="js/admin-app.js?v=71"></script>
+<script src="js/api.js?v=72"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

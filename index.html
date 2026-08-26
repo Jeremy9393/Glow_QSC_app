@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=71">
+<link rel="stylesheet" href="css/app.css?v=72">
 </head>
 <body>
 <div class="home">
@@ -27,22 +27,22 @@
        새로 만들어진 경우'에만 문구가 달라지는 재현하기 어려운 차이가 생긴다. -->
   <nav class="menu" id="menu">
     <a class="menuCard" data-menu="qsc" href="qsc.html">
-      <span class="mi"><span class="mt">QSC 점검</span><span class="md">다문항 위생, 매장관리 점검표</span></span>
+      <span class="mi"><span class="mt">QSC 평가표</span><span class="md">다문항 위생, 매장관리 점검표</span></span>
       <span class="tag">관리자</span>
       <span class="arrow">›</span>
     </a>
     <a class="menuCard" data-menu="shopper" href="shopper.html">
-      <span class="mi"><span class="mt">미스터리쇼퍼 평가표</span><span class="md">관리자용 미스터리쇼퍼 평가표</span></span>
+      <span class="mi"><span class="mt">MS 평가표</span><span class="md">관리자용 미스터리쇼퍼 평가표</span></span>
       <span class="tag">관리자</span>
       <span class="arrow">›</span>
     </a>
     <a class="menuCard" data-menu="dashboard" href="dashboard.html">
-      <span class="mi"><span class="mt">QSC 전체 대시보드</span><span class="md">전 매장 위생·CS·개선 현황</span></span>
+      <span class="mi"><span class="mt">[감사총무팀_QSC]통합시트</span><span class="md">전 매장 위생·CS·개선 현황</span></span>
       <span class="tag">관리자</span>
       <span class="arrow">›</span>
     </a>
     <a class="menuCard" data-menu="store" href="store.html">
-      <span class="mi"><span class="mt">매장 QSC현황</span><span class="md">개선요청사항 확인과 개선 보고</span></span>
+      <span class="mi"><span class="mt">매장별 QSC현황</span><span class="md">개선요청사항 확인과 개선 보고</span></span>
       <span class="tag">관리자</span>
       <span class="arrow">›</span>
     </a>
@@ -83,9 +83,9 @@
      api.js는 이 화면이 직접 부르지는 않지만 계속 싣는다 — window.Api를 붙여
      auth.js가 서버 주소를 자기 폴백 상수가 아니라 CONFIG에서 읽게 하기 위해서다.
      (endpoint()는 호출 시점에 읽으므로 auth.js보다 뒤에 실려도 된다) -->
-<script src="js/auth.js?v=71"></script>
-<script src="js/menu.js?v=71"></script>
-<script src="js/api.js?v=71"></script>
+<script src="js/auth.js?v=72"></script>
+<script src="js/menu.js?v=72"></script>
+<script src="js/api.js?v=72"></script>
 <script>
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
@@ -295,7 +295,7 @@
        ① applyMenus가 카드를 다시 세워도 배지를 되붙인다(메모리 사본)
        ② 다음 진입에서 서버 왕복을 기다리지 않고 즉시 그린다(기기 사본)
      ★기기에 한 벌 남기는 이유★ — 위 1~3초 동안 배지가 뒤늦게 끼어들며 카드 폭이 밀려,
-       마침 '매장 QSC현황'을 누르려던 손가락이 옆 카드를 누른다. 사본이 어제 값이어도
+       마침 '매장별 QSC현황'을 누르려던 손가락이 옆 카드를 누른다. 사본이 어제 값이어도
        해가 없다 — 배지는 정확해야 하는 값이 아니라 '들어가 보게 만드는' 값이고,
        실제 건수는 매장현황 화면이 다시 세어 보여 준다.
      ★로그인 상태에서만 그린다★ — 공용 기기에서 로그아웃한 뒤 남의 건수가 보이면 안 된다. */

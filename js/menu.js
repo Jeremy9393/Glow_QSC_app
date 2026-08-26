@@ -18,13 +18,13 @@ var Menu = (function () {
        apply()는 이미 있는 카드의 문구를 덮지 않고 뱃지만 바꾸므로, 두 곳이 어긋나면
        "카드가 없어 새로 만들어질 때만 이름이 달라지는" 재현이 어려운 문의가 생긴다. */
   var REG = [
-    { key: 'qsc',       title: 'QSC 점검',            desc: '다문항 위생, 매장관리 점검표',     href: 'qsc.html',       order: 10 },
-    { key: 'shopper',   title: '미스터리쇼퍼 평가표', desc: '관리자용 미스터리쇼퍼 평가표',     href: 'shopper.html',   order: 20 },
+    { key: 'qsc',       title: 'QSC 평가표',          desc: '다문항 위생, 매장관리 점검표',     href: 'qsc.html',       order: 10 },
+    { key: 'shopper',   title: 'MS 평가표',           desc: '관리자용 미스터리쇼퍼 평가표',     href: 'shopper.html',   order: 20 },
     /* ★dashboard·store 문구는 2026-08-16에 바꿨다★ — '순위표'·'지적 사항'은 이 앱을 매장 사람이
        본다는 사실과 맞지 않는다. 줄 세우기가 아니라 개선을 돕는 도구로 읽혀야 해서
        '전체 대시보드'·'개선요청사항'으로 통일했다. index.html의 정적 카드 문구도 같이 바뀌어 있다. */
-    { key: 'dashboard', title: 'QSC 전체 대시보드',   desc: '전 매장 위생·CS·개선 현황',        href: 'dashboard.html', order: 30 },
-    { key: 'store',     title: '매장 QSC현황',        desc: '개선요청사항 확인과 개선 보고',    href: 'store.html',     order: 40 },
+    { key: 'dashboard', title: '[감사총무팀_QSC]통합시트', desc: '전 매장 위생·CS·개선 현황',   href: 'dashboard.html', order: 30 },
+    { key: 'store',     title: '매장별 QSC현황',      desc: '개선요청사항 확인과 개선 보고',    href: 'store.html',     order: 40 },
     /* ★home:false★ — 홈에는 안 두고 '관리자 도구'(admin.html) 안에서 연다 (2026-08-26).
        등록표에서 아예 빼지 않는 이유: 서버가 내려주는 메뉴 목록에는 codes가 그대로 들어 있어,
        등록표가 모르면 apply()가 '모르는 키'로 경고를 찍고 권한 수에서도 빠진다. */
@@ -156,9 +156,10 @@ var Menu = (function () {
       // 예정일이 지난 건이 섞여 있으면 같은 숫자라도 더 급한 것이다 — 색을 채워 구분한다
       c.className = late ? 'mCount hot' : 'mCount';
       /* 숫자만 넣는다. 앞에 '●' 같은 표식을 붙이면 배지가 12px 넓어지는데,
-         375px 화면에서 '매장 QSC현황' 카드는 딱 그만큼이 모자라 설명 줄이 두 줄로 접힌다
+         375px 화면에서 '매장별 QSC현황' 카드는 딱 그만큼이 모자라 설명 줄이 두 줄로 접힌다
          (실측: 배지 없음 76px → ● 포함 93px → 숫자만 76px. 제목이 '우리 매장 QSC현황'이던
-         시절의 측정값이라 지금은 여유가 더 있지만, 규칙을 되돌릴 이유는 없다).
+         시절의 측정값이다. 2026-08-26에 '매장 QSC현황'→'매장별 QSC현황'으로 한 글자 늘었으므로
+         여유는 그만큼 줄었다 — 규칙을 되돌릴 이유가 더 없어졌다).
          빨간 알약 자체가 이미 표식이다. */
       c.textContent = String(todo);
       /* 색만으로 구분하면 흑백·색약 화면에서 사라진다. 눌러 보기 전에 이유를 알 수 있게 남긴다.
