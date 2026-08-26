@@ -476,6 +476,20 @@ async function initShopperForm(opts) {
   });
   TimePick.onChange('time', saveDraft);
 
+  /* ★매장·날짜를 고르는 순간 '이번 달에 이미 있나'를 배경에서 물어본다★ (2026-08-26)
+     QSC 점검 화면과 같은 부품·같은 문구를 쓴다(js/api.js의 watchDup).
+     ★관리자 입력일 때만★ — 고객 설문(survey.html)에서는 부르지 않는다:
+       고객은 '이미 있나요'를 판단할 수 없고, 그 액션은 로그인 권한을 요구하므로
+       토큰 없는 고객 화면에서는 어차피 통과하지 않는다.
+     안내일 뿐이고 판정은 제출 순간에 서버가 한다. */
+  if (ADMIN) {
+    const askDup = Api.watchDup($('#dupNote'), 'shopper.status',
+      function () { return $('#store').value; },
+      function () { return $('#date').value; });
+    $('#store').addEventListener('change', askDup);
+    $('#date').addEventListener('change', askDup);
+  }
+
   // ---------- 초기화 ----------
   const draft = loadDraft();
   if (draft) {

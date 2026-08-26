@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=70">
+<link rel="stylesheet" href="css/app.css?v=71">
 </head>
 <body>
 <header class="topbar">
@@ -31,6 +31,9 @@
       <div><label class="f">방문 시간</label><div id="timeBox"></div></div>
       <div class="full"><label class="f">점검자</label><input type="text" id="inspector" placeholder="이름"></div>
     </div>
+    <!-- 매장·날짜를 고르는 순간 '이번 달에 이미 있습니다'를 알려 주는 자리 (2026-08-26).
+         74문항을 다 적은 뒤에 알게 되는 것이 이 화면의 가장 비싼 사고였다. -->
+    <p class="note mockNote pre" id="dupNote" style="display:none"></p>
   </section>
   <nav class="gnav" id="gnav"></nav>
   <div id="groups"></div>
@@ -65,12 +68,12 @@
      ★이 화면에서는 auth.js의 guard()를 절대 부르지 않는다 — 리다이렉트는 금지다.
        앱 주소가 공개라 언젠가 AUTH_ENFORCE를 켜야 하는데, 이때 이 화면이 토큰을 못 붙이면
        관리자 본인의 제출까지 막힌다. 그래서 '싣되 튕기지는 않는' 절충이 이 구조다. -->
-<script src="js/auth.js?v=70"></script>
-<script src="js/scoring.js?v=70"></script>
-<script src="js/api.js?v=70"></script>
-<script src="js/ui-time.js?v=70"></script>
-<script src="js/ui-photo.js?v=70"></script>
-<script src="js/qsc-app.js?v=70"></script>
+<script src="js/auth.js?v=71"></script>
+<script src="js/scoring.js?v=71"></script>
+<script src="js/api.js?v=71"></script>
+<script src="js/ui-time.js?v=71"></script>
+<script src="js/ui-photo.js?v=71"></script>
+<script src="js/qsc-app.js?v=71"></script>
 <script>
 /* 부드러운 가드 — 제출 버튼만 잠그고, 작성은 그대로 둔다.
    ★js/qsc-app.js는 한 줄도 고치지 않는다. 그 파일은 제출을 시도한 뒤에만 disabled를 되돌리므로,
