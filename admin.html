@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=74">
+<link rel="stylesheet" href="css/app.css?v=75">
 </head>
 <body>
 <header class="topbar">
@@ -34,10 +34,19 @@
     </nav>
   </section>
 
-  <!-- 2026-08-26: 「제출 되돌리기」 칸은 뺐다. 구조를 다시 잡은 뒤에 넣기로 했다(담당자 결정).
-       ★서버 기능은 그대로 살아 있다★ — admin.undoSubmit 이고, 지금은 브라우저 콘솔로 부른다:
-         await Api.call('admin.undoSubmit', {store:'금종제과', date:'2026-10-05'})   // 미리보기
-         … 여기에 apply:true 를 더하면 실행. 무엇이 지워지는지는 작업재개.md 참조. -->
+  <section class="card">
+    <h2>제출 되돌리기</h2>
+    <!-- ★재제출과는 다른 일이다★ — 같은 달에 또 내는 경우는 제출할 때 서버가 먼저 되묻고
+         알아서 정리한다. 이 칸은 '잘못 낸 것을 취소'하거나 '시험 삼아 낸 것을 원상복구'할 때만 쓴다. -->
+    <p class="note">잘못 낸 제출을 지웁니다. 매장을 고르면 그 매장의 제출 목록이 나옵니다.<br>
+      지우기 전에 <b>무엇을 지울지 먼저 보여 드리고</b>, 확인하셔야 실제로 지웁니다.<br>
+      사진은 <b>휴지통</b>으로 갑니다(30일 안에 되찾을 수 있습니다).</p>
+    <div class="meta-grid">
+      <div class="full"><label class="f">매장</label><select id="store"><option value="">매장 선택</option></select></div>
+    </div>
+    <div id="subList"></div>
+    <div id="undoPlan"></div>
+  </section>
 
   <!-- 2026-08-26: 「쓰기 스위치」 칸은 뺐다 (담당자 판단).
        ★서버 스위치 자체는 그대로 살아 있다★ — 매장 파일·통합시트 쓰기를 멈추는 차단기이고,
@@ -55,9 +64,10 @@
        권한의 정본이 그것이다. 여기에 새 메뉴 키를 만들면 구글시트 「역할」 탭까지 고쳐야 하고,
        고치기 전까지는 아무에게도 안 보인다. 같은 열쇠를 쓰는 편이 맞다.
      이것은 안내를 앞당기는 장치일 뿐 보안이 아니다 — 진짜 차단은 서버 ACTIONS 등록표와 can()이다. -->
-<script src="js/auth.js?v=74"></script>
+<script src="js/auth.js?v=75"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts');</script>
-<script src="js/api.js?v=74"></script>
+<script src="js/api.js?v=75"></script>
+<script src="js/admin-app.js?v=75"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
