@@ -155,6 +155,25 @@ const Api = (function () {
     return r;
   }
 
+  /* ★재제출 되묻기 문구는 한 곳에만 둔다★ — QSC 점검과 미스터리쇼퍼가 같은 말을 해야
+     사람이 헷갈리지 않는다(서버 규칙도 하나다). true면 '덮어쓴다'는 뜻이다.
+     ★매장 확인을 먼저 권한다★ — '덮어쓸까요?'만 물으면 사람은 읽지 않고 예를 누른다.
+       이 창이 막으려는 사고 1번이 '매장을 잘못 골랐다'이므로, 그 말이 맨 앞에 와야 한다. */
+  function askOverwrite(store, existing) {
+    const rows = (existing || []).map(function (e) {
+      return '   · ' + e.date + (e.time ? ' ' + e.time : '') +
+        (e.route ? ' · ' + e.route : '') +
+        (e.who ? ' · ' + e.who : '') +
+        (typeof e.score === 'number' ? ' · ' + e.score.toFixed(1) + '점' : '');
+    });
+    return confirm(store + '\n이번 달에 이미 제출된 기록이 ' + rows.length + '건 있습니다.\n\n' +
+      rows.join('\n') +
+      '\n\n★매장을 잘못 고르지 않으셨는지 먼저 확인해 주세요.★\n' +
+      '다른 매장이라면 [취소]를 누르고 매장을 다시 골라 주세요.\n' +
+      '작성하신 내용은 그대로 남습니다.\n\n' +
+      '위 기록을 모두 지우고 지금 내용으로 새로 쓸까요?');
+  }
+
   /* 통합시트의 실시간 상태(매장 목록 등) 조회.
      ★폴백 체인을 절대 끊지 말 것: 서버 → localStorage 캐시 → null.
        마지막 성공본이 남아 있어야 오프라인 지하 매장에서도 매장 선택이 된다.
@@ -181,7 +200,7 @@ const Api = (function () {
     try { return JSON.parse(localStorage.getItem('qsc-live-config') || 'null'); } catch (e) { return null; }
   }
 
-  return { call: call, submit: submit, getConfig: getConfig, CONFIG: CONFIG };
+  return { call: call, submit: submit, getConfig: getConfig, askOverwrite: askOverwrite, CONFIG: CONFIG };
 })();
 
 /* auth.js가 서버 주소를 window.Api에서 찾는다(주소 단일 출처). 최상위 const는 window에
