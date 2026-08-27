@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v60', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v68', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -325,6 +325,12 @@ function actionTable() {
     'month.close':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMonthClose },
     /* 실전 기록 스위치 세 개 — 기본이 '보기'다(on을 안 주면 아무것도 바꾸지 않는다). §스위치 */
     'admin.switches':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnSwitches },
+    /* 감사로그 40일 정리 — 평소엔 하루 한 번 자동으로 돈다. 이 액션은 지금 바로 돌려보거나
+       몇 줄 남았는지 확인할 때 쓴다. {}=상태만 · {run:true}=지금 정리 */
+    'admin.tidyLog':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnTidyLog },
+    /* 사진 공유를 폴더 한 번으로 걸어도 되는지 실제로 해 보는 시험 (2026-08-27).
+       임시 폴더에 1x1 그림 하나를 만들었다 지우기만 한다 — 실매장 자료는 건드리지 않는다. */
+    'admin.photoShareTest': { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnPhotoShareTest },
     /* 제출 한 회차 되돌리기 — 기본이 미리보기다(apply를 안 주면 아무것도 지우지 않는다). */
     'admin.undoSubmit':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnUndoSubmit },
     /* 인증 시트를 응답 시트로 합치기 — 일회성. 기본이 미리보기다. */
@@ -999,7 +1005,76 @@ function auditLog(ctx, action, store, result, reason, note) {
       auditCut(reason, 40),
       auditCut(note, 300)
     ]));
+    maybeTidyLog(sh, ss);   // 하루 한 번, 40일 지난 줄을 여기서 정리한다
   } catch (e) { /* 감사로그 실패가 업무를 멈추면 안 된다 */ }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ★감사로그 40일 정리★ (2026-08-27 담당자 결정)
+
+   ★왜 필요한가★ — 감사로그는 「계정」 탭과 ★같은 파일★ 에 있다. 인증이 필요한 요청마다
+     그 파일을 여는데, 로그가 수만 행이면 그 여는 것 자체가 느려진다. 즉 로그가 쌓이면
+     로그와 아무 상관없는 조회·제출이 다 같이 느려진다.
+   ★왜 지우나★ — 이 로그는 '문제가 생겼을 때 열어 보는 것'이다(담당자). 40일이면 충분하고,
+     다른 탭으로 옮기는 것은 ★같은 파일이라 속도에 도움이 안 된다★.
+   ★언제 도나★ — 트리거를 새로 만들지 않는다(새 권한 승인이 필요해 배포가 막힌다).
+     감사로그를 쓰는 김에, 하루에 한 번만 이어서 돈다. 로그를 쓰는 것은 ★쓰기 액션★ 뿐이라
+     조회는 이 경로에 닿지도 않는다. 지울 것이 없으면 몇 줄만 읽고 곧바로 끝난다.
+   ══════════════════════════════════════════════════════════════ */
+const AUDIT_KEEP_DAYS = 40;
+let TIDY_RUNNING = false;
+
+function maybeTidyLog(sh, ss) {
+  if (TIDY_RUNNING) return;                       // 정리하다가 남긴 로그로 다시 들어오지 않게
+  try {
+    const tz = ss.getSpreadsheetTimeZone();
+    const today = Utilities.formatDate(new Date(), tz, 'yyyyMMdd');
+    if (PROPS.getProperty('LOG_TIDY_DAY') === today) return;
+    PROPS.setProperty('LOG_TIDY_DAY', today);     // ★먼저 찍는다★ — 실패해도 오늘 또 시도하지 않는다
+    TIDY_RUNNING = true;
+    try { tidyAuditLog(sh, ss); } finally { TIDY_RUNNING = false; }
+  } catch (e) { TIDY_RUNNING = false; }
+}
+
+/* 40일 지난 줄을 지운다. 편집기에서 손으로 돌려도 되고, 위에서 자동으로 불린다.
+   ★맨 앞줄부터 이어지는 것만 지운다★ — 로그는 시간순으로 쌓이므로 오래된 것은 반드시 앞쪽에
+   몰려 있다. 중간에 형식이 이상한 줄이 나오면 거기서 멈춘다(모르는 줄은 건드리지 않는다). */
+function tidyAuditLog(sh, ss) {
+  ss = ss || authSS();
+  if (!ss) return 0;
+  sh = sh || ss.getSheetByName(AUTH_LOG_SHEET);
+  if (!sh) return 0;
+  const last = sh.getLastRow();
+  if (last < 2) return 0;
+
+  const tz = ss.getSpreadsheetTimeZone();
+  const cut = Utilities.formatDate(new Date(Date.now() - AUDIT_KEEP_DAYS * 86400000), tz, 'yyyy-MM-dd HH:mm:ss');
+  const n = Math.min(5000, last - 1);            // 한 번에 최대 5,000줄까지만 (6분 한도 보호)
+  const r = grid(sh, 2, 1, n, 1);
+  if (!r) return 0;
+  const vals = r.getValues();
+
+  let cnt = 0;
+  for (let i = 0; i < vals.length; i++) {
+    const v = vals[i][0];
+    const t = (v instanceof Date) ? Utilities.formatDate(v, tz, 'yyyy-MM-dd HH:mm:ss') : String(v == null ? '' : v).trim();
+    if (!/^\d{4}-\d{2}-\d{2} /.test(t)) break; // 시각 모양이 아니면 멈춘다
+    if (t >= cut) break;                          // 여기서부터는 40일 안쪽이다
+    cnt++;
+  }
+  if (!cnt) return 0;
+
+  sh.deleteRows(2, cnt);                          // 한 번에 (delRows 와 같은 이유)
+  /* ★지웠다는 사실은 남긴다★ — 로그가 조용히 줄어들면 나중에 '누가 지웠나'를 알 수 없다.
+     auditLog 를 부르지 않고 직접 적는다(그 함수 안에서 불려 온 참이라 되돌아가면 안 된다). */
+  try {
+    sh.appendRow(safeRow([
+      Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss'),
+      '(시스템)', '', 'log.tidy', '', '성공', '',
+      cnt + '줄 삭제 — ' + AUDIT_KEEP_DAYS + '일 지난 기록 (' + cut + ' 이전)'
+    ]));
+  } catch (e) { }
+  return cnt;
 }
 
 /* 무인증 통과 기록. config.get은 앱을 열 때마다 오므로 매번 appendRow하면 체감 속도가 무너진다.
@@ -2718,7 +2793,7 @@ function prevSubmitsOf(ss, kind, store, dateStr) {
 }
 
 /* 저장 전 관문. 막아야 하면 응답 객체를, 그냥 지나가도 되면 null을 준다. */
-function guardResubmit(ss, kind, payload, ctx) {
+function guardResubmit(ss, kind, payload, ctx, doneOut) {
   const prev = prevSubmitsOf(ss, kind, payload && payload.store, payload && payload.date);
   if (!prev.length) return null;                       // 이번 달 첫 제출 — 묻지 않는다
   if (!(payload && payload.overwrite === true)) {
@@ -2729,16 +2804,40 @@ function guardResubmit(ss, kind, payload, ctx) {
     };
   }
   /* 사람이 '덮어씁니다'를 눌렀다 — 되돌리기를 그대로 태운다.
-     그 달에 날짜가 여럿이면 날짜마다 한 번씩. ★하나라도 실패하면 아무것도 저장하지 않는다★ —
-     반쯤 지워진 채로 새 자료를 얹는 것이 가장 나쁘다. */
+     그 달에 날짜가 여럿이면 날짜마다 한 번씩. */
   const days = [];
   prev.forEach(function (p) { if (days.indexOf(p.date) < 0) days.push(p.date); });
+
+  /* ★지우기 전에 먼저 본다★ (2026-08-27) — 매장이 개선요청에 답을 적어 두었으면
+     되돌리기가 그 줄을 못 지운다(매장 몫이라 일부러 멈춘다). 그 상태로 새 제출을 얹으면
+     ★개선요청이 두 벌로 쌓이고 개선율이 반토막 난 채 종합점수에 들어간다★.
+     ⚠종전에는 지우기를 시작한 뒤에야 알았다 — 그래서 '아무것도 저장하지 않았습니다'라고
+       답하면서 실은 앞 날짜를 이미 다 지운 상태였다. 검사를 앞으로 옮겨 그 상태를 없앤다. */
+  if (kind !== 'shopper') {
+    for (let i = 0; i < days.length; i++) {
+      const b = improveBlocked(payload.store, days[i]);
+      if (b) {
+        return { ok: false, code: 'CONFLICT', blocked: true,
+          error: '매장이 이미 개선 내용을 적은 개선요청이 ' + b.touched + '건 있습니다 (' + days[i] + ').' +
+            ' 덮어쓰면 그 내용이 엉뚱한 항목에 붙거나 개선요청이 두 벌로 쌓입니다.' +
+            ' ★아무것도 지우지 않았습니다★ — 매장 파일에서 그 줄을 정리하신 뒤 다시 제출해 주세요.' };
+      }
+    }
+  }
+
   for (let i = 0; i < days.length; i++) {
     const u = fnUndoSubmit(ctx, { store: payload.store, date: days[i], kind: kind, apply: true });
+    if (u && u.done && doneOut) doneOut.push.apply(doneOut, u.done);
     if (!u || u.ok !== true) {
       return { ok: false, code: 'SERVER_ERROR',
-        error: '앞 제출(' + days[i] + ')을 정리하지 못해 ★아무것도 저장하지 않았습니다★: ' +
-          ((u && u.error) || '알 수 없는 이유') };
+        error: (i > 0 ? ('앞 제출 ' + days.slice(0, i).join('·') + ' 는 이미 정리했고, ') : '') +
+          days[i] + ' 에서 멈췄습니다: ' + ((u && u.error) || '알 수 없는 이유') +
+          ' — 저장하지 않았습니다. 관리자 도구에서 남은 상태를 확인해 주세요.' };
+    }
+    if (u.dirty) {
+      return { ok: false, code: 'CONFLICT', blocked: true,
+        error: days[i] + ' 의 개선요청을 지우지 못했습니다 (매장이 이미 적은 줄이 있습니다).' +
+          ' 저장하지 않았습니다 — 매장 파일에서 정리하신 뒤 다시 제출해 주세요.' };
     }
   }
   return null;
@@ -2764,16 +2863,25 @@ function fnShopperStatus(ctx, payload) {
 
 function fnQscSubmit(ctx, payload) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const stop = guardResubmit(ss, 'qsc', payload, ctx);
+  /* ★앞 제출을 정리하며 한 일을 화면까지 올려 보낸다★ (2026-08-27) — 종전에는 이 목록을
+     통째로 버렸다. 그래서 '개선요청 N행은 손으로 지우십시오' 같은 말이 서버에서만 맴돌고
+     사람에게는 '저장 완료'만 보였다. 조용한 실패가 이 앱이 가장 싫어하는 것이다. */
+  const undone = [];
+  const stop = guardResubmit(ss, 'qsc', payload, ctx, undone);
   if (stop) return stop;
-  return saveQsc(ss, payload, ctx);
+  const out = saveQsc(ss, payload, ctx);
+  if (out && out.ok && undone.length) out.undone = undone;
+  return out;
 }
 
 function fnShopperSubmit(ctx, payload) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const stop = guardResubmit(ss, 'shopper', payload, ctx);
+  const undone = [];
+  const stop = guardResubmit(ss, 'shopper', payload, ctx, undone);
   if (stop) return stop;
-  return saveShopper(ss, payload, ctx, false);
+  const out = saveShopper(ss, payload, ctx, false);
+  if (out && out.ok && undone.length) out.undone = undone;
+  return out;
 }
 /* ══════════════════════════════════════════════════════════════
    미스터리쇼퍼 제출 코드 (검표) — 설계: `_보관/설계/쇼퍼_제출코드_설계.md`
@@ -4857,6 +4965,7 @@ function savePhotos(p, ctx) {
   let skipped = 0;
   if (!PHOTO_FOLDER_ID) return out;
   let dayFolder = null;
+  let folderShared = false;   // 그날 폴더에 공유를 이미 걸었는가 (한 번만 건다)
   const safeName = fileSafe(p.store);
   // 하루 상한을 한 번에 예약한다 (QSC 40장 상한도 여기서 함께 건다)
   let budget = 0;
@@ -4871,12 +4980,32 @@ function savePhotos(p, ctx) {
       if (used >= budget) { skipped++; return; }
       if (validPhoto(dataUrl)) { skipped++; return; }
       used++;
-      if (!dayFolder) dayFolder = subFolder(subFolder(yearFolder(p.date, 'QSC점검'), safeName), fileSafe(p.date));
+      if (!dayFolder) {
+        dayFolder = subFolder(subFolder(yearFolder(p.date, 'QSC점검'), safeName), fileSafe(p.date));
+        /* ★공유는 폴더에 한 번만 건다★ (2026-08-27) — 종전에는 사진 1장마다 setSharing 을 불렀다.
+           드라이브 왕복은 한 번에 0.2~0.5초라, 8장이면 그것만으로 2~4초를 서서 기다렸다.
+           ★추측으로 바꾸지 않고 실제로 해 봤다★ — 폴더에만 공유를 걸고 만든 파일을,
+             ★로그아웃 상태 브라우저★에서 매장 파일이 쓰는 주소(photoUrl → lh3)로 열어
+             640x480 그림이 그대로 나오는 것을 확인했다. '파일에도 건' 사진을 대조군으로
+             나란히 놓고 비교했고, 그 브라우저가 정말 로그아웃인지도 드라이브로 확인했다.
+           ⚠열리는 단위가 '파일 하나' 에서 '그날 그 매장 폴더' 로 커진다.
+             폴더 주소는 시트 어디에도 안 적히고, 파일 주소로 상위 폴더에 닿을 수도 없다.
+           실패하면 파일마다 거는 예전 방식으로 돌아간다 — 느린 편이 안 보이는 것보다 낫다. */
+        if (PHOTO_EMBED) {
+          try {
+            dayFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+            folderShared = true;
+          } catch (e) {
+            folderShared = false;
+            Logger.log('폴더 공유 실패 — 파일마다 겁니다: ' + String(e).slice(0, 120));
+          }
+        }
+      }
       const base64 = dataUrl.split(',')[1];
       const blob = Utilities.newBlob(Utilities.base64Decode(base64), 'image/jpeg',
         fileSafe(p.date) + '_' + safeName + '_문항' + it.no + '_' + (i + 1) + '.jpg');
       const f = dayFolder.createFile(blob);
-      if (PHOTO_EMBED) f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      if (PHOTO_EMBED && !folderShared) f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       (out[it.no] = out[it.no] || []).push({ url: f.getUrl(), id: f.getId() });
     });
   });
@@ -5182,7 +5311,10 @@ function fnMergeAuth(ctx, payload) {
    ★매장이 이미 적은 줄이 하나라도 있으면 아무것도 지우지 않고 그 사실을 돌려준다★ —
      본사의 실수를 되돌리면서 매장이 한 일을 지우면 안 된다.
      기록 경로(writeStoreQscInto의 재제출 처리)가 쓰는 판정과 같은 규칙이다. */
-function wipeImprove(sh) {
+/* 개선요청 표를 ★읽기만★ 한다 — 몇 줄이 차 있고 그중 몇 줄을 매장이 건드렸는가.
+   지우기(wipeImprove)와 미리 보기(improveBlocked)가 ★같은 눈★ 으로 판정해야 한다.
+   두 곳이 따로 세면 '미리 볼 땐 괜찮다더니 지울 땐 못 지운다'가 생긴다. */
+function improveScan(sh) {
   const IC = impCols(sh);
   const newFmt = !!(IC.ok && IC.isNew && IC.audit);
   let headRow = -1;
@@ -5194,32 +5326,175 @@ function wipeImprove(sh) {
       if (v.toUpperCase().indexOf('NO') === 0 || v === '기한') { headRow = i + 1; break; }
     }
   }
-  if (headRow < 0) return { ok: false, n: 0, why: '개선요청 표 머리글을 못 찾았습니다' };
+  if (headRow < 0) return { ok: false, filled: 0, touched: 0, why: '개선요청 표 머리글을 못 찾았습니다' };
 
   const lastRow = tableEndRow(sh) || sh.getMaxRows();
   const bodyN = Math.max(0, lastRow - headRow);
-  if (!bodyN) return { ok: true, n: 0 };
+  const out = { ok: true, headRow: headRow, newFmt: newFmt, IC: IC, filled: 0, touched: 0 };
+  if (!bodyN) return out;
   const bodyR = grid(sh, headRow + 1, 2, bodyN, 14);   // B~O
   const body = bodyR ? bodyR.getValues() : [];
-  let filled = 0, touched = 0;
   for (let i = 0; i < body.length; i++) {
     if (String(body[i][8] == null ? '' : body[i][8]).trim() === '') continue;   // J열(본문)이 비면 빈 줄
-    filled = i + 1;
+    out.filled = i + 1;
     for (let c = 9; c <= 13; c++) {                                             // K~O(매장 몫)
-      if (String(body[i][c] == null ? '' : body[i][c]).trim() !== '') { touched++; break; }
+      if (String(body[i][c] == null ? '' : body[i][c]).trim() !== '') { out.touched++; break; }
     }
   }
-  if (!filled) return { ok: true, n: 0 };
-  if (touched) {
-    return { ok: false, n: filled, why: '매장이 이미 개선 내용을 적은 줄이 ' + touched + '건 있습니다' };
+  return out;
+}
+
+function wipeImprove(sh) {
+  const s = improveScan(sh);
+  if (!s.ok) return { ok: false, n: 0, why: s.why };
+  if (!s.filled) return { ok: true, n: 0 };
+  if (s.touched) {
+    return { ok: false, n: s.filled, why: '매장이 이미 개선 내용을 적은 줄이 ' + s.touched + '건 있습니다' };
   }
-  const bcW = grid(sh, headRow + 1, newFmt ? IC.due : 2, filled, newFmt ? 1 : 2);
-  const dW = grid(sh, headRow + 1, 4, filled, 1);
-  const jW = grid(sh, headRow + 1, 10, filled, 1);
+  const bcW = grid(sh, s.headRow + 1, s.newFmt ? s.IC.due : 2, s.filled, s.newFmt ? 1 : 2);
+  const dW = grid(sh, s.headRow + 1, 4, s.filled, 1);
+  const jW = grid(sh, s.headRow + 1, 10, s.filled, 1);
   if (bcW) bcW.clearContent();
   if (dW) dW.clearContent();
   if (jW) jW.clearContent();
-  return { ok: true, n: filled };
+  return { ok: true, n: s.filled };
+}
+
+/* ★지우기 전에 먼저 본다★ (2026-08-27) — 매장이 개선요청에 답을 적어 두었는가.
+   적어 두었으면 되돌리기가 그 줄을 못 지우는데(매장 몫이라 일부러 멈춘다), 그 상태로
+   새 제출을 얹으면 ★개선요청이 두 벌로 쌓이고 개선율이 반토막 난다★.
+   ★그래서 아무것도 지우기 전에 여기서 멈춘다.★ 반쯤 지운 채로 실패하는 것이 가장 나쁘다.
+   못 열거나 탭이 없으면 null(막지 않음) — 이 검사가 제출을 가로막는 새 고장이 되면 안 된다. */
+function improveBlocked(store, dateStr) {
+  try {
+    const id = storeFileId(store);
+    if (!id) return null;
+    const sh2 = SpreadsheetApp.openById(id).getSheetByName(yymm(dateStr));
+    if (!sh2) return null;
+    const s = improveScan(sh2);
+    if (s.ok && s.touched) return { filled: s.filled, touched: s.touched };
+    return null;
+  } catch (e) { return null; }
+}
+
+/* ★사진 공유를 「폴더에 한 번」으로 바꿔도 되는지 — ★대조 실험★ (2026-08-27)
+
+   지금은 사진 1장마다 `setSharing` 을 부른다(장당 드라이브 왕복 2회). 폴더에 한 번만 걸면
+   2N → N+1 이 되는데, 매장 파일의 셀 이미지가 쓰는 주소(photoUrl → lh3 CDN)가 그 파일을
+   공개로 내주느냐가 관건이다. 두 번 헛다리를 짚었다:
+     ㆍUrlFetchApp 으로 받아 보려다 실패 — 그 권한이 이 배포에 승인된 적이 없었다(응답 -1).
+       ★확인 못 한 것을 '안 된다'로 단정했다.★
+     ㆍ1x1 PNG 로 시험 — lh3 가 400을 냈다. 미리보기를 만들 수 없는 그림이었다.
+   그래서 ★진짜 사진 크기의 JPEG 두 장★ 으로, 한 장은 폴더 권한만·한 장은 파일에도 공유를 걸어
+   나란히 놓고 사람이 시크릿 창으로 비교한다. 대조군이 있어야 결과를 읽을 수 있다.
+
+   ★실매장 사진·시트·점수는 하나도 건드리지 않는다.★ */
+function fnPhotoShareTest(ctx, payload) {
+  if (!PHOTO_FOLDER_ID) return err('SERVER_ERROR', '사진 폴더 ID가 비어 있습니다.');
+  const root = DriveApp.getFolderById(PHOTO_FOLDER_ID);
+
+  /* 뒷정리 — 시험으로 만든 폴더를 전부 휴지통으로.
+     ★사진 폴더 바로 아래만 훑었더니 못 찾았다★ (2026-08-27 실제로 그랬다 — 0개라고 답해 놓고
+       사진은 그대로 열렸다). 그래서 드라이브 전체에서 이름으로 찾는 쪽을 정본으로 삼고,
+       바로 아래 훑기는 보조로 남긴다. 무엇이 보였는지도 함께 돌려준다 —
+       또 0개가 나오면 ★왜 못 찾았는지★ 를 알 수 있어야 한다(그것이 이번 사고였다). */
+  if (payload && payload.cleanup === true) {
+    const done = [], fail = [], seen = [];
+    function kill(f) {
+      const nm = f.getName();
+      if (nm.indexOf('_공유시험_') !== 0) return;
+      if (done.indexOf(nm) >= 0) return;
+      try { f.setTrashed(true); done.push(nm); } catch (e) { fail.push(nm + ' — ' + String(e).slice(0, 60)); }
+    }
+    try {
+      const q = DriveApp.searchFolders('title contains "_공유시험_" and trashed = false');
+      while (q.hasNext()) kill(q.next());
+    } catch (e) { fail.push('이름으로 찾기 실패: ' + String(e).slice(0, 80)); }
+    try {
+      const it = root.getFolders();
+      while (it.hasNext()) { const f = it.next(); seen.push(f.getName()); kill(f); }
+    } catch (e) { fail.push('사진 폴더 아래 훑기 실패: ' + String(e).slice(0, 80)); }
+
+    /* ★파일 ID를 알면 그것으로 잡는다★ (2026-08-27) — 이름으로도, 사진 폴더 아래 훑기로도
+       못 찾는 일이 실제로 있었다(휴지통에 있거나, 부모가 예상과 다르거나).
+       ID 는 시험 결과에 그대로 찍혀 있으므로 이 길이 가장 확실하다.
+       ★그 파일이 어느 폴더에 들어 있는지도 함께 돌려준다★ — 못 찾은 이유를 알아야 한다. */
+    const ids = (payload.ids && payload.ids.length) ? payload.ids : [];
+    ids.forEach(function (id) {
+      try {
+        const f = DriveApp.getFileById(String(id));
+        const ps = [];
+        const pit = f.getParents();
+        while (pit.hasNext()) {
+          const pf = pit.next();
+          ps.push(pf.getName());
+          if (pf.getName().indexOf('_공유시험_') === 0) {
+            try { pf.setTrashed(true); if (done.indexOf(pf.getName()) < 0) done.push(pf.getName() + ' (폴더)'); }
+            catch (e) { fail.push(pf.getName() + ' 폴더 — ' + String(e).slice(0, 60)); }
+          }
+        }
+        seen.push('파일 ' + f.getName() + ' 의 부모: ' + (ps.join(' / ') || '(없음)') +
+          ' · 휴지통여부=' + f.isTrashed());
+        f.setTrashed(true);
+        done.push(f.getName() + ' (파일)');
+      } catch (e) { fail.push('ID ' + id + ' — ' + String(e).slice(0, 80)); }
+    });
+
+    const log = [];
+    log.push(done.length ? ('휴지통으로 보냈습니다 (' + done.length + '개):') : '지울 시험 폴더를 찾지 못했습니다.');
+    done.forEach(function (n) { log.push('  · ' + n); });
+    fail.forEach(function (n) { log.push('  ★못 지움★ ' + n); });
+    log.push('사진 폴더 바로 아래에 있던 폴더 ' + seen.length + '개: ' + (seen.join(' / ') || '(없음)'));
+    return { ok: true, cleaned: done.length, failed: fail, seen: seen, log: log };
+  }
+
+  const JPG = [
+    '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'
+  ].join('');
+  const log = [];
+  const folder = root.createFolder('_공유시험_' + nowIso());
+  folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  log.push('임시 폴더에만 「링크 있는 사람 보기」를 걸었습니다: ' + folder.getName());
+
+  function put(name, alsoFile) {
+    const f = folder.createFile(Utilities.newBlob(Utilities.base64Decode(JPG), 'image/jpeg', name));
+    if (alsoFile) f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    let acc = '';
+    try { acc = String(f.getSharingAccess()); } catch (e) { acc = '(못 읽음)'; }
+    return { url: photoUrl(f.getId()), acc: acc };
+  }
+  const A = put('A_폴더권한만.jpg', false);      // 시험군 — 파일에는 공유를 안 건다
+  const B = put('B_파일에도걸음.jpg', true);      // 대조군 — 지금 방식과 똑같이
+
+  log.push('');
+  log.push('★시크릿 창(Ctrl+Shift+N)으로 아래 두 주소를 열어 비교해 주세요★');
+  log.push('');
+  log.push('A) 폴더 권한만 (파일에는 공유 안 걸었음) — 파일이 말하는 상태: ' + A.acc);
+  log.push('   ' + A.url);
+  log.push('');
+  log.push('B) 지금 방식 그대로 (파일에도 공유 걸었음) — 대조군: ' + B.acc);
+  log.push('   ' + B.url);
+  log.push('');
+  log.push('읽는 법');
+  log.push('  A·B 둘 다 파란 사진이 보이면      → ★폴더 공유로 바꿔도 됩니다★');
+  log.push('  B만 보이고 A는 안 보이면          → 폴더 권한만으로는 부족합니다. 지금 방식 유지');
+  log.push('  ★둘 다 안 보이면★                 → 시험 방법이 잘못된 것입니다(권한 문제가 아님)');
+  log.push('                                      잠시 뒤 다시 열어 보고, 그래도면 이 시험은 접습니다');
+  log.push('');
+  log.push('확인이 끝나면 치워 주세요:');
+  log.push("  await Api.call('admin.photoShareTest', {cleanup:true})");
+
+  return { ok: true, A: A, B: B, folder: folder.getName(), log: log };
 }
 
 /* ★연속된 줄은 한 번에 지운다★ (2026-08-26)
@@ -5302,6 +5577,9 @@ function fnUndoSubmit(ctx, payload) {
   const tab = yymm(date);
   const doQsc = (kind !== 'shopper'), doShop = (kind !== 'qsc');
   const log = [], done = [];
+  /* 개선요청 행을 끝내 못 지운 채 끝났는가 — 그 상태로 새 제출을 얹으면 두 벌이 된다.
+     부르는 쪽(guardResubmit)이 이 값을 보고 저장을 멈춘다. */
+  let dirty = false;
 
   /* 지울 행을 먼저 전부 모은다 — 미리보기와 실제 실행이 같은 판단을 쓰게 하기 위해서다. */
   function pick(shName, dateCol, storeCol, timeCol) {
@@ -5421,13 +5699,23 @@ function fnUndoSubmit(ctx, payload) {
       const tabDate = dateOfCell(labelValue(labelMap(sh2),
         ['방문일', '방문일자', '점검일', '점검일자']).v, fileTz(ss2));
       if (doQsc && round.monthLeft === 0 && tabDate === date) {
-        setByLabel(sh2, '방문일', '');
-        setByLabel(sh2, '방문시간', '');
-        parts.push('방문일·방문시간을 비웠습니다');
+        /* ★개선요청을 먼저 지우고, 성공했을 때만 방문일을 지운다★ (2026-08-27)
+           순서가 반대였다. 방문일을 먼저 비우면 — 개선요청을 못 지웠을 때 —
+           다음 제출이 '다른 회차'로 보고 남은 줄 ★아래에 이어 붙인다★.
+           그러면 개선요청이 두 벌이 되고 개선율이 반토막 난 채 종합점수에 들어간다.
+           방문일을 남겨 두면 다음 제출이 '같은 회차'로 보고 덮어쓰기를 시도하다가
+           매장이 적은 것을 보고 스스로 멈춘다 — 안전한 쪽으로 실패한다. */
         const w = wipeImprove(sh2);
-        if (w.ok && w.n) parts.push('개선요청 ' + w.n + '행을 비웠습니다');
-        else if (w.ok) parts.push('개선요청 행은 원래 없었습니다');
-        else parts.push('★개선요청 ' + (w.n || 0) + '행은 손으로 지우십시오★ — ' + w.why);
+        if (w.ok) {
+          setByLabel(sh2, '방문일', '');
+          setByLabel(sh2, '방문시간', '');
+          parts.push('방문일·방문시간을 비웠습니다');
+          parts.push(w.n ? ('개선요청 ' + w.n + '행을 비웠습니다') : '개선요청 행은 원래 없었습니다');
+        } else {
+          dirty = true;
+          parts.push('★개선요청 ' + (w.n || 0) + '행을 지우지 못했습니다★ — ' + w.why +
+            ' · 방문일도 그대로 두었습니다(다음 제출이 이어 붙지 않게)');
+        }
       } else if (doQsc) {
         parts.push('★개선요청 행은 손으로 지우십시오★ — ' + (round.monthLeft
           ? '그 달에 QSC ' + round.monthLeft + '건이 남아 어느 줄이 이 제출 것인지 가릴 수 없습니다'
@@ -5458,7 +5746,7 @@ function fnUndoSubmit(ctx, payload) {
   dropDashCache(date);
   dropStoreCache(store, tab);
   auditLog(ctx, 'admin.undoSubmit', store, '성공', '', date + (time ? ' ' + time : '') + ' / ' + kind + ' / ' + done.join(' · '));
-  return { ok: true, preview: false, store: store, date: date, plan: log, done: done };
+  return { ok: true, preview: false, store: store, date: date, plan: log, done: done, dirty: dirty };
 }
 
 /* 같은 일을 관리자 화면에서도 할 수 있게 — 편집기 함수 목록이 283개라 고르기가 어렵고,
@@ -5483,6 +5771,30 @@ function fnUndoSubmit(ctx, payload) {
 
    ★모르는 이름·엉뚱한 값은 거절한다★ — 조용히 무시하면 껐다고 믿는 채로 계속 써진다.
      이 액션이 막으려는 사고가 바로 그것이라, 여기서 조용하면 안 된다. */
+function fnTidyLog(ctx, payload) {
+  const ss = authSS();
+  if (!ss) return err('SERVER_ERROR', '인증 시트를 열지 못했습니다.');
+  const sh = ss.getSheetByName(AUTH_LOG_SHEET);
+  if (!sh) return err('SERVER_ERROR', '감사로그 탭이 없습니다.');
+  const before = Math.max(0, sh.getLastRow() - 1);
+  let moved = 0;
+  if (payload && payload.run === true) {
+    TIDY_RUNNING = true;                       // 이 안에서 남기는 로그가 정리를 또 부르지 않게
+    try { moved = tidyAuditLog(sh, ss); } finally { TIDY_RUNNING = false; }
+  }
+  const after = Math.max(0, sh.getLastRow() - 1);
+  return {
+    ok: true, keepDays: AUDIT_KEEP_DAYS, before: before, after: after, deleted: moved,
+    lastTidy: PROPS.getProperty('LOG_TIDY_DAY') || '(아직 없음)',
+    log: [
+      '감사로그 보관 기간: ' + AUDIT_KEEP_DAYS + '일',
+      '마지막 자동 정리: ' + (PROPS.getProperty('LOG_TIDY_DAY') || '(아직 없음)'),
+      '지금 줄 수: ' + before + (payload && payload.run === true ? (' → ' + after + '  (' + moved + '줄 삭제)') : ''),
+      (payload && payload.run === true) ? '' : '지금 바로 정리하려면 {run:true} 를 넣어 다시 부르십시오.',
+    ].filter(String),
+  };
+}
+
 function fnSwitches(ctx, payload) {
   const p = payload || {};
   const want = {};
