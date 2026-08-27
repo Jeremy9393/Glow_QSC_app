@@ -665,6 +665,14 @@
         /* ★매장 파일 기록 결과를 반드시 사람에게 보인다★ (2026-08-18)
            서버는 덮어쓰기·잘림·거절을 storeFile에 담아 보내는데 화면이 읽지 않고 있었다.
            '저장 완료'만 뜨면 점검자는 다 들어간 줄 안다 — 조용한 실패가 가장 나쁘다. */
+        /* ★앞 제출을 정리하며 한 일을 반드시 보인다★ (2026-08-27) — 덮어쓰기로 저장한 경우
+           서버가 undone 에 그 목록을 담아 준다. ★가 붙은 줄은 사람이 손으로 마무리해야 하는 것이다. */
+        if (r.undone && r.undone.length) {
+          const star = r.undone.filter(function (t) { return String(t).indexOf('★') >= 0; });
+          done += '\n\n[앞 제출을 정리했습니다]';
+          (star.length ? star : r.undone).forEach(function (t) { done += '\n   · ' + t; });
+          if (star.length) done += '\n   ★ 표시가 있는 줄은 손으로 마무리해 주세요.';
+        }
         const sf = r.storeFile;
         /* ★밸브가 잠겨 있으면 반드시 말한다★ (2026-08-26)
            종전에는 서버가 {ok:true, skipped:true}를 보내는데 화면이 ok만 보고 넘어갔다.
