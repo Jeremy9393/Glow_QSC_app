@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v69', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v70', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -2823,7 +2823,12 @@ function guardResubmit(ss, kind, payload, ctx, doneOut) {
   prev.forEach(function (p) { if (days.indexOf(p.date) < 0) days.push(p.date); });
 
   for (let i = 0; i < days.length; i++) {
-    const u = fnUndoSubmit(ctx, { store: payload.store, date: days[i], kind: kind, apply: true });
+    /* ★손님이 낸 설문은 건드리지 않는다★ (2026-08-27)
+       담당자가 자기 MS 를 다시 내는 것인데, 그 달에 손님이 낸 설문까지 지워지면 안 된다.
+       시트 줄 삭제는 휴지통이 없어 되찾을 수 없다. '입력경로' 칸으로 담당자 것만 고른다.
+       (QSC 에는 손님 경로가 없으므로 route 를 주지 않는다.) */
+    const u = fnUndoSubmit(ctx, { store: payload.store, date: days[i], kind: kind, apply: true,
+      route: kind === 'shopper' ? '관리자 입력' : '' });
     if (u && u.done && doneOut) doneOut.push.apply(doneOut, u.done);
     if (!u || u.ok !== true) {
       return { ok: false, code: 'SERVER_ERROR',
@@ -2832,9 +2837,11 @@ function guardResubmit(ss, kind, payload, ctx, doneOut) {
           ' — 저장하지 않았습니다. 관리자 도구에서 남은 상태를 확인해 주세요.' };
     }
     if (u.dirty) {
+      /* ★이제 '매장이 적어서' 멈추는 일은 없다★ (2026-08-27) — 매장 몫도 함께 지운다.
+         여기까지 오는 것은 개선요청 표 자체를 읽지 못한 경우뿐이다(머리글이 바뀌었거나 탭이 망가짐). */
       return { ok: false, code: 'CONFLICT', blocked: true,
-        error: days[i] + ' 의 개선요청을 지우지 못했습니다 (매장이 이미 적은 줄이 있습니다).' +
-          ' 저장하지 않았습니다 — 매장 파일에서 정리하신 뒤 다시 제출해 주세요.' };
+        error: days[i] + ' 의 개선요청 표를 지우지 못했습니다 — ' + (u.why || '표를 읽지 못했습니다') +
+          ' 저장하지 않았습니다 — 매장 파일의 개선요청 표를 확인해 주세요.' };
     }
   }
   return null;
@@ -5343,18 +5350,43 @@ function improveScan(sh) {
 
 function wipeImprove(sh) {
   const s = improveScan(sh);
-  if (!s.ok) return { ok: false, n: 0, why: s.why };
-  if (!s.filled) return { ok: true, n: 0 };
-  if (s.touched) {
-    return { ok: false, n: s.filled, why: '매장이 이미 개선 내용을 적은 줄이 ' + s.touched + '건 있습니다' };
-  }
+  if (!s.ok) return { ok: false, n: 0, touched: 0, why: s.why };
+  if (!s.filled) return { ok: true, n: 0, touched: 0 };
+
+  /* ★매장이 적은 답도 함께 지운다★ (2026-08-27 담당자 결정)
+
+       "내가 되돌리기를 했다는건 내용을 다시 써야한다는 건데
+        매장이 작성한 내용을 남길 필요가있나? 그냥 매장것도 리셋되고
+        내가 매장에 다시 써달라고 요청하면 되는거 아닌가"
+
+     종전에는 매장이 한 글자라도 적었으면 ★아무것도 안 지우고 멈췄다★(ok:false).
+     그런데 화면 안내는 이미 「덮어쓰면 그 내용도 함께 지워집니다」로 바뀌어 있었다.
+     ★사람이 그 문장을 읽고 [덮어씁니다]를 눌러도 서버가 거절하는 어긋난 상태★였다.
+     되돌리기는 「그 회차를 없던 일로」 하는 것이므로 매장 몫도 함께 지운다.
+     ⚠지우기 전에 반드시 사람에게 보여 준다 — improveBlocked 가 그 몫이고,
+       되묻기 창(api.js askOverwrite)과 미리보기가 '매장이 적은 N건도 함께 지워집니다'를 편다. */
   const bcW = grid(sh, s.headRow + 1, s.newFmt ? s.IC.due : 2, s.filled, s.newFmt ? 1 : 2);
   const dW = grid(sh, s.headRow + 1, 4, s.filled, 1);
   const jW = grid(sh, s.headRow + 1, 10, s.filled, 1);
+  /* K~O = 매장 몫(예정일·완료일·개선 후 사진 등). improveScan 이 '매장이 손댔는가'를
+     판정할 때 보는 칸과 ★같은 범위★여야 한다(그 함수의 9~13번 자리 = K~O). */
+  const koW = grid(sh, s.headRow + 1, 11, s.filled, 5);
   if (bcW) bcW.clearContent();
   if (dW) dW.clearContent();
   if (jW) jW.clearContent();
-  return { ok: true, n: s.filled };
+  if (koW) koW.clearContent();
+
+  /* 비고 뒤 검수·재제출기한·감점제외·이월 — 10월 서식에만 있는 칸이다.
+     남겨 두면 다음 회차의 ★엉뚱한 줄★에 옛 검수 흔적이 붙는다(같은 자리에 다시 채워지므로).
+     열 번호를 세지 않고 impCols 가 머리글에서 찾아 준 것을 쓴다. */
+  let extra = 0;
+  [s.IC && s.IC.audit, s.IC && s.IC.redo, s.IC && s.IC.waive, s.IC && s.IC.roll].forEach(function (c) {
+    if (!c) return;
+    const r = grid(sh, s.headRow + 1, c, s.filled, 1);
+    if (r) { r.clearContent(); extra++; }
+  });
+
+  return { ok: true, n: s.filled, touched: s.touched, extra: extra };
 }
 
 /* ★지우기 전에 먼저 본다★ (2026-08-27) — 매장이 개선요청에 답을 적어 두었는가.
@@ -5576,37 +5608,48 @@ function fnUndoSubmit(ctx, payload) {
   const log = [], done = [];
   /* 개선요청 행을 끝내 못 지운 채 끝났는가 — 그 상태로 새 제출을 얹으면 두 벌이 된다.
      부르는 쪽(guardResubmit)이 이 값을 보고 저장을 멈춘다. */
-  let dirty = false;
+  let dirty = false, dirtyWhy = '';
 
-  /* 지울 행을 먼저 전부 모은다 — 미리보기와 실제 실행이 같은 판단을 쓰게 하기 위해서다. */
-  function pick(shName, dateCol, storeCol, timeCol) {
+  /* 지울 행을 먼저 전부 모은다 — 미리보기와 실제 실행이 같은 판단을 쓰게 하기 위해서다.
+
+     routeCol/routeWant: '입력경로' 칸으로 ★누가 낸 것인지★ 가린다 (2026-08-27).
+       종전에는 매장명+날짜만 봤다. 그래서 담당자가 MS 를 다시 내면 그 달 ★손님이 낸 설문까지★
+       함께 지워졌다 — 시트 줄 삭제는 휴지통이 없어 되찾을 수 없다.
+       시트에 '입력경로'('고객 직접'/'관리자 입력') 칸이 원래부터 있는데 안 보고 있었다.
+     leftRows: 지우지 않고 그 달에 ★남는★ 줄의 값. 지운 뒤 점수를 다시 계산할 때 쓴다. */
+  function pick(shName, dateCol, storeCol, timeCol, routeCol, routeWant) {
     const sh = ss.getSheetByName(shName);
-    if (!sh) return { sh: null, rows: [], monthLeft: 0 };
+    if (!sh) return { sh: null, rows: [], monthLeft: 0, leftRows: [] };
     const last = sh.getLastRow();
-    if (last < 2) return { sh: sh, rows: [], monthLeft: 0 };
+    if (last < 2) return { sh: sh, rows: [], monthLeft: 0, leftRows: [] };
     const rng = grid(sh, 2, 1, last - 1, sh.getLastColumn());
     const vals = rng ? rng.getValues() : [];
-    const rows = [];
+    const rows = [], leftRows = [];
     let monthLeft = 0;
     for (let i = 0; i < vals.length; i++) {
       if (normStore(vals[i][storeCol - 1]) !== key) continue;
       const d = dateOfCell(vals[i][dateCol - 1], tz);
       const sameDay = (d === date);
       const sameTime = (!time || !timeCol) ? true : (timeKeyOf(vals[i][timeCol - 1], tz) === time);
-      if (sameDay && sameTime) rows.push(i + 2);
-      else if (d.slice(0, 7) === ym) monthLeft++;   // 같은 달에 남을 자료
+      const routeOk = (!routeCol || !routeWant) ? true
+        : (String(vals[i][routeCol - 1] == null ? '' : vals[i][routeCol - 1]).trim() === routeWant);
+      if (sameDay && sameTime && routeOk) rows.push(i + 2);
+      else if (d.slice(0, 7) === ym) { monthLeft++; leftRows.push(vals[i]); }   // 같은 달에 남을 자료
     }
-    return { sh: sh, rows: rows, monthLeft: monthLeft };
+    return { sh: sh, rows: rows, monthLeft: monthLeft, leftRows: leftRows };
   }
 
-  const round = doQsc ? pick('QSC_회차', 2, 4, 3) : { sh: null, rows: [], monthLeft: 0 };
-  const detail = doQsc ? pick('QSC_상세', 1, 3, 2) : { sh: null, rows: [], monthLeft: 0 };
-  const shop = doShop ? pick('쇼퍼_응답', 2, 4, 0) : { sh: null, rows: [], monthLeft: 0 };
+  /* ★route★ — 없으면 그 날짜 쇼퍼 줄을 전부 지운다(관리자 도구의 '통째로 되돌리기').
+     '관리자 입력' 을 주면 담당자가 낸 것만 지운다 — 재제출 덮어쓰기가 이 길로 온다. */
+  const route = (p.route === '관리자 입력' || p.route === '고객 직접') ? p.route : '';
+  const round = doQsc ? pick('QSC_회차', 2, 4, 3) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
+  const detail = doQsc ? pick('QSC_상세', 1, 3, 2) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
+  const shop = doShop ? pick('쇼퍼_응답', 2, 4, 0, 8, route) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
   /* ★쇼퍼_비고도 그 제출이 쓴 것이다★ (2026-08-26) — 종전에는 빼먹어서, 되돌린 뒤에도
      문항별 이유·비고가 시트에 남았다. 점수는 쇼퍼_응답에서만 계산하므로 점수는 안 틀렸지만,
      '되돌렸다'고 해 놓고 기록이 남아 있는 것은 그 자체로 틀린 상태다. */
-  const shopMemo = doShop ? pick('쇼퍼_비고', 2, 4, 0) : { sh: null, rows: [], monthLeft: 0 };
-  const na = (doQsc && time === '') ? pick('NA프리셋', 3, 1, 0) : { sh: null, rows: [], monthLeft: 0 };
+  const shopMemo = doShop ? pick('쇼퍼_비고', 2, 4, 0, 5, route) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
+  const na = (doQsc && time === '') ? pick('NA프리셋', 3, 1, 0) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
 
   const hit = round.rows.length + detail.rows.length + shop.rows.length + shopMemo.rows.length + na.rows.length;
   log.push('QSC_회차 ' + round.rows.length + '건 · QSC_상세 ' + detail.rows.length +
@@ -5671,6 +5714,39 @@ function fnUndoSubmit(ctx, payload) {
     });
   }
 
+  /* ★지운 뒤 그 칸에 무엇을 넣을 것인가★ (2026-08-27)
+
+     종전에는 무조건 빈칸('')으로 만들었다. 그 달에 다른 제출이 남아 있어도 그랬다.
+     특히 CS 점수는 원래 「그 달에 들어온 쇼퍼 응답 ★전부의 평균★」인데(shopperMonthAvg),
+     그 평균 함수를 부르는 곳이 저장할 때 한 곳뿐이라 되돌릴 때는 다시 계산되지 않았다.
+     그래서 손님 설문 3건 중 하루치만 되돌려도 나머지 2건이 멀쩡히 있는데 CS 가 사라지고,
+     종합점수 수식이 「QSC·MS 둘 다 있어야 뜬다」라서 ★종합까지 안 뜬다★.
+
+     ⚠빈칸과 0점은 다르다. 통합시트 수식은
+         =IF(COUNT(BV,BX)<2,"", BV*0.6 + BX*0.3 + IF(BZ="",1,BZ)*0.1)
+       이라, MS 칸에 0 이 들어가면 COUNT 가 2가 되어 ★종합이 0점으로 계산되어 뜬다★.
+       빈칸이어야 종합도 빈칸이 된다. 그래서 「남은 게 있나」를 점수가 아니라
+       ★남은 줄 수(monthLeft)★ 로 가린다. */
+  function qscAfter() {
+    if (!round.sh || !round.leftRows.length) return '';       // 그 달에 QSC 가 안 남는다 → 빈칸
+    /* 저장 경로는 제출할 때마다 그 칸을 덮어쓴다 — 즉 「마지막에 낸 것이 이긴다」.
+       되돌린 뒤에도 같은 규칙으로, 남은 것 중 가장 나중에 낸 회차의 점수를 쓴다. */
+    let best = null, bestT = -1;
+    round.leftRows.forEach(function (v) {
+      const raw = v[0];                                       // 1열 제출시각
+      const t = (raw instanceof Date) ? raw.getTime() : Date.parse(String(raw || '')) || 0;
+      if (t >= bestT) { bestT = t; best = v; }
+    });
+    const sc = best ? best[5] : null;                         // 6열 QSC점수 (0~100)
+    return (typeof sc === 'number') ? sc / 100 : '';
+  }
+  function msAfter() {
+    if (!shop.sh || shop.monthLeft <= 0) return '';           // 그 달에 쇼퍼가 안 남는다 → 빈칸
+    /* ★줄을 지운 뒤에 불러야 한다★ — 이 함수는 시트를 다시 읽는다. */
+    const avg = shopperMonthAvg(shop.sh, store, date, tz);
+    return (typeof avg === 'number') ? avg / 100 : '';
+  }
+
   /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
   [round, detail, shop, shopMemo, na].forEach(function (t) {
     if (!t.sh || !t.rows.length) return;
@@ -5680,8 +5756,18 @@ function fnUndoSubmit(ctx, payload) {
     shopMemo.rows.length + na.rows.length) + '행 삭제');
   if (na.rows.length) dropNaCache();   // NA프리셋 줄을 지웠으면 캐시도 버린다
 
+  /* ★되돌리기도 저장과 같은 밸브를 본다★ (2026-08-27)
+
+     종전에는 이 함수 안에 밸브 검사가 ★한 줄도 없었다★. 저장 경로에는 있었다.
+     그래서 밸브가 잠긴 동안 「지우기는 되고 다시 쓰기는 막히는」 한쪽만 열린 상태였다 —
+     되돌리기가 점수를 지워 놓고, 새 제출은 밸브에 막혀 그 자리를 못 채운다.
+     밸브의 뜻은 「이 파일에 손대지 마라」이므로 지우는 것도 손대는 것이다. */
   const fileId = storeFileId(store);
-  if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
+  if (!STORE_FILE_WRITE) {
+    done.push('★매장 파일은 건드리지 않았습니다★ — 쓰기 밸브(STORE_FILE_WRITE)가 잠겨 있습니다.' +
+      ' 점수·방문일·개선요청 표가 그대로 남아 있습니다. 밸브를 열고 다시 되돌리셔야 합니다.');
+  }
+  else if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
   else {
     const ss2 = SpreadsheetApp.openById(fileId);
     const sh2 = ss2.getSheetByName(tab);
@@ -5689,15 +5775,20 @@ function fnUndoSubmit(ctx, payload) {
     else if (monthEmpty && dateOfCell(labelValue(labelMap(sh2), ['방문일', '방문일자', '점검일', '점검일자']).v, fileTz(ss2)) !== date) {
       /* ★탭의 방문일이 다르면 지우지 않는다★ — 응답 시트에서는 안 보이는 회차가 그 탭에
          들어 있다는 뜻이다(담당자가 손으로 만든 탭 등). 지우면 되돌릴 수 없다. */
-      if (doQsc) setByLabelAny(sh2, L_QSC, '');
-      if (doShop) setByLabelAny(sh2, L_MS, '');
-      done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 비웠습니다');
+      if (doQsc) setByLabelAny(sh2, L_QSC, qscAfter());
+      if (doShop) setByLabelAny(sh2, L_MS, msAfter());
+      done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 고쳤습니다');
     }
     else if (monthEmpty) { ss2.deleteSheet(sh2); done.push('매장 파일 ' + tab + ' 탭 삭제'); }
     else {
-      if (doQsc) setByLabelAny(sh2, L_QSC, '');
-      if (doShop) setByLabelAny(sh2, L_MS, '');
-      const parts = ['점수 칸을 비웠습니다'];
+      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfter() : '';
+      if (doQsc) setByLabelAny(sh2, L_QSC, qv);
+      if (doShop) setByLabelAny(sh2, L_MS, mv);
+      const parts = [(qv === '' && mv === '')
+        ? '점수 칸을 비웠습니다'
+        : ('점수 칸을 남은 자료로 다시 계산했습니다' +
+           (qv === '' ? '' : ' (QSC ' + round1(qv * 100) + '점)') +
+           (mv === '' ? '' : ' (MS ' + round1(mv * 100) + '점)'))];
       /* 방문일·방문시간·개선요청은 QSC가 쓴 것이다. 그 달에 QSC가 하나도 안 남고, 탭의 방문일이
          지금 되돌리는 날짜와 같을 때만 되돌린다 — 그 조건이면 표의 모든 줄이 이 제출 것이다. */
       const tabDate = dateOfCell(labelValue(labelMap(sh2),
@@ -5714,9 +5805,12 @@ function fnUndoSubmit(ctx, payload) {
           setByLabel(sh2, '방문일', '');
           setByLabel(sh2, '방문시간', '');
           parts.push('방문일·방문시간을 비웠습니다');
-          parts.push(w.n ? ('개선요청 ' + w.n + '행을 비웠습니다') : '개선요청 행은 원래 없었습니다');
+          parts.push(w.n
+            ? ('개선요청 ' + w.n + '행을 비웠습니다' +
+               (w.touched ? (' (매장이 적은 답 ' + w.touched + '건도 함께 지웠습니다 — 매장에 다시 요청하셔야 합니다)') : ''))
+            : '개선요청 행은 원래 없었습니다');
         } else {
-          dirty = true;
+          dirty = true; dirtyWhy = w.why || '';
           parts.push('★개선요청 ' + (w.n || 0) + '행을 지우지 못했습니다★ — ' + w.why +
             ' · 방문일도 그대로 두었습니다(다음 제출이 이어 붙지 않게)');
         }
@@ -5731,9 +5825,23 @@ function fnUndoSubmit(ctx, payload) {
 
   /* 통합시트 — writeDashboard 를 그대로 탄다. 빈 값을 쓰는 것뿐이라
      '올해인가·그 칸이 수식인가' 두 검사도 똑같이 걸린다. */
-  if (DASHBOARD_ID) {
-    if (doQsc) { const a = writeDashboard(store, date, '', 0); done.push('통합시트 QSC 칸: ' + (a.ok ? a.cell + ' 비움' : a.error)); }
-    if (doShop) { const b = writeDashboard(store, date, '', 2); done.push('통합시트 MS 칸: ' + (b.ok ? b.cell + ' 비움' : b.error)); }
+  if (DASHBOARD_ID && !DASHBOARD_WRITE) {
+    done.push('★통합시트는 건드리지 않았습니다★ — 쓰기 밸브(DASHBOARD_WRITE)가 잠겨 있습니다.' +
+      ' 그 달 점수 칸이 그대로 남아 있습니다.');
+  }
+  else if (DASHBOARD_ID) {
+    if (doQsc) {
+      const v = qscAfter();
+      const a = writeDashboard(store, date, v, 0);
+      done.push('통합시트 QSC 칸: ' + (a.ok
+        ? (a.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (남은 자료로 다시 계산)'))) : a.error));
+    }
+    if (doShop) {
+      const v = msAfter();
+      const b = writeDashboard(store, date, v, 2);
+      done.push('통합시트 MS 칸: ' + (b.ok
+        ? (b.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (그 달 남은 ' + shop.monthLeft + '건 평균)'))) : b.error));
+    }
   }
   /* ★지우지 않고 휴지통으로 보낸다★ — 되돌리기를 잘못 눌렀을 때 되찾을 수 있어야 한다
      (구글 드라이브 휴지통 30일). 이 저장소의 "코드가 사진을 지우지 않는다" 정책은
@@ -5750,7 +5858,7 @@ function fnUndoSubmit(ctx, payload) {
   dropDashCache(date);
   dropStoreCache(store, tab);
   auditLog(ctx, 'admin.undoSubmit', store, '성공', '', date + (time ? ' ' + time : '') + ' / ' + kind + ' / ' + done.join(' · '));
-  return { ok: true, preview: false, store: store, date: date, plan: log, done: done, dirty: dirty };
+  return { ok: true, preview: false, store: store, date: date, plan: log, done: done, dirty: dirty, why: dirtyWhy };
 }
 
 /* 같은 일을 관리자 화면에서도 할 수 있게 — 편집기 함수 목록이 283개라 고르기가 어렵고,
