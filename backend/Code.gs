@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v59', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v60', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -2549,20 +2549,45 @@ function legacyConfig() {
 }
 
 // 매장별 NA 프리셋 (지난 회차 NA 문항 번호). only가 배열이면 그 매장만 담는다.
+/* ★한 번 읽어 캐시한다★ (2026-08-27) — 화면에 들어올 때마다 부르는 config.get 이 이 시트를
+   매번 새로 읽고 있었다. 바로 아래 displayStores() 에는 캐시가 있는데 여기만 없었다.
+   ★캐시에는 전 매장을 담고 걸러내는 것은 메모리에서 한다★ — only 별로 키를 나누면 같은 자료가
+   여러 벌 쌓이고, 무효화할 때 하나를 빠뜨리기 쉽다.
+   ★제출·되돌리기가 이 시트를 고치므로 그때 dropNaCache() 로 지운다★ — 안 지우면 방금 낸 회차의
+   NA가 다음 점검 제안에 10분간 안 반영된다(그 제안이 이 자료의 유일한 쓰임이다).
+   결과는 종전과 같다: only 를 주면 그 매장만, 안 주면 전부. */
 function naPresets(only) {
-  const out = {};
+  const key = 'cfg:v' + epoch() + ':na';
+  const cache = CacheService.getScriptCache();
+  let all = null;
   try {
-    const ns = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName('NA프리셋');
-    if (!ns) return out;
-    const nv = ns.getDataRange().getValues();
-    for (let i = 1; i < nv.length; i++) {
-      if (!nv[i][0]) continue;
-      const name = normStore(nv[i][0]);
-      if (only && only.indexOf(name) < 0) continue;
-      out[name] = String(nv[i][1] || '').split(',').filter(String).map(Number);
-    }
-  } catch (e) { /* 프리셋 없어도 config는 정상 반환 */ }
+    const hit = cache.get(key);
+    if (hit) all = JSON.parse(hit);
+  } catch (e) { all = null; }
+
+  if (!all) {
+    all = {};
+    try {
+      const ns = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName('NA프리셋');
+      /* ★시트가 없으면 캐시하지 않는다★ — 빈 값을 담아 두면 시트를 만든 뒤 10분간 안 보인다 */
+      if (!ns) return {};
+      const nv = ns.getDataRange().getValues();
+      for (let i = 1; i < nv.length; i++) {
+        if (!nv[i][0]) continue;
+        all[normStore(nv[i][0])] = String(nv[i][1] || '').split(',').filter(String).map(Number);
+      }
+      try { cache.put(key, JSON.stringify(all), 600); } catch (e) { /* 너무 크면 캐시만 건너뛴다 */ }
+    } catch (e) { return {}; }   // 프리셋을 못 읽어도 config 는 정상 반환한다
+  }
+
+  if (!only) return all;
+  const out = {};
+  Object.keys(all).forEach(function (k) { if (only.indexOf(k) >= 0) out[k] = all[k]; });
   return out;
+}
+
+function dropNaCache() {
+  try { CacheService.getScriptCache().remove('cfg:v' + epoch() + ':na'); } catch (e) { }
 }
 
 /* 통합시트 [데이터]의 '표시 매장' 목록 — 숨김 행과 소계·합계 행을 뺀 것.
@@ -3048,6 +3073,7 @@ function saveQsc(ss, p, ctx) {
     }
     if (found > 0) naSheet.getRange(found, 2, 1, 2).setValues([safeRow([naNos, p.date])]);
     else naSheet.appendRow(safeRow([p.store, naNos, p.date]));
+    dropNaCache();   // 방금 고쳤으니 캐시를 버린다 (안 그러면 10분간 옛 프리셋을 제안한다)
   } catch (err) { /* 프리셋 실패는 저장에 영향 없음 */ }
 
   // ②③ 연동 기록 — 실패해도 원본 저장은 유지하고 결과만 알림
@@ -5370,6 +5396,7 @@ function fnUndoSubmit(ctx, payload) {
   });
   done.push('응답 시트 ' + (round.rows.length + detail.rows.length + shop.rows.length +
     shopMemo.rows.length + na.rows.length) + '행 삭제');
+  if (na.rows.length) dropNaCache();   // NA프리셋 줄을 지웠으면 캐시도 버린다
 
   const fileId = storeFileId(store);
   if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
