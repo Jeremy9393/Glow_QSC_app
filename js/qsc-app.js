@@ -640,7 +640,7 @@
          하루에 여러 매장을 도는 날 매장을 잘못 고르면 멀쩡한 매장 자료가 그대로 사라졌다.
          ★매장 확인을 먼저 권하는 문구를 넣는다★ — '덮어쓸까요?'만 물으면 사람은 그냥 예를 누른다. */
       if (r && !r.ok && r.code === 'CONFLICT' && r.existing) {
-        if (!Api.askOverwrite(payload.store, r.existing)) {
+        if (!Api.askOverwrite(payload.store, r.existing, r.storeWrote)) {
           btn.disabled = false; btn.textContent = '제출';
           return;   // 작성한 내용은 그대로 남는다 — 매장만 다시 고르면 된다
         }

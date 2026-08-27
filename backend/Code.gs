@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v68', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v69', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -2797,33 +2797,30 @@ function guardResubmit(ss, kind, payload, ctx, doneOut) {
   const prev = prevSubmitsOf(ss, kind, payload && payload.store, payload && payload.date);
   if (!prev.length) return null;                       // 이번 달 첫 제출 — 묻지 않는다
   if (!(payload && payload.overwrite === true)) {
-    return {
+    /* ★매장이 이미 적은 답이 있으면 그것도 알린다★ (2026-08-27) — 덮어쓰면 함께 지워진다.
+       되돌리기는 '그 회차를 없던 일로' 하는 것이라 그게 맞지만, ★모르고 누르면 안 된다★.
+       QSC 만 본다 — 개선요청은 QSC 가 내려보내는 것이다. */
+    let wrote = null;
+    if (kind !== 'shopper') {
+      const dd = [];
+      prev.forEach(function (p) { if (dd.indexOf(p.date) < 0) dd.push(p.date); });
+      for (let i = 0; i < dd.length; i++) {
+        const b = improveBlocked(payload.store, dd[i]);
+        if (b) { wrote = { date: dd[i], touched: b.touched, filled: b.filled }; break; }
+      }
+    }
+    const res = {
       ok: false, code: 'CONFLICT',
       error: '이 매장은 이번 달에 이미 제출된 기록이 있습니다.',
       existing: prev,
     };
+    if (wrote) res.storeWrote = wrote;
+    return res;
   }
   /* 사람이 '덮어씁니다'를 눌렀다 — 되돌리기를 그대로 태운다.
      그 달에 날짜가 여럿이면 날짜마다 한 번씩. */
   const days = [];
   prev.forEach(function (p) { if (days.indexOf(p.date) < 0) days.push(p.date); });
-
-  /* ★지우기 전에 먼저 본다★ (2026-08-27) — 매장이 개선요청에 답을 적어 두었으면
-     되돌리기가 그 줄을 못 지운다(매장 몫이라 일부러 멈춘다). 그 상태로 새 제출을 얹으면
-     ★개선요청이 두 벌로 쌓이고 개선율이 반토막 난 채 종합점수에 들어간다★.
-     ⚠종전에는 지우기를 시작한 뒤에야 알았다 — 그래서 '아무것도 저장하지 않았습니다'라고
-       답하면서 실은 앞 날짜를 이미 다 지운 상태였다. 검사를 앞으로 옮겨 그 상태를 없앤다. */
-  if (kind !== 'shopper') {
-    for (let i = 0; i < days.length; i++) {
-      const b = improveBlocked(payload.store, days[i]);
-      if (b) {
-        return { ok: false, code: 'CONFLICT', blocked: true,
-          error: '매장이 이미 개선 내용을 적은 개선요청이 ' + b.touched + '건 있습니다 (' + days[i] + ').' +
-            ' 덮어쓰면 그 내용이 엉뚱한 항목에 붙거나 개선요청이 두 벌로 쌓입니다.' +
-            ' ★아무것도 지우지 않았습니다★ — 매장 파일에서 그 줄을 정리하신 뒤 다시 제출해 주세요.' };
-      }
-    }
-  }
 
   for (let i = 0; i < days.length; i++) {
     const u = fnUndoSubmit(ctx, { store: payload.store, date: days[i], kind: kind, apply: true });
@@ -5642,9 +5639,16 @@ function fnUndoSubmit(ctx, payload) {
   /* ★방문일·방문시간·개선요청은 QSC가 쓴 것이다★ — 그래서 그 달에 QSC가 하나도 안 남을 때만
      되돌린다. 남아 있으면 그 줄들이 남은 회차의 것일 수 있어 가릴 방법이 없다(행에 회차 표식이 없다). */
   if (doQsc && !monthEmpty) {
+    /* 미리보기에서도 매장 파일을 한 번 열어 '매장이 적은 답이 몇 건인지'를 정확히 적는다.
+       ★지워지는 것을 지우기 전에 보여 주는 것이 이 화면의 존재 이유다.★ */
+    let wroteN = 0;
+    if (round.monthLeft === 0) {
+      const b = improveBlocked(store, date);
+      if (b) wroteN = b.touched;
+    }
     log.push(round.monthLeft === 0
-      ? ('매장 파일 ' + tab + ' 탭: 방문일·방문시간·개선요청 행도 함께 비웁니다 ' +
-        '(매장이 이미 개선 내용을 적은 줄이 있으면 그때는 멈추고 알려 드립니다)')
+      ? ('매장 파일 ' + tab + ' 탭: 방문일·방문시간·개선요청 행도 함께 비웁니다' +
+        (wroteN ? ('  ★매장이 적은 답 ' + wroteN + '건도 함께 지워집니다 — 다시 작성을 요청하셔야 합니다★') : ''))
       : ('매장 파일 ' + tab + ' 탭: ★개선요청 행은 그대로 둡니다★ — 그 달에 QSC ' + round.monthLeft +
         '건이 남아 어느 줄이 이 제출 것인지 가릴 수 없습니다'));
   }
