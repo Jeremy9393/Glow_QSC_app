@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=88">
+<link rel="stylesheet" href="css/app.css?v=89">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼.
@@ -100,7 +100,7 @@
 · [중지]한 계정은 즉시 접속이 막히고, [사용]으로 되돌리면 종전 비밀번호로 다시 들어옵니다.
 · 최근접속이 비어 있는 매장은 아직 앱을 쓰지 않고 있다는 뜻입니다.
 · 이번 달에 한 번도 들어오지 않은 계정은 흐리게 보입니다 — 시트 공유를 닫을 시점을 이 표로 판단합니다.
-· 감사로그의 전체 기록은 인증 시트의 [감사로그] 탭에 그대로 남아 있습니다.</p>
+· 감사로그의 전체 기록은 관리자 시트의 [감사로그] 탭에 쌓이며, 40일이 지난 것은 자동으로 정리됩니다.</p>
 </div>
 
 <!-- auth.js는 항상 가장 먼저. 이 화면은 본사 담당자 전용 도구라 세션이 없으면
@@ -111,10 +111,10 @@
      매장 계정이 이 주소를 직접 치면 accounts-app.js가 다 돈 뒤에야 막혔다. 키를 주면
      앱 스크립트가 실리기 전에 안내 후 홈으로 간다. 권한 사본이 없을 때(menus()===null)는
      guard가 막지 않으므로, accounts-app.js 쪽 판정도 그대로 남겨 두 겹으로 둔다. -->
-<script src="js/auth.js?v=88"></script>
+<script src="js/auth.js?v=89"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts');</script>
-<script src="js/api.js?v=88"></script>
-<script src="js/accounts-app.js?v=88"></script>
+<script src="js/api.js?v=89"></script>
+<script src="js/accounts-app.js?v=89"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

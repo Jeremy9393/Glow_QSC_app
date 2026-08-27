@@ -197,7 +197,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v76', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v77', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -658,7 +658,7 @@ function ensureAuthSheets() {
        ★2026-08-16부터 이 행은 장식이 아니라 자물쇠다★ — 표에 accounts 행이 하나라도 있으면
        can()이 그때부터 `*` 폴백을 받지 않는다(can() 주석). 즉 이 줄을 지우면 자물쇠가 풀린다. */
     sh.appendRow(['관리자', ADMIN_MENU, '○', '○', '계정 관리 · 감사로그 열람']);
-    sh.appendRow(['매장담당자', 'dashboard', '○', '', '전체 대시보드는 전 매장 열람']);
+    sh.appendRow(['매장담당자', 'dashboard', '○', '', '통합시트는 전 매장 열람']);
     /* store 읽기 하나가 '매장현황 조회'와 '홈 알림 배지(notify.badge)' 둘을 함께 연다 —
        배지의 재료가 개선요청 표이므로 권한 어휘를 새로 만들 이유가 없다. */
     sh.appendRow(['매장담당자', 'store', '○', '○', '자기 매장 개선보고 · 홈 알림 배지 (범위는 계정 D열이 정함)']);
@@ -2818,6 +2818,22 @@ function guardResubmit(ss, kind, payload, ctx, doneOut) {
     if (wrote) res.storeWrote = wrote;
     return res;
   }
+  /* ★누구인지 확인 안 된 요청은 덮어쓰기를 못 한다★ (2026-08-27)
+
+     덮어쓰기는 '먼저 지우고 새로 쓰는' 것이라, 이 문을 통과하면 남의 매장 그 달 기록이
+     통째로 사라진다. 그런데 qsc.submit·shopper.submit 은 legacy 라
+     ★AUTH_ENFORCE 를 끄면 토큰 없이 통과하고★(doPost 6단계), 무인증이면 그 다음
+     권한 게이트도 통째로 건너뛴다(`if (ctx.auth && spec.menu)` — 7단계).
+     그러면 서버 주소만 아는 사람이 store·date·overwrite 세 칸으로 한 달치를 지울 수 있다.
+     주소·매장 이름·overwrite 라는 낱말은 전부 공개 저장소에 있다.
+
+     ★첫 제출은 막지 않는다★ — 벽을 끈 목적(옛 경로로 업무를 계속하는 것)은 그대로 살린다.
+     막는 것은 '지우는 힘'뿐이다. 벽이 켜져 있는 동안에는 이 줄에 닿을 일이 없다. */
+  if (!(ctx && ctx.auth)) {
+    return { ok: false, code: 'CONFLICT', existing: prev,
+      error: '이 매장은 이번 달에 이미 제출된 기록이 있습니다. 덮어쓰려면 로그인이 필요합니다.' };
+  }
+
   /* 사람이 '덮어씁니다'를 눌렀다 — 되돌리기를 그대로 태운다.
      그 달에 날짜가 여럿이면 날짜마다 한 번씩. */
   const days = [];
@@ -6946,7 +6962,7 @@ function fnMonthClose(ctx, payload) {
 
   const already = monthClosedAt(ss, ym);
   if (already && !p.again) {
-    return err('CONFLICT', ym + '은 이미 ' + already + '에 확정했습니다. 다시 확정하려면 again:true 를 주십시오.');
+    return err('CONFLICT', ym + '은 이미 ' + already + '에 확정했습니다. 다시 확정하시려면 담당자에게 문의해 주세요.');
   }
 
   const tz = fileTz(ss);
