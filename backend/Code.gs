@@ -197,7 +197,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v75', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v76', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -5734,12 +5734,10 @@ function fnUndoSubmit(ctx, payload) {
     shopMemo.rows.length + na.rows.length) + '행 삭제');
   if (na.rows.length) dropNaCache();   // NA프리셋 줄을 지웠으면 캐시도 버린다
 
-  /* ★되돌리기도 저장과 같은 밸브를 본다★ (2026-08-27)
-
-     종전에는 이 함수 안에 밸브 검사가 ★한 줄도 없었다★. 저장 경로에는 있었다.
-     그래서 밸브가 잠긴 동안 「지우기는 되고 다시 쓰기는 막히는」 한쪽만 열린 상태였다 —
-     되돌리기가 점수를 지워 놓고, 새 제출은 밸브에 막혀 그 자리를 못 채운다.
-     밸브의 뜻은 「이 파일에 손대지 마라」이므로 지우는 것도 손대는 것이다. */
+  /* ★쓰기 밸브는 2026-08-27에 없어졌다★ — 되돌리기는 늘 매장 파일과 통합시트를 정리한다.
+     (한때 여기에 STORE_FILE_WRITE·DASHBOARD_WRITE 검사를 넣었다가, 밸브 자체가 사라지면서
+      함께 걷어냈다. 밸브를 다시 만들자는 이야기가 나오면 현재상황.md 의 「하지 말 것」을 볼 것.)
+     멈추는 수단은 「관리자 도구 → 제출 관리 → 제출 되돌리기」 하나다. */
   const fileId = storeFileId(store);
   if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
   else {
