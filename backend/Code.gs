@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v58', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v59', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -5196,6 +5196,32 @@ function wipeImprove(sh) {
   return { ok: true, n: filled };
 }
 
+/* ★연속된 줄은 한 번에 지운다★ (2026-08-26)
+   deleteRow 는 한 번 부를 때마다 구글에 다녀온다. QSC_상세는 회차마다 74줄이라
+   74번을 왕복했고, 그 7~22초가 그대로 사람이 기다리는 시간이 됐다.
+   ★덮어쓰기(재제출)도 이 함수를 그대로 타므로★ 제출 한 번이 30초를 넘길 수 있었다.
+
+   ★지우는 줄이 무엇인지는 이미 위에서 다 정해 두었다★ — 여기서는 보내는 방법만 바꾼다.
+   같은 줄들이 지워지고, 안 고른 줄은 하나도 건드리지 않는다.
+   ㆍ오름차순으로 세워 이어지는 것끼리 덩어리로 묶는다 (12,13,14 → 12부터 3줄)
+   ㆍ같은 줄이 두 번 들어와도 한 번만 센다
+   ㆍ★덩어리를 아래에서 위로 지운다★ — 위부터 지우면 남은 행 번호가 밀려 엉뚱한 줄이 지워진다
+     (한 줄씩 지우던 종전 코드가 내림차순으로 돌던 것과 같은 이유다) */
+function delRows(sh, rows) {
+  const s = [];
+  rows.slice().sort(function (a, b) { return a - b; }).forEach(function (r) {
+    if (!s.length || s[s.length - 1] !== r) s.push(r);      // 중복 제거
+  });
+  const runs = [];
+  for (let i = 0; i < s.length; i++) {
+    const last = runs.length ? runs[runs.length - 1] : null;
+    if (last && s[i] === last.at + last.n) last.n += 1;
+    else runs.push({ at: s[i], n: 1 });
+  }
+  for (let i = runs.length - 1; i >= 0; i--) sh.deleteRows(runs[i].at, runs[i].n);
+  return runs.length;
+}
+
 /* 그 매장의 제출 목록 — 최근 것부터. 되돌리기 화면이 '무엇을 지울지 고르게' 하려고 쓴다.
    ★지우지 않는다★ — 읽기만 한다. 실제 삭제는 아래 fnUndoSubmit이 날짜를 받았을 때만 한다. */
 function undoList(store) {
@@ -5340,7 +5366,7 @@ function fnUndoSubmit(ctx, payload) {
   /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
   [round, detail, shop, shopMemo, na].forEach(function (t) {
     if (!t.sh || !t.rows.length) return;
-    t.rows.slice().sort(function (a, b) { return b - a; }).forEach(function (r) { t.sh.deleteRow(r); });
+    delRows(t.sh, t.rows);
   });
   done.push('응답 시트 ' + (round.rows.length + detail.rows.length + shop.rows.length +
     shopMemo.rows.length + na.rows.length) + '행 삭제');
