@@ -701,10 +701,15 @@
     function paintPhoto() {
       if (it.afterPhoto && !pendingClear) {
         savedBox.style.display = '';
+        /* ★개선 후 사진도 눌러서 크게 볼 수 있게 한다★ (2026-08-27)
+           바로 위 개선요청 사진(본사가 올린 것)은 처음부터 눌리는데 이쪽만 안 눌렸다.
+           같은 화면에 나란히 있는 두 사진이 하나는 눌리고 하나는 안 눌리면 고장으로 읽힌다.
+           담당자가 검수(반려·승인)를 하려면 개선 후 사진을 크게 봐야 하는 것이 더 큰 이유다. */
         savedBox.innerHTML = '<label class="f">현재 개선 후 사진</label>' +
-          '<div class="thumbs"><img alt="개선 후 사진"></div>' +
+          '<div class="thumbs"><a target="_blank" rel="noopener"><img alt="개선 후 사진" title="누르면 크게 보입니다"></a></div>' +
           '<button type="button" class="miniBtn warn delPhoto">사진 삭제</button>';
         $('img', savedBox).src = it.afterPhoto;
+        $('a', savedBox).href = it.afterPhoto;
         $('.delPhoto', savedBox).onclick = function () {
           if (!confirm('개선 후 사진을 삭제할까요?\n저장을 눌러야 실제로 지워집니다.')) return;
           pendingClear = true;
