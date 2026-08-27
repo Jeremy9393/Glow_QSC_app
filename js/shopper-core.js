@@ -31,7 +31,11 @@ async function initShopperForm(opts) {
     { id: 'store', label: '매장명 *', full: true, control: '<select id="store"><option value="">방문한 매장 선택</option></select>' },
     { id: 'date', label: '방문날짜 *', control: '<input type="date" id="date">' },
     { id: 'time', label: '방문 시간 *', control: TimePick.html('time') },
-    { id: 'staff', label: '응대직원 설명 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 카운터 결제 응대 · 검은 뿔테 안경 직원">' },
+    /* ★이름·얼굴·체형은 받지 않는다★ (2026-08-27 담당자 결정)
+       손님이 적은 이 글은 시트에 그대로 남고 본사가 본다. 사람을 알아볼 수 있는 내용을
+       남길 이유가 없다 — 개선 지도에 필요한 것은 「언제·무슨 상황」이다.
+       여러 명이라 구분이 필요하면 역할 닉네임(카운터·홀)까지만 받는다. */
+    { id: 'staff', label: '응대 시간대·상황 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 카운터에서 결제 응대 · 카운터 직원">' },
     { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
     { id: 'demo', label: '연령대·성별 (작성자 본인) *', full: true, control: '<input type="text" id="demo" placeholder="직원이 아닌 본인 기준 — 예: 30대 여성">' },
   ];
@@ -121,13 +125,13 @@ async function initShopperForm(opts) {
     return state.answers[no] != null || !!(state.memos[no] || '').trim();
   }
 
-  // 방문 정보 필수 입력 항목 — 응대직원은 시간대·상황 설명까지 필수
+  // 방문 정보 필수 입력 항목 — 응대 칸은 ★시간대와 상황★ 을 받는다(이름·외모 아님)
   // pick: 드롭다운(고르는 칸) — 안내 문구를 '선택해 주세요'로 바꾼다
   const REQUIRED_META = [
     { id: 'store', label: '매장명' },
     { id: 'date', label: '방문날짜' },
     { id: 'time', label: '방문 시간', pick: true, focus: 'timeH', get: function () { return TimePick.get('time'); } },
-    { id: 'staff', label: '응대직원 설명' },
+    { id: 'staff', label: '응대 시간대·상황' },
     { id: 'order', label: '주문내역' },
     { id: 'demo', label: '연령대·성별' },
   ];
@@ -362,7 +366,7 @@ async function initShopperForm(opts) {
       const val = f.get ? f.get() : $('#' + f.id).value.trim();
       if (!val) {
         alert(withEulReul(f.label) + ' ' + (f.verb || (f.pick ? '선택해' : '입력해')) + ' 주세요.' +
-          (f.id === 'staff' ? '\n이름 또는 특징과 함께 응대 시간대·응대 상황을 적어 주세요.\n예) 14시경 카운터 결제 응대 · 검은 뿔테 안경 직원' : '') +
+          (f.id === 'staff' ? '\n언제·무슨 상황이었는지 적어 주세요. ★직원의 이름·얼굴·체형은 적지 않습니다.★\n여러 명이라 구분이 필요하면 카운터 직원·홀 직원처럼만 적어 주세요.\n예) 14시경 카운터에서 결제 응대 · 카운터 직원' : '') +
           (f.id === 'demo' ? '\n응대 직원이 아니라, 설문을 작성하시는 본인 기준으로 적어 주세요.' : ''));
         $('#' + (f.focus || f.id)).focus();
         return;
