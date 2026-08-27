@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v71', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v72', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3155,14 +3155,21 @@ function saveQsc(ss, p, ctx) {
     p.items.filter(function (it) { return it.value !== null; }).length, photoN,
     ctx ? ctx.id : '']));
 
-  const det = sheet(ss, 'QSC_상세', ['점검일자', '방문시간', '매장명', '코드', '문항번호', '구분', '문항', '등급구분', '개선필요건수', '상태', '감점', '비고', '사진']);
+  /* ★'NA사유'는 반드시 맨 뒤다★ (2026-08-27) — 사이에 끼우면 사진 칸이 13번째에서 밀리는데,
+     fnUndoSubmit 이 그 자리를 열 번호 13 으로 직접 읽어 사진 ID를 모은다. 밀리면 되돌리기가
+     사진을 못 찾고, 지워야 할 사진이 드라이브에 영영 남는다. */
+  const det = sheet(ss, 'QSC_상세', ['점검일자', '방문시간', '매장명', '코드', '문항번호', '구분', '문항', '등급구분', '개선필요건수', '상태', '감점', '비고', '사진', 'NA사유']);
+  /* sheet() 는 ★시트를 만들 때만★ 머리글을 쓴다 — 이미 있던 시트에는 이 칸 이름이 비어 있다.
+     한 번만 채워 준다(빈 칸일 때만 건드리므로 여러 번 돌아도 무해하다). */
+  try { if (det.getLastColumn() < 14) det.getRange(1, 14).setValue('NA사유'); } catch (e) { }
   const rows = p.items
     .filter(function (it) { return it.value !== null; })
     .map(function (it) {
       const sev = it.severity === 'S1' ? '★★' : it.severity === 'S2' ? '★' : '';
       return safeRow([p.date, p.time || '', p.store, it.code || '', it.no, it.group || '', it.text, sev,
         String(it.value), it.rating || '', it.deduct == null ? '' : -it.deduct,
-        it.memo || '', (photoMap[it.no] || []).map(function (x) { return x.url; }).join('\n')]);
+        it.memo || '', (photoMap[it.no] || []).map(function (x) { return x.url; }).join('\n'),
+        it.value === 'NA' ? String(it.naWhy || '해당 없음') : '']);
     });
   appendRows(det, rows);
 
@@ -3175,8 +3182,15 @@ function saveQsc(ss, p, ctx) {
        QSC 응답 파일에 자동 페치 수식이 심어지고, 그 셀 값은 naPresets()로 읽혀 config.get
        응답에 실려 전 사용자에게 되돌아간다. 방어를 둘 겹친다: ①문항번호는 정수만 통과시키고
        ②그렇게 만든 문자열도 safe()를 거친다. */
+    /* ★'해당 없음' 만 기억한다★ (2026-08-27 담당자 결정: "1만해")
+       '본사 대기' 는 본사가 고치면 없어지고, '확인 불가' 는 그때뿐이다.
+       그것까지 다음 달에 자동으로 제안하면, 점검자가 「본사가 아직인가?」를 안 보고 넘긴다.
+       ⚠사유가 안 실려 온 옛 앱의 제출은 '해당 없음' 으로 본다(종전 동작 유지). */
     const naNos = p.items.filter(function (it) {
-      return it.value === 'NA' && typeof it.no === 'number' && isFinite(it.no) && it.no === Math.floor(it.no);
+      if (it.value !== 'NA') return false;
+      const why = String(it.naWhy || '해당 없음');
+      if (why !== '해당 없음') return false;
+      return typeof it.no === 'number' && isFinite(it.no) && it.no === Math.floor(it.no);
     }).map(function (it) { return it.no; }).join(',');
     const vals = naSheet.getDataRange().getValues();
     let found = -1;
