@@ -84,7 +84,7 @@ var DASHBOARD_ID = 'X';
 var DriveApp = { getFileById: function () { return { setTrashed: function () {} }; } };
 var VISIT_DATE = '';
 var SPREADSHEET_ID = 'X';
-var STORE_FILE_WRITE = true, DASHBOARD_WRITE = true;   // 시험에서 밸브를 여닫는다
+/* 쓰기 밸브는 2026-08-27에 지웠다 — 스텁도 필요 없다 */
 function undoList() { return { ok: true, items: [] }; }
 function tableEndRow() { return 0; }
 function impCols() { return { ok: false }; }
@@ -171,16 +171,18 @@ ok('nothing=true', r.nothing === true, JSON.stringify(r));
 ok('아무것도 안 썼다', WROTE.length === 0, JSON.stringify(WROTE));
 ok('손님 것 그대로', SHEETS['쇼퍼_응답'].length === 2);
 
-console.log('\n[8] ★밸브가 잠기면 매장 파일·통합시트를 안 건드린다★');
+/* ★쓰기 밸브는 2026-08-27에 통째로 지웠다★ (담당자 결정)
+   종전 [8]은 「밸브가 잠기면 안 건드린다」를 쟀는데, 그 기능이 이제 없다.
+   대신 ★밸브가 없어도 늘 제대로 쓴다★ 를 잰다 — 지운 뒤 조용히 안 쓰게 되면 그게 사고다. */
+console.log('\n[8] ★밸브 없이도 매장 파일·통합시트에 늘 쓴다★');
 reset([['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60]]);
-STORE_FILE_WRITE = false; DASHBOARD_WRITE = false;
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
-ok('응답 시트 줄은 지운다', SHEETS['쇼퍼_응답'].length === 1, '남은 줄=' + SHEETS['쇼퍼_응답'].length);
-ok('★매장 파일·통합시트에 아무것도 안 썼다★', WROTE.length === 0, JSON.stringify(WROTE));
-ok('★잠겼다고 크게 알린다★', r.done.join(' ').indexOf('밸브') >= 0, JSON.stringify(r.done));
-STORE_FILE_WRITE = true; DASHBOARD_WRITE = true;
+ok('응답 시트 줄을 지운다', SHEETS['쇼퍼_응답'].length === 1, '남은 줄=' + SHEETS['쇼퍼_응답'].length);
+ok('★매장 파일에 썼다★', wroteOf('매장파일:MS점수') !== undefined, JSON.stringify(WROTE));
+ok('★통합시트에 썼다★', wroteOf('통합시트:MS') !== undefined, JSON.stringify(WROTE));
+ok('「밸브」라는 말이 결과에 없다', r.done.join(' ').indexOf('밸브') < 0, JSON.stringify(r.done));
 
-console.log('\n[9] 밸브를 다시 열면 종전대로 쓴다');
+console.log('\n[9] 손님 건이 남으면 그 평균으로 다시 쓴다 (밸브와 무관)');
 reset([
   ['2026-10-05T10:00','2026-10-05','','금종제과','','','','고객 직접',90],
   ['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60],

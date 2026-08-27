@@ -45,7 +45,7 @@
 
      SPREADSHEET_ID      응답 원본 저장용 'QSC 응답' 스프레드시트
      PHOTO_FOLDER_ID     사진 보관용 '사진' 폴더
-     DASHBOARD_ID        '[감사총무팀_QSC] 통합시트'  (읽기 + DASHBOARD_WRITE가 켜지면 점수 칸 쓰기)
+     DASHBOARD_ID        '[감사총무팀_QSC] 통합시트'  (매장 목록·점수 읽기 + 그 달 점수 칸 쓰기)
      AUTH_SHEET_ID       'QSC 인증' 스프레드시트      ★신규
      APP_BASE_URL        앱 배포 주소(끝에 /). 비우면 GitHub Pages 기본값. 배포 링크 조립에만 쓴다
      TOKEN_KEY           HMAC 서명 키 (랜덤 44자 이상) ★신규 — 비어 있으면 ensureAuthSheets()가 만든다
@@ -61,7 +61,7 @@
                          사용자가 ✕로 닫아도 문구를 고치면 자동으로 다시 뜬다(id가 문구의 해시라서).
                          공개되는 문구다 — 개인정보를 적지 말 것
      AUTH_ENFORCE        'off'(기본) | 'on'.  off = 토큰 없는 옛 요청도 받아줌(감사로그만)
-     STORE_IMPROVE_WRITE 'false'(기본) | 'true'.  매장 개선보고 쓰기
+     (STORE_IMPROVE_WRITE  — 2026-08-27에 없앴다. 매장 개선보고는 권한만 있으면 늘 저장된다)
      CACHE_EPOCH         숫자. +1 하면 전 캐시 무효. 기본 1
      LOGIN_FAIL_MAX      기본 10 (10분 내 실패 허용 횟수 → 15분 잠금)
      HASH_BUDGET         기본 300 (시간당 느린 해시 실행 '전역' 상한)
@@ -71,8 +71,8 @@
      GLOBAL_FAIL_MAX     기본 40 (시간당 전역 로그인 실패 상한 → 실패 응답 문구만 바뀐다)
      PHOTO_DAY_MAX       기본 200 (계정당 하루 사진 저장 건수)
      IMPROVE_DUE_DAY     기본 10 (익월 며칠까지 종합점수를 '잠정'으로 표시)
-     STORE_FILE_WRITE    'false'(기본) | 'true'.  매장 파일에 점검 결과 자동 기록
-     DASHBOARD_WRITE     'false'(기본) | 'true'.  통합시트 [데이터] 그 달 QSC·MS 점수 칸에 자동 기록
+     (STORE_FILE_WRITE·DASHBOARD_WRITE — 2026-08-27에 없앴다. 제출하면 늘 쓴다.
+      되돌리려면 「관리자 도구 → 제출 관리 → 제출 되돌리기」를 쓴다)
                                                  ★9월까지 꺼 둘 것 · 10/1에 위 둘과 함께 켠다★
 
    (실제 ID는 로컬 문서 `1. QSC\연동_설정값.md`에 기록해 두었다 — 저장소에 올리지 말 것)
@@ -85,12 +85,13 @@ const SPREADSHEET_ID = PROPS.getProperty('SPREADSHEET_ID') || '';
 const PHOTO_FOLDER_ID = PROPS.getProperty('PHOTO_FOLDER_ID') || '';
 const DASHBOARD_ID = PROPS.getProperty('DASHBOARD_ID') || '';
 const DASHBOARD_SHEET = '데이터';
-/* 실전 기록 스위치 — 매장별 QSC현황 파일에 실제로 쓸지 여부.
-   false = 응답 시트와 사진만 기록하고 매장 파일은 건드리지 않는다 (연동 시험용).
-           2026-09까지는 기존 수기 방식으로 운영하므로 반드시 false로 둘 것.
-   true  = 매장 파일 개선요청 표에 자동 기록 (전환 시 켠다).
-   ※ 켜고 끄는 것은 스크립트 속성 STORE_FILE_WRITE = 'true' 로도 가능 */
-const STORE_FILE_WRITE = PROPS.getProperty('STORE_FILE_WRITE') === 'true';
+  /* ★쓰기 밸브 세 개는 2026-08-27에 지웠다★ (담당자 결정)
+     STORE_FILE_WRITE · STORE_IMPROVE_WRITE · DASHBOARD_WRITE — 이제 없다. 제출하면 항상 쓴다.
+     ★지운 이유★ 셋 다 기본값이 '꺼짐'이라, 스크립트 속성이 비어 있기만 해도 잠겼다.
+       그러면 화면엔 「저장 완료」가 뜨는데 매장 파일·통합시트는 비어 있다 — 조용한 실패다.
+       10/1 첫 점검에서 그 함정을 밟을 자리였다.
+     ★사고가 나면★ 「관리자 도구 → 제출 관리 → 제출 되돌리기」가 그 제출이 쓴 자리를
+       전부 되돌린다(응답 시트·매장 파일 탭·통합시트 점수·사진). 밸브 대신 그쪽을 쓴다. */
 /* 통합시트 [데이터]에 QSC·MS 점수를 직접 쓸지 여부 (BV·BX 칸. 등급·개선·종합은 시트 수식이라 안 건드린다).
    false = 점수는 담당자가 통합시트에 직접 입력한다. 앱은 그렇게 입력된 값을 '읽기만' 한다.
    true  = 제출이 끝나면 그 달 점수 칸에 저절로 들어간다.
@@ -103,7 +104,7 @@ const STORE_FILE_WRITE = PROPS.getProperty('STORE_FILE_WRITE') === 'true';
    ⚠종전의 안전장치("읽기 전용이라 어떤 버그도 통합시트를 훼손할 수 없다")가 사라지므로,
      그 자리를 writeDashboard() 안의 검사 두 개가 대신한다 — ①올해 자료인지 ②그 칸이 수식은 아닌지.
    ⚠9월까지는 반드시 꺼 둘 것. 수기 운영과 부딪힌다. 10/1에 STORE_FILE_WRITE·STORE_IMPROVE_WRITE와 같이 켠다. */
-const DASHBOARD_WRITE = PROPS.getProperty('DASHBOARD_WRITE') === 'true';
+
 const STORE_MAP_SHEET = '매장파일맵'; // 인증 시트 안의 탭: A=매장명, B=매장 파일 ID
 const PHOTO_EMBED = true;    // true면 개선요청 표에 사진을 =IMAGE()로 삽입 (사진 파일이 '링크 있는 사용자 보기'로 공유됨) / false면 링크만
 
@@ -168,7 +169,8 @@ const ACCOUNT_PUBLIC = ['id', 'name', 'role', 'status', 'scope', 'hasPw', 'pw', 
 /* ---------- 스크립트 속성 읽기 ---------- */
 
 /* 속성은 매 실행마다 다시 읽는다 — 그래서 속성 화면에서 값을 고치면 재배포 없이 즉시 반영된다.
-   이 성질이 이 시스템의 롤백 수단 전부다 (AUTH_ENFORCE·STORE_IMPROVE_WRITE·CACHE_EPOCH·STORE_FILE_WRITE·DASHBOARD_WRITE). */
+   이 성질이 이 시스템의 롤백 수단이다 (AUTH_ENFORCE·CACHE_EPOCH).
+   ※쓰기 밸브 셋은 2026-08-27에 없앴다 — 잘못 들어간 제출은 「제출 관리 → 제출 되돌리기」로 되돌린다. */
 function prop(key, def) {
   const v = PROPS.getProperty(key);
   return (v === null || v === undefined || v === '') ? def : v;
@@ -195,7 +197,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v73', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v74', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -324,7 +326,6 @@ function actionTable() {
     /* [월 채점 확정] — 그 달을 닫는다. 기본이 미리보기다. */
     'month.close':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMonthClose },
     /* 실전 기록 스위치 세 개 — 기본이 '보기'다(on을 안 주면 아무것도 바꾸지 않는다). §스위치 */
-    'admin.switches':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnSwitches },
     /* 감사로그 40일 정리 — 평소엔 하루 한 번 자동으로 돈다. 이 액션은 지금 바로 돌려보거나
        몇 줄 남았는지 확인할 때 쓴다. {}=상태만 · {run:true}=지금 정리 */
     'admin.tidyLog':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnTidyLog },
@@ -3205,20 +3206,14 @@ function saveQsc(ss, p, ctx) {
   // ②③ 연동 기록 — 실패해도 원본 저장은 유지하고 결과만 알림
   const extra = { dashboard: null, storeFile: null };
   if (DASHBOARD_ID) {
-    if (DASHBOARD_WRITE) {
-      try {
-        extra.dashboard = p.result.final == null ? { ok: false, error: '점수 없음' }
-          : writeDashboard(p.store, p.date, p.result.final / 100, 0);
-      } catch (err) { extra.dashboard = { ok: false, error: opErr('통합시트 기록', err) }; }
-    } else {
-      extra.dashboard = { ok: true, skipped: true, note: '통합시트 점수는 직접 입력' };
-    }
-    if (STORE_FILE_WRITE) {
-      try { extra.storeFile = writeStoreQsc(p, photoMap); }
-      catch (err) { extra.storeFile = { ok: false, error: opErr('매장 파일 기록', err) }; }
-    } else {
-      extra.storeFile = { ok: true, skipped: true, note: '매장 파일 쓰기가 꺼져 있습니다 (STORE_FILE_WRITE)' };
-    }
+    try {
+      extra.dashboard = p.result.final == null ? { ok: false, error: '점수 없음' }
+        : writeDashboard(p.store, p.date, p.result.final / 100, 0);
+    } catch (err) { extra.dashboard = { ok: false, error: opErr('통합시트 기록', err) }; }
+    /* ★두 catch 를 나눠 둔다★ — 합치면 매장 파일 실패가 성공한 통합시트 결과를 덮어써
+       원인을 잘못 보게 된다. */
+    try { extra.storeFile = writeStoreQsc(p, photoMap); }
+    catch (err) { extra.storeFile = { ok: false, error: opErr('매장 파일 기록', err) }; }
   }
   dropDashCache(p.date);
   dropStoreCache(p.store, yymm(p.date));   // 방금 쓴 매장·달의 조회 캐시도 함께 비운다
@@ -3283,14 +3278,10 @@ function saveShopper(ss, p, ctx, isSurvey) {
     /* dashboard와 storeFile의 catch를 분리한다 — 합쳐 두면 매장 파일 실패가
        성공한 dashboard 결과를 오류로 덮어써 원인을 잘못 보게 된다. */
     try {
-      extra.dashboard = DASHBOARD_WRITE
-        ? writeDashboard(p.store, p.date, avg / 100, 2)
-        : { ok: true, skipped: true, note: '통합시트 CS 점수는 직접 입력', monthAvg: round1(avg) };
+      extra.dashboard = writeDashboard(p.store, p.date, avg / 100, 2);
     } catch (err) { extra.dashboard = { ok: false, error: opErr('통합시트 기록', err) }; }
     try {
-      extra.storeFile = STORE_FILE_WRITE
-        ? writeStoreShopper(p.store, p.date, avg / 100)
-        : { ok: true, skipped: true, note: '매장 파일 쓰기가 꺼져 있습니다 (STORE_FILE_WRITE)' };
+      extra.storeFile = writeStoreShopper(p.store, p.date, avg / 100);
     } catch (err) { extra.storeFile = { ok: false, error: opErr('매장 파일 기록', err) }; }
   }
   dropDashCache(p.date);
@@ -3673,7 +3664,9 @@ function fnStoreGet(ctx, payload, target) {
   /* ★사람마다 달라지는 값은 캐시가 아니라 여기서 붙인다★
      readOnly는 권한이, isNew는 그 계정의 최근접속이 정한다. 캐시에 담으면 먼저 연 사람의
      권한·기준선이 다음 사람에게 그대로 간다. */
-  out.readOnly = !(prop('STORE_IMPROVE_WRITE', 'false') === 'true' && can(ctx.role, 'store', '쓰기').allow);
+  /* 2026-08-27: 밸브를 지웠으므로 ★권한만★ 본다. 종전에는 STORE_IMPROVE_WRITE 도 함께 봐서,
+     속성이 비어 있으면 권한이 있는 매장에도 「지금은 조회만 가능합니다」가 떴다. */
+  out.readOnly = !can(ctx.role, 'store', '쓰기').allow;
   markNewItems(out.items, store, ym, seenBaseline(ctx.id));
   return out;
 }
@@ -4347,9 +4340,6 @@ function fnStoreSave(ctx, payload, target) {
      fileId는 관리자만 보낼 수 있고(이 액션은 menu:'store' 쓰기 권한이 필요하다),
      이름에 _연동테스트가 없으면 곧바로 거절한다. */
   const testId = String((payload && payload.fileId) || '');
-  if (!testId && prop('STORE_IMPROVE_WRITE', 'false') !== 'true') {
-    return err('FORBIDDEN', '지금은 조회만 가능합니다. 저장 기능은 아직 열리지 않았습니다.');
-  }
   const store = target;
   const ym = String(payload.ym || '').trim();
   if (!validYm(ym)) return err('BAD_REQUEST', '월이 올바르지 않습니다.');
@@ -5107,47 +5097,6 @@ function setupPhotoFolder() {
   return f.getId();
 }
 
-/* ═══ 실전 기록 스위치 세 개 — 편집기에서 직접 실행 ══════════════════════════════
-   ★프로젝트 설정 화면에서는 못 한다★ — 스크립트 속성이 50개를 넘으면 구글이 그 화면을
-   「처음 50개만 표시 · 읽기 전용」으로 바꾼다. 시간당 카운터(AL:·AN:·GF:·HB:)가 쌓여 이미 넘었다.
-   그래서 10/1 전환도, 되돌리기도 여기서 한다 — 편집기 위쪽 함수 목록에서 골라 [실행].
-
-     switchesShow()   지금 상태만 본다 (아무것도 바꾸지 않는다)
-     switchesOn()     세 개를 켠다   ← 10/1에 이것 하나면 끝난다
-     switchesOff()    세 개를 끈다   ← 되돌릴 때
-
-   ★재배포는 필요 없다★ — 속성은 매 실행마다 다시 읽는다. 실행 기록(로그)에 결과가 남는다.
-   켜면 ①본사 점검이 매장 파일에 ②매장 개선보고가 매장 파일에 ③QSC·MS 점수가 통합시트에 들어간다. */
-const SWITCHES = ['STORE_FILE_WRITE', 'STORE_IMPROVE_WRITE', 'DASHBOARD_WRITE'];
-
-function switchesShow() {
-  const out = '지금 스위치 상태\n' + SWITCHES.map(function (k) {
-    const v = PROPS.getProperty(k);
-    return '  ' + (v === 'true' ? '★켜짐★' : '  꺼짐 ') + '  ' + k + ' = ' + (v === null ? '(속성 없음)' : v);
-  }).join('\n');
-  Logger.log(out);
-  return out;
-}
-function switchesSet_(on) {
-  SWITCHES.forEach(function (k) { PROPS.setProperty(k, on ? 'true' : 'false'); });
-  const out = (on ? '세 개를 켰습니다 — 이제 실제로 기록됩니다' : '세 개를 껐습니다 — 아무 파일도 건드리지 않습니다')
-    + '\n' + switchesShow();
-  Logger.log(out);
-  return out;
-}
-/* 편집기에서 하나만:  switchOne('STORE_FILE_WRITE', false) */
-function switchOne(name, on) {
-  if (SWITCHES.indexOf(name) < 0) {
-    const msg = '모르는 스위치입니다: ' + name + '  (쓸 수 있는 이름: ' + SWITCHES.join(' · ') + ')';
-    Logger.log(msg);
-    return msg;
-  }
-  PROPS.setProperty(name, on === true ? 'true' : 'false');
-  return switchesShow();
-}
-function switchesOn() { return switchesSet_(true); }
-function switchesOff() { return switchesSet_(false); }
-
 /* ═══ 매장 월 탭 보호 — 관리자 화면에서 부르기 (admin.protect) ═══════════════════
    본체는 protectMonthTabsIn / protectStoreTabs 다. 이 함수는 앱에서 부를 수 있게 감싼 것뿐이다
    — 편집기 함수 목록이 283개라 드롭다운에서 고르기가 사실상 불가능하다.
@@ -5781,11 +5730,7 @@ function fnUndoSubmit(ctx, payload) {
      되돌리기가 점수를 지워 놓고, 새 제출은 밸브에 막혀 그 자리를 못 채운다.
      밸브의 뜻은 「이 파일에 손대지 마라」이므로 지우는 것도 손대는 것이다. */
   const fileId = storeFileId(store);
-  if (!STORE_FILE_WRITE) {
-    done.push('★매장 파일은 건드리지 않았습니다★ — 쓰기 밸브(STORE_FILE_WRITE)가 잠겨 있습니다.' +
-      ' 점수·방문일·개선요청 표가 그대로 남아 있습니다. 밸브를 열고 다시 되돌리셔야 합니다.');
-  }
-  else if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
+  if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
   else {
     const ss2 = SpreadsheetApp.openById(fileId);
     const sh2 = ss2.getSheetByName(tab);
@@ -5843,11 +5788,7 @@ function fnUndoSubmit(ctx, payload) {
 
   /* 통합시트 — writeDashboard 를 그대로 탄다. 빈 값을 쓰는 것뿐이라
      '올해인가·그 칸이 수식인가' 두 검사도 똑같이 걸린다. */
-  if (DASHBOARD_ID && !DASHBOARD_WRITE) {
-    done.push('★통합시트는 건드리지 않았습니다★ — 쓰기 밸브(DASHBOARD_WRITE)가 잠겨 있습니다.' +
-      ' 그 달 점수 칸이 그대로 남아 있습니다.');
-  }
-  else if (DASHBOARD_ID) {
+  if (DASHBOARD_ID) {
     if (doQsc) {
       const v = qscAfter();
       const a = writeDashboard(store, date, v, 0);
@@ -5882,89 +5823,8 @@ function fnUndoSubmit(ctx, payload) {
 /* 같은 일을 관리자 화면에서도 할 수 있게 — 편집기 함수 목록이 283개라 고르기가 어렵고,
    설정 화면은 위 이유로 영영 읽기 전용이다. 관리자 권한이 있어야 도달한다(ACTIONS 등록표).
 
-     await Api.call('admin.switches', {})            ← 지금 상태만 본다 (기본 · 아무것도 안 바꾼다)
-     await Api.call('admin.switches', {on:true})     ← 세 개를 켠다   (10/1)
-     await Api.call('admin.switches', {on:false})    ← 세 개를 끈다   (되돌리기)
-
-   ★기본이 '보기'다★ — on을 빠뜨렸다고 켜지는 일은 없다. 바꾼 경우에만 감사로그에 남는다. */
-/* ★밸브 셋을 하나씩 여닫는다★ (2026-08-26) — 종전에는 세 개가 함께만 움직였다.
-   멈추고 싶은 자리가 서로 다르기 때문에 따로 잠글 수 있어야 한다:
-     STORE_FILE_WRITE     매장 파일에 쓰는 것 전부 (점수·방문일·★개선요청 표★)
-     STORE_IMPROVE_WRITE  ★매장이★ 답을 쓰는 것 (담당부서·진행/완료 내용·개선 후 사진)
-     DASHBOARD_WRITE      통합시트 [데이터] 그 달 점수 칸
-
-   부르는 법
-     {}                                  지금 상태만 본다 (아무것도 안 바꾼다)
-     {on:true} / {on:false}              세 개를 한꺼번에 (종전 그대로)
-     {set:{STORE_FILE_WRITE:false}}      하나만
-     {set:{DASHBOARD_WRITE:true, STORE_FILE_WRITE:true}}   골라서 여럿
-
-   ★모르는 이름·엉뚱한 값은 거절한다★ — 조용히 무시하면 껐다고 믿는 채로 계속 써진다.
-     이 액션이 막으려는 사고가 바로 그것이라, 여기서 조용하면 안 된다. */
-function fnTidyLog(ctx, payload) {
-  const ss = authSS();
-  if (!ss) return err('SERVER_ERROR', '인증 시트를 열지 못했습니다.');
-  const sh = ss.getSheetByName(AUTH_LOG_SHEET);
-  if (!sh) return err('SERVER_ERROR', '감사로그 탭이 없습니다.');
-  const before = Math.max(0, sh.getLastRow() - 1);
-  let moved = 0;
-  if (payload && payload.run === true) {
-    TIDY_RUNNING = true;                       // 이 안에서 남기는 로그가 정리를 또 부르지 않게
-    try { moved = tidyAuditLog(sh, ss); } finally { TIDY_RUNNING = false; }
-  }
-  const after = Math.max(0, sh.getLastRow() - 1);
-  return {
-    ok: true, keepDays: AUDIT_KEEP_DAYS, before: before, after: after, deleted: moved,
-    lastTidy: PROPS.getProperty('LOG_TIDY_DAY') || '(아직 없음)',
-    log: [
-      '감사로그 보관 기간: ' + AUDIT_KEEP_DAYS + '일',
-      '마지막 자동 정리: ' + (PROPS.getProperty('LOG_TIDY_DAY') || '(아직 없음)'),
-      '지금 줄 수: ' + before + (payload && payload.run === true ? (' → ' + after + '  (' + moved + '줄 삭제)') : ''),
-      (payload && payload.run === true) ? '' : '지금 바로 정리하려면 {run:true} 를 넣어 다시 부르십시오.',
-    ].filter(String),
-  };
-}
-
-function fnSwitches(ctx, payload) {
-  const p = payload || {};
-  const want = {};
-
-  if (p.set !== undefined) {
-    if (!p.set || typeof p.set !== 'object' || Array.isArray(p.set)) {
-      return err('BAD_REQUEST', "set 은 {STORE_FILE_WRITE:false} 모양이어야 합니다.");
-    }
-    const keys = Object.keys(p.set);
-    const bad = keys.filter(function (k) { return SWITCHES.indexOf(k) < 0; });
-    if (bad.length) {
-      return err('BAD_REQUEST', '모르는 스위치입니다: ' + bad.join(', ') +
-        '  (쓸 수 있는 이름: ' + SWITCHES.join(' · ') + ')');
-    }
-    const badv = keys.filter(function (k) { return p.set[k] !== true && p.set[k] !== false; });
-    if (badv.length) {
-      return err('BAD_REQUEST', 'true 나 false 로만 주십시오: ' + badv.join(', '));
-    }
-    keys.forEach(function (k) { want[k] = p.set[k] === true; });
-  }
-
-  // {on:…} 은 세 개 전부. set 과 함께 오면 set 이 이긴다(더 구체적인 지시라서).
-  if (p.on === true || p.on === false) {
-    SWITCHES.forEach(function (k) { if (!(k in want)) want[k] = (p.on === true); });
-  }
-
-  const moved = [];
-  Object.keys(want).forEach(function (k) {
-    const before = PROPS.getProperty(k) === 'true';
-    if (before === want[k]) return;                  // 이미 그 상태면 건드리지 않는다
-    PROPS.setProperty(k, want[k] ? 'true' : 'false');
-    moved.push(k + ' ' + (before ? '켜짐' : '꺼짐') + '→' + (want[k] ? '켜짐' : '꺼짐'));
-  });
-  if (moved.length) auditLog(ctx, 'admin.switches', '', '성공', '', moved.join(' · '));
-
-  const now = {};
-  SWITCHES.forEach(function (k) { now[k] = PROPS.getProperty(k) === 'true'; });
-  return { ok: true, changed: moved.length > 0, moved: moved, switches: now };
-}
-
+   ★admin.switches 는 2026-08-27에 없앴다★ — 쓰기 밸브 세 개를 통째로 지웠기 때문이다.
+   잘못 들어간 제출을 되돌리려면 「관리자 도구 → 제출 관리 → 제출 되돌리기」를 쓴다. */
 
 /* 지금 사진이 드라이브를 얼마나 쓰고 있는지 연도별로 알려준다 (앱스 스크립트에서 직접 실행).
    무료 15GB 안에서 도니, 모르는 채 차오르지 않게 가끔 확인할 것.
@@ -6144,7 +6004,7 @@ function auditStoreFiles(stores, page) {
   out.unshift(
     '=== 이 쪽(' + list.length + '곳) 게이트 판정 ===' +
     '\n⑦ 파일 못 찾음   : ' + nm(gate.noFile) + '   ← 0곳이 아니면 그 매장에 배포하지 마십시오' +
-    '\n⑧ canEdit=false : ' + nm(gate.noEdit) + '   ← 0곳이 아니면 STORE_FILE_WRITE를 켜지 마십시오' +
+    '\n⑧ canEdit=false : ' + nm(gate.noEdit) + '   ← 0곳이 아니면 그 매장은 앱이 못 씁니다(편집 권한 확인)' +
     '\n⑬ 이름 충돌      : ' + nm(gate.dupName) + '   ← 0곳이 아니면 통합시트 D열 이름을 구분하십시오' +
     '\n※ 전체 ' + sel.total + '곳을 다 보려면 남은 쪽도 돌린 뒤 각 쪽의 이 세 줄을 합쳐 보십시오.\n');
   const msg = out.join('\n');
@@ -7576,9 +7436,6 @@ function fnImproveAudit(ctx, payload) {
     }
     label = ss.getName();
   } else {
-    if (!STORE_FILE_WRITE) {
-      return err('FORBIDDEN', '지금은 조회만 가능합니다. 매장 파일 기록은 아직 열리지 않았습니다.');
-    }
     const store = normStore(p.store || '');
     if (!store) return err('BAD_REQUEST', '매장을 지정해 주세요');
     const id = storeFileId(store);

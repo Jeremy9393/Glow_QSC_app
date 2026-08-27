@@ -453,8 +453,8 @@ async function initShopperForm(opts) {
           if (r.dashboard && r.dashboard.skipped && r.dashboard.monthAvg != null) {
             done += '\n\n▶ 통합시트 CS 칸에 입력\n   ' + Number(r.dashboard.monthAvg).toFixed(1) + '% (이번 달 평균)';
           }
-          /* ★밸브가 잠겨 있으면 반드시 말한다★ — QSC 점검 화면과 같은 규칙(js/qsc-app.js).
-             ok:true 인데 skipped 인 경우가 '조용한 실패'가 되던 자리다. */
+          /* 기록하지 못했으면 반드시 말한다 — QSC 점검 화면과 같은 규칙(js/qsc-app.js).
+             (2026-08-27: 쓰기 밸브를 없앴으므로 skipped 는 이제 안 온다.) */
           const sf = r.storeFile;
           if (sf && sf.skipped) {
             done += '\n\n★매장 파일에는 기록하지 않았습니다★' +
