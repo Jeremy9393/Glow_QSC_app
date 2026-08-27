@@ -21,6 +21,50 @@
   const SNAP_KEY = 'qsc-store-snap-v1';
   const SNAP_MAX = 6;                     // 매장 여러 곳을 오가도 스냅샷이 무한히 쌓이지 않도록
 
+  /* ★상태 이름표는 맨 위에 둔다★ (2026-08-27) — 화면에 들어오자마자 저장해 둔 사본을
+     그리는데(아래 paintCachedFirst), 이 표들이 아래쪽에 const 로 있으면 그때는 아직
+     만들어지지 않아 ReferenceError 가 난다. 실제로 그렇게 깨졌다(TDZ).
+     내용은 손대지 않았다 — 자리만 옮겼다. */
+  const STATE_CLASS = { '완료': 'done', '진행': 'prog', '미조치': 'todo' };
+
+  /* 시트 값 → 화면에 적을 말.
+     ★키는 시트·서버가 쓰는 값 그대로다★ — 남의 시트라 바꿀 수 없고, 바꿔서도 안 된다.
+       (STATE_CLASS의 키·저장 요청 본문·집계도 전부 이 원래 값을 쓴다.)
+     여기 없는 값은 받은 그대로 적는다 — 시트에 새 상태 라벨이 생겨도 화면이 빈칸이 되지 않는다. */
+  const STATE_LABEL = { '미조치': '시작 전', '미이행': '시작 전' };   // 시트가 두 라벨을 같은 뜻으로 쓴다
+  function stateLabel(v) { return STATE_LABEL[v] || v; }
+
+  /* ---------- 새 서식(2610~)의 상태 ----------
+     서버(impJudge)가 판정해 `it.status`로 내려준다. 옛 달에는 null이라 위 STATE_* 를 그대로 쓴다.
+
+     ★말을 고르는 규칙★ (2026-08-21 확정)
+       · '반려' → **보완 요청** — 무엇을 해야 하는지가 말 안에 있고, 잘못했다는 느낌이 없다
+       · '미조치' → **다음 점검 시 확인** — 끝난 일이 아니라 이어진다는 뜻이 들어간다
+       · '기한 지남'은 그대로 쓴다 — 사람을 탓하는 말이 아니라 날짜를 말하는 말이다
+     ★여기 없는 값은 받은 그대로 적는다★ — 서버에 새 상태가 생겨도 화면이 빈칸이 되지 않는다. */
+  const STATUS_LABEL = {
+    '미착수': '시작 전',
+    '진행중': '진행 중',
+    '완료(검수 전)': '완료 · 확인 대기',
+    '확정': '완료',
+    '반려': '보완 요청',
+    '재제출기한 지남': '보완 기한 지남',
+    '미조치': '다음 점검 시 확인',
+  };
+  const STATUS_CLASS = {
+    '미착수': '',            // 아직 기한 안이다 — 빨강을 붙일 이유가 없다
+    '진행중': 'prog',
+    '완료(검수 전)': 'done',
+    '확정': 'done',
+    '반려': 'prog',          // 할 일이 남았다는 뜻이지 잘못했다는 뜻이 아니다 → 주황
+    '기한 지남': 'todo',
+    '예정일 지남': 'todo',
+    '재제출기한 지남': 'todo',
+    '미조치': 'todo',
+  };
+  /* 카드 왼쪽 빨간 선을 붙일 상태 — 날짜가 지난 것만이다 */
+  const URGENT = { '기한 지남': 1, '예정일 지남': 1, '재제출기한 지남': 1, '미조치': 1 };
+
   /* codes-app.js:15의 cycle()을 그대로 옮겨 왔다(§12-3-5).
      공용 파일을 새로 만들면 sw.js 캐시 목록·로드 순서가 늘어나므로 복사가 더 싸다. */
   function cycle(d) {
@@ -145,6 +189,54 @@
      매장도 아이디(매장명) + 비밀번호로 login.html에서 들어온다.
      그래서 주소를 다시 쓰는(history.replaceState) 코드도 여기 없다 — 지울 것이 없다. */
   const q = new URLSearchParams(location.search);
+
+  /* ★손에 있는 사본을 인증보다 먼저 그린다★ (2026-08-27)
+     load() 안에는 이미 '사본 먼저' 가 있었는데, 그 load() 가 Auth.ensure()·Auth.sync() 뒤에
+     있어서 소용이 없었다. 하루 첫 방문이면 그 두 왕복에 1.5~11초(콜드 스타트)가 걸리고,
+     점장은 그동안 ★빈 화면★ 을 본다 — 폰에 어제 본 목록을 들고 있으면서.
+     QSC 평가표·통합시트는 이미 '먼저 그리기' 로 고쳐 두었고, 이 화면만 남아 있었다.
+
+     ★어느 매장인지 확실할 때만 그린다★ — 주소에 store 가 있거나, 담당 매장이 한 곳일 때.
+       (본사처럼 여러 곳을 맡은 계정은 목록이 확정된 뒤에 그린다. 엉뚱한 매장을 먼저 그리면
+        점장이 남의 매장 숫자를 자기 것으로 읽는다 — 이 앱에서 가장 비싼 오해다.)
+     ★저장·검수는 잠긴 채로 뜬다★ — fromSnap=true 라 writable()·canAudit() 이 둘 다 막는다.
+       인증이 끝나기 전에 적은 것이 저장되어 SCOPE_DENIED 로 튕기는 일이 없어야 한다.
+     ★오프라인이면 하지 않는다★ — 그때는 load() 의 스냅샷 분기가 '오프라인' 문구까지 붙여
+       그리므로, 여기서 미리 그리면 같은 화면을 두 번 그리고 문구만 엇갈린다. */
+  (function paintCachedFirst() {
+    try { paintCachedFirst_(); }
+    catch (e) {
+      /* ★미리 그리기가 화면을 깨뜨리면 안 된다★ — 이건 속도 편의일 뿐이고, 바로 뒤 정상 경로가
+         어차피 다시 그린다. 여기서 던지면 그 정상 경로까지 통째로 죽는다(실제로 그랬다).
+         무엇이 문제였는지는 콘솔에 남긴다 — 조용히 넘어가면 다음에 또 못 찾는다. */
+      data = null; fromSnap = false; revalidating = false; curStore = ''; curYm = '';
+      try { console.warn('[store] 저장해 둔 화면을 미리 그리지 못했습니다 — 정상 경로로 계속합니다', e); } catch (e2) { }
+      try { window.__paintErr = String((e && e.stack) || e); } catch (e3) { }
+    }
+  })();
+
+  function paintCachedFirst_() {
+    if (!online()) return;
+    let sc = null;
+    try { sc = (Auth.stores && Auth.stores()) || null; } catch (e) { sc = null; }
+    const list = (sc && sc.list) || [];
+    const want = str(q.get('store')) || (list.length === 1 ? list[0] : '');
+    if (!want) return;
+    const qy = str(q.get('ym'));
+    curStore = want;
+    curYm = /^\d{4}$/.test(qy) ? qy : cycle();
+
+    const pre = snapGet();
+    /* '탭이 아직 없다' 사본은 그리지 않는다 — 없는 것을 가리키는 문장만 남는다(load()와 같은 규칙) */
+    if (!pre || pre.exists === false) { curStore = ''; curYm = ''; return; }
+
+    data = pre; fromSnap = true; revalidating = true;
+    renderAll();
+    showState('최신 내용을 불러오는 중입니다… 아래는 지난번에 받아 둔 내용입니다.');
+    /* [월 채점 확정]은 되돌릴 수 없는 버튼이라 옛 사본의 확정 여부로 켜 두지 않는다 */
+    const closeBox = $('#closeBox');
+    if (closeBox) closeBox.style.display = 'none';
+  }
 
   let sessionOk = false;
   try { sessionOk = !!(await Auth.ensure()); } catch (e) { sessionOk = false; }
@@ -552,45 +644,6 @@
     return out;
   }
 
-  const STATE_CLASS = { '완료': 'done', '진행': 'prog', '미조치': 'todo' };
-
-  /* 시트 값 → 화면에 적을 말.
-     ★키는 시트·서버가 쓰는 값 그대로다★ — 남의 시트라 바꿀 수 없고, 바꿔서도 안 된다.
-       (STATE_CLASS의 키·저장 요청 본문·집계도 전부 이 원래 값을 쓴다.)
-     여기 없는 값은 받은 그대로 적는다 — 시트에 새 상태 라벨이 생겨도 화면이 빈칸이 되지 않는다. */
-  const STATE_LABEL = { '미조치': '시작 전', '미이행': '시작 전' };   // 시트가 두 라벨을 같은 뜻으로 쓴다
-  function stateLabel(v) { return STATE_LABEL[v] || v; }
-
-  /* ---------- 새 서식(2610~)의 상태 ----------
-     서버(impJudge)가 판정해 `it.status`로 내려준다. 옛 달에는 null이라 위 STATE_* 를 그대로 쓴다.
-
-     ★말을 고르는 규칙★ (2026-08-21 확정)
-       · '반려' → **보완 요청** — 무엇을 해야 하는지가 말 안에 있고, 잘못했다는 느낌이 없다
-       · '미조치' → **다음 점검 시 확인** — 끝난 일이 아니라 이어진다는 뜻이 들어간다
-       · '기한 지남'은 그대로 쓴다 — 사람을 탓하는 말이 아니라 날짜를 말하는 말이다
-     ★여기 없는 값은 받은 그대로 적는다★ — 서버에 새 상태가 생겨도 화면이 빈칸이 되지 않는다. */
-  const STATUS_LABEL = {
-    '미착수': '시작 전',
-    '진행중': '진행 중',
-    '완료(검수 전)': '완료 · 확인 대기',
-    '확정': '완료',
-    '반려': '보완 요청',
-    '재제출기한 지남': '보완 기한 지남',
-    '미조치': '다음 점검 시 확인',
-  };
-  const STATUS_CLASS = {
-    '미착수': '',            // 아직 기한 안이다 — 빨강을 붙일 이유가 없다
-    '진행중': 'prog',
-    '완료(검수 전)': 'done',
-    '확정': 'done',
-    '반려': 'prog',          // 할 일이 남았다는 뜻이지 잘못했다는 뜻이 아니다 → 주황
-    '기한 지남': 'todo',
-    '예정일 지남': 'todo',
-    '재제출기한 지남': 'todo',
-    '미조치': 'todo',
-  };
-  /* 카드 왼쪽 빨간 선을 붙일 상태 — 날짜가 지난 것만이다 */
-  const URGENT = { '기한 지남': 1, '예정일 지남': 1, '재제출기한 지남': 1, '미조치': 1 };
 
   function renderItems(items) {
     const box = $('#items');
