@@ -335,6 +335,21 @@ else:
                 n += 1
         sw2 = sw_text.replace("const VER = 'v%d'" % VER, "const VER = 'v%d'" % new)
         (ROOT / 'sw.js').write_text(sw2, encoding='utf-8', newline='')
+
+        # ★배포 날짜도 함께 적는다★ (2026-08-27) — 화면 맨 아래 '앱 v81 · 2026-08-27' 의 날짜.
+        #   손으로 적는 자리를 만들면 반드시 낡는다. 버전을 올리는 바로 이 자리에서 같이 쓴다.
+        #   ★위 반복문 뒤에 둔다★ — 그 반복문은 ?v= 를 가진 파일만 다시 쓰는데 js/auth.js 에는
+        #   ?v= 가 없어 대상이 아니다. 순서가 바뀌어도 안전하도록 어차피 여기서 다시 읽는다.
+        _auth = ROOT / 'js' / 'auth.js'
+        _t = _auth.read_text(encoding='utf-8')
+        _today = time.strftime('%Y-%m-%d')
+        # ★바뀐 글자 수가 아니라 '규칙에 맞았는가'로 판정한다★ — 오늘 이미 배포한 뒤 또 배포하면
+        #   날짜가 같아서 글자가 안 바뀐다. 그것을 '못 찾았다'로 읽으면 거짓 경보가 난다(실제로 났다).
+        _new, _hit = re.subn(r"var BUILT = '\d{4}-\d{2}-\d{2}';", "var BUILT = '%s';" % _today, _t, count=1)
+        if not _hit:
+            fail("js/auth.js 에서 BUILT 줄을 찾지 못했습니다 — 화면 맨 아래 날짜가 낡은 채로 나갑니다")
+        _auth.write_text(_new, encoding='utf-8', newline='')
+        ok('배포 날짜를 %s 로 적었습니다 (화면 맨 아래 표시)' % _today)
         VER = new
         ok('캐시 버전을 v%d 로 올렸습니다 (%d개 파일 + sw.js)' % (new, n))
 

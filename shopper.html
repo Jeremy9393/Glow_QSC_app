@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=81">
+<link rel="stylesheet" href="css/app.css?v=82">
 </head>
 <body>
 <header class="topbar">
@@ -31,22 +31,26 @@
   <!-- 관리자 입력일 때만 채워진다 (고객 설문에는 뜨지 않는다 — 고객은 판단할 수 없다) -->
   <p class="note mockNote pre" id="dupNote" style="display:none"></p>
   <div id="cats"></div>
-  <section class="card" id="summary">
-    <h2>카테고리별 집계</h2>
-    <table class="sumTable">
-      <thead><tr><th>카테고리</th><th class="r">환산 점수</th><th class="r">응답/문항</th><th class="r">NA 건</th><th class="r">달성률</th></tr></thead>
-      <tbody id="sumBody"></tbody>
-    </table>
-    <div class="sumFinal" id="sumFinal">—</div>
-    <p class="note">점수 = 환산 점수 합계 ÷ 응답 문항 수 × 100 (NA·미응답 제외) / 등급 기준: 우수 93점 이상 · 양호 85 이상 · 보통 76 이상 · 미흡 66 이상 · 주의 55 이상 · 부적합 55 미만 / 본 평가는 최종 점수의 30% 반영</p>
-    <p class="note pre" id="rulesNote"></p>
-  </section>
+  <!-- 카테고리별 집계표는 뺐다 (2026-08-27) — 고객용 화면에는 없는 칸이고,
+       admin:false 에서는 채워지지 않아 빈 표만 남는다.
+       점수는 제출 뒤 「매장별 QSC현황」에서 본다. -->
   <p class="note" id="saveNote"></p>
+</div>
+<!-- ★제출 뒤 화면★ — admin:false 경로는 js/shopper-core.js:466~468 이 이 칸을 편다.
+     이 요소가 없으면 제출 성공 직후 TypeError 로 죽는다(화면이 그대로 멈춘 것처럼 보인다).
+     문구는 담당자용이다 — 손님이 보는 survey.html 의 감사 문구와는 다르다. -->
+<div class="thanks" id="thanks" style="display:none">
+  <div class="b">GLOW SEOUL</div>
+  <h1>제출이 완료되었습니다</h1>
+  <p>점수는 <b>매장별 QSC현황</b>에서 확인하실 수 있습니다.<br>
+     통합시트 반영에는 잠시 걸릴 수 있습니다.</p>
+  <p style="margin-top:18px"><a href="index.html">홈으로</a></p>
 </div>
 <footer class="bottombar" id="bar"><div class="in">
   <div class="bb-score">
-    <span class="big" id="bbScore">—</span><span class="grade" id="bbGrade"></span>
-    <span class="prog" id="prog">0 / 40 응답</span>
+    <!-- 점수·등급 표시는 뺐다 (2026-08-27) — 고객용과 같은 모습으로 통일.
+         진행률만 남긴다. 문항은 38개다(옛 표기 40은 낡은 숫자였다). -->
+    <span class="prog" id="prog">0 / 38 응답</span>
     <div class="progressbar"><div class="fill" id="fill"></div></div>
   </div>
   <button class="submit" id="submitBtn">제출</button>
@@ -56,13 +60,22 @@
      ★이 화면에서도 guard()는 절대 부르지 않는다 — 리다이렉트 금지.
        고객용 survey.html과 달리 이 화면은 관리자용이지만, 현장에서 작성 중이던 내용이
        로그인 화면으로 튕기며 날아가는 사고는 똑같이 비싸다. -->
-<script src="js/auth.js?v=81"></script>
-<script src="js/scoring.js?v=81"></script>
-<script src="js/api.js?v=81"></script>
-<script src="js/ui-time.js?v=81"></script>
-<script src="js/shopper-core.js?v=81"></script>
+<script src="js/auth.js?v=82"></script>
+<script src="js/scoring.js?v=82"></script>
+<script src="js/api.js?v=82"></script>
+<script src="js/ui-time.js?v=82"></script>
+<script src="js/shopper-core.js?v=82"></script>
 <script>
-initShopperForm({ admin: true });
+/* ★고객용 화면으로 통일했다★ (2026-08-27 담당자 결정)
+     "관리자가 보는MS평가표랑 고객용MS평가표가 일부 구조가 다를꺼야
+      그래서 고객용MS평가표로 통일한다는뜻"
+   admin:false 하나로 화면·제출 경로가 전부 고객용과 같아진다 —
+   문항·안내는 원래부터 js/shopper-core.js 한 파일이 그리던 것이고,
+   점수 미리보기·NA 버튼·평가기준 안내만 관리자에게 더 보이던 것이었다.
+   제출도 고객과 같은 길(제출 코드)로 간다 — 담당자는 「제출 코드 관리」에서 한 장 받아 쓴다.
+   ★survey.html 은 안 고쳤다★ — 손님 화면은 로그인 부품을 싣지 않는 격리 상태 그대로여야 하고,
+     인쇄·발송된 QR 26장이 그 주소를 가리킨다. */
+initShopperForm({ admin: false });
 
 /* 부드러운 가드 — 제출 버튼만 잠그고, 작성은 그대로 둔다. (qsc.html과 같은 내용)
    ★js/shopper-core.js는 한 줄도 고치지 않는다. 그 파일은 제출을 시도한 뒤에만 disabled를

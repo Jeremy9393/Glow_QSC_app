@@ -645,3 +645,44 @@ const Auth = (function () {
     notice: notice, mountNotice: mountNotice, maint: maint,
   };
 })();
+
+/* ══════════════════════════════════════════════════════════════
+   ★앱 버전·배포 날짜★ (2026-08-27 담당자 요청) — 홈·로그인 화면 맨 아래에 적는다.
+
+   "앱 화면 제일 하단에 버전정보 및 업데이트 날짜 표기"
+
+   ★손으로 적는 자리를 만들지 않는다★ — 손으로 적는 버전은 반드시 낡는다.
+     · 버전 숫자: 이 파일이 불러와진 주소(js/auth.js?v=82)에서 뽑는다.
+       그 숫자는 tools/release.py 가 배포마다 자동으로 올리는 값이고,
+       ★지금 이 화면이 실제로 불러온 것★ 이라 캐시에 묶인 폰은 옛 숫자를 보여 준다 —
+       매장이 낡은 화면을 붙들고 있는지 그 자리에서 알 수 있다.
+     · 날짜: 아래 BUILT 한 줄. release.py 가 배포할 때마다 다시 적는다.
+
+   ⚠document.currentScript 는 ★스크립트를 읽는 그 순간에만★ 살아 있다.
+     DOMContentLoaded 콜백 안에서 꺼내면 null 이라 TypeError 가 난다.
+     그래서 여기서 지금 붙잡아 둔다.
+   ══════════════════════════════════════════════════════════════ */
+var BUILT = '2026-08-27';   /* release.py 가 고쳐 쓴다 — 손으로 고치지 말 것 */
+(function () {
+  var ver = '';
+  try {
+    var me = document.currentScript && document.currentScript.src;
+    var m = me && me.match(/[?&]v=(\d+)/);
+    if (m) ver = 'v' + m[1];
+  } catch (e) { /* 못 읽어도 화면은 그대로 뜬다 */ }
+
+  function stamp() {
+    try {
+      var box = document.querySelector('.homeFoot');
+      if (!box) return;                       // 홈·로그인 말고는 이 칸이 없다
+      if (box.querySelector('.buildStamp')) return;
+      var d = document.createElement('div');
+      d.className = 'buildStamp';
+      d.style.cssText = 'margin-top:6px;font-size:11px;opacity:.55';
+      d.textContent = '앱 ' + (ver || '버전 미상') + ' · ' + BUILT;
+      box.appendChild(d);
+    } catch (e) { /* 이 표시가 화면을 깨뜨리면 안 된다 */ }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', stamp);
+  else stamp();
+})();
