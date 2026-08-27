@@ -195,7 +195,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v70', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v71', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3985,6 +3985,10 @@ function readStoreTab(ss, sh, store, ym) {
       statusWhy: jd ? (jd.why || '') : '',
       deadline: g.isNew ? (dateOfCell(at(v, g.due), tz) || null) : null,
       audit: g.isNew ? String(at(v, g.audit) == null ? '' : at(v, g.audit)).trim() : '',
+      /* ★감점제외★ — 켜져 있으면 이 건은 개선율 분모에서 빠진다(impRate).
+         종전에는 점수 계산에만 쓰고 화면으로는 안 보냈다. 그래서 담당자가 시트를 열지 않으면
+         어느 건을 뺐는지 알 수 없었다 — 「미조치」로만 보였다. */
+      waive: (g.isNew && g.waive) ? (at(v, g.waive) === true) : false,   // ★점수 계산(3960행)과 같은 판정이어야 한다★
       redo: g.isNew ? (dateOfCell(at(v, g.redo), tz) || null) : null,
       due: due || null,       // 화면이 '10/15까지'를 그릴 수 있게. 못 읽었으면 null
       overdue: overdue,
@@ -7538,7 +7542,12 @@ function fnImproveAudit(ctx, payload) {
   if (!(typeof no === 'number' && no >= 1 && no === Math.floor(no))) {
     return err('BAD_REQUEST', '항목 번호가 올바르지 않습니다.');
   }
-  if (['확정', '반려', ''].indexOf(verdict) < 0) {
+  /* ★점수 제외★ (2026-08-27 담당자 요청) — waive 가 참·거짓이면 검수 칸은 건드리지 않고
+     「감점제외」 체크칸만 여닫는다. 그 칸이 켜지면 impRate 가 그 건을 개선율 분모에서 뺀다
+     (Code.gs impRate 의 `if (r.waive) { waived++; return; }`). 계산식은 손대지 않았다.
+     ★시트에는 체크가 그대로 남는다★ — 담당자가 원한 「시트엔 기록」이 이것이다. */
+  const doWaive = (p.waive === true || p.waive === false);
+  if (!doWaive && ['확정', '반려', ''].indexOf(verdict) < 0) {
     return err('BAD_REQUEST', "검수는 '확정'·'반려'·빈칸만 가능합니다.");
   }
 
@@ -7568,6 +7577,11 @@ function fnImproveAudit(ctx, payload) {
   if (!sh) return err('NOT_FOUND', ym + ' 탭이 없습니다.');
   const g = impGeo(sh);
   if (!g.isNew) return err('CONFLICT', '이 달 탭은 아직 새 서식이 아닙니다 — 검수 칸이 없습니다.');
+  /* ★감점제외 칸이 없는 탭도 있을 수 있다★ — impGeo 는 검수 칸만 보고 새 서식이라 판정한다.
+     그 상태로 grid(sh, r, 0, …) 을 부르면 엉뚱한 곳에 쓰거나 예외가 난다. 먼저 막는다. */
+  if (doWaive && !g.waive) {
+    return err('CONFLICT', '이 달 탭에는 「감점제외」 칸이 없습니다 — 탭을 새 서식으로 올린 뒤 다시 시도해 주세요.');
+  }
 
   const lock = LockService.getScriptLock();
   let got = false;
@@ -7579,6 +7593,18 @@ function fnImproveAudit(ctx, payload) {
     const r = found.row;
     const tz = fileTz(ss);
     const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+
+    /* ★점수 제외는 여기서 끝난다★ — 검수 칸·재제출기한은 건드리지 않는다.
+       개선율은 화면을 열 때마다 다시 계산되므로(fnStoreGet), 켜는 즉시 점수에 반영된다.
+       시트의 개선율 칸은 매장이 저장할 때나 [월 채점 확정] 때 맞춰진다. */
+    if (doWaive) {
+      grid(sh, r, g.waive, 1, 1).setValue(p.waive === true);
+      SpreadsheetApp.flush();
+      if (!p.fileId) dropStoreCache(label, ym);
+      auditLog(ctx, 'improve.audit', label, '성공', '',
+        ym + ' ' + no + '번 ' + (p.waive === true ? '점수 제외' : '점수 제외 해제'));
+      return { ok: true, store: label, ym: ym, no: no, waive: p.waive === true };
+    }
 
     const cur = String(grid(sh, r, g.audit, 1, 1).getValue() || '').trim();
     let put = verdict, redo = '';

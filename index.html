@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=81">
+<link rel="stylesheet" href="css/app.css?v=82">
 </head>
 <body>
 <div class="home">
@@ -64,7 +64,7 @@
          여기에 새 메뉴 키를 만들면 구글시트 「역할」 탭까지 고쳐야 하고, 고치기 전까지는
          관리자에게도 안 보인다. 기본값은 숨김이다 — 권한을 모르는 동안 보이면 안 되는 카드다. -->
     <a class="menuCard" data-menu="admin-tools" href="admin.html" style="display:none">
-      <span class="mi"><span class="mt">관리자 도구</span><span class="md">제출 되돌리기, 쓰기 스위치</span></span>
+      <span class="mi"><span class="mt">관리자 도구</span><span class="md">제출 코드·계정·제출 관리</span></span>
       <span class="tag">관리자</span>
       <span class="arrow">›</span>
     </a>
@@ -83,9 +83,9 @@
      api.js는 이 화면이 직접 부르지는 않지만 계속 싣는다 — window.Api를 붙여
      auth.js가 서버 주소를 자기 폴백 상수가 아니라 CONFIG에서 읽게 하기 위해서다.
      (endpoint()는 호출 시점에 읽으므로 auth.js보다 뒤에 실려도 된다) -->
-<script src="js/auth.js?v=81"></script>
-<script src="js/menu.js?v=81"></script>
-<script src="js/api.js?v=81"></script>
+<script src="js/auth.js?v=82"></script>
+<script src="js/menu.js?v=82"></script>
+<script src="js/api.js?v=82"></script>
 <script>
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
@@ -223,7 +223,7 @@
 
   /* ★'관리자 도구' 카드도 이 화면이 직접 여닫는다★ (2026-08-26) — 등록표에 없는 키라
      Menu.apply()가 손대지 않기 때문이다('계정 관리'와 같은 구조).
-     ★읽기로는 열지 않는다★ — 이 화면의 두 기능(제출 되돌리기·쓰기 스위치)은 둘 다 쓰기다.
+     ★읽기로는 열지 않는다★ — 이 화면이 여는 것(제출 코드·계정·제출 관리)은 전부 쓰기다.
        읽기 권한만 있는 사람에게 보여 주면 눌러 봐야 서버가 거절하는 카드가 된다. */
   function applyAdminTools(menus) {
     const card = nav.querySelector('[data-menu="admin-tools"]');
@@ -402,6 +402,8 @@
   // ---------- 평가표 버전 ----------
   try {
     const m = await (await fetch('data/master.json', { cache: 'no-store' })).json();
+    /* ★#foot 만 갈아 끼운다★ — 앱 버전 도장(js/auth.js)은 그 바깥 .homeFoot 에 붙으므로
+       여기서 지워지지 않는다. textContent 를 .homeFoot 에 쓰면 도장이 사라진다. */
     $('#foot').textContent = 'GLOW SEOUL · 평가표 ' + m.version + ' 기준';
   } catch (e) { /* 오프라인 등 — 기본 문구 유지 */ }
 })();

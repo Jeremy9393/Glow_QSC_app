@@ -840,7 +840,12 @@
       auditBtns.innerHTML = '';
       const a = str(it.audit);
 
-      const note = a === '확정' ? '개선확정했습니다'
+      /* ★점수 제외가 켜져 있으면 그것부터 말한다★ (2026-08-27) — 이 건은 개선율 분모에서
+         빠져 있어서 검수 상태(미조치·진행중…)가 점수에 아무 영향을 주지 않는다.
+         그 사실을 안 보여 주면 담당자가 「왜 미조치인데 점수가 안 깎이지」로 헤맨다. */
+      const note = it.waive
+        ? '이 건은 점수에서 빼 두었습니다 — 개선율 계산에 들어가지 않습니다'
+        : a === '확정' ? '개선확정했습니다'
         : a === '반려' ? ('보완 요청했습니다' + (str(it.redo) ? ' · ' + dueLabel(it.redo) + '까지' : ''))
         : a === '재반려' ? '보완본을 다시 요청했습니다 — 다음 점검에서 확인합니다'
         : '아직 검수하지 않았습니다';
@@ -855,9 +860,43 @@
         auditBtns.appendChild(b);
         return b;
       }
+      /* ★점수 제외★ — 매장이 「처리할 수 없다」고 답한 건을 점수에서 뺀다.
+         시트의 「감점제외」 칸을 켜는 것이고, 그 칸은 원래부터 개선율 분모에서 빠지도록
+         계산돼 있었다(서버 impRate). 체크가 시트에 남으므로 기록도 함께 남는다.
+         ★제외된 건에는 검수 버튼을 띄우지 않는다★ — 점수에 안 들어가는 건을
+         확정/반려하는 것은 뜻이 없고, 두 갈래를 같이 두면 무엇이 이기는지 헷갈린다. */
+      if (it.waive) {
+        btn('점수 제외 해제', '', function () { waive(false); });
+        return;
+      }
+      btn('점수 제외', '', function () { waive(true); });
       if (a !== '확정') btn('개선확정', 'ok', function () { audit('확정'); });
       if (a !== '재반려') btn(a === '반려' ? '다시 보완 요청' : '보완 요청', 'warn', function () { audit('반려'); });
       if (a) btn('검수 취소', '', function () { audit(''); });
+    }
+
+    /* ★점수 제외 켜고 끄기★ (2026-08-27 담당자 요청)
+       "매장에서 처리불가한 개선요청에 대한 답변을 남겼을때 내가 앱 자체에서 제외 처리 시키고
+        실제 점수에서도 제외시키는 방식" — 시트의 「감점제외」 칸을 앱에서 여닫는다. */
+    async function waive(on) {
+      if (on && !confirm('이 건을 점수에서 뺄까요?\n\n' +
+        '개선율 계산에서 빠집니다(분모에서 제외). 시트에는 기록이 남습니다.\n' +
+        '★[월 채점 확정] 전에만 뜻이 있습니다★ — 확정 뒤에는 점수가 굳습니다.')) return;
+      const btns = auditBtns.querySelectorAll('button');
+      btns.forEach(function (b) { b.disabled = true; });
+      const r = await Api.call('improve.audit', {
+        store: curStore, ym: curYm, no: it.no, waive: on,
+      }).catch(function () { return null; });
+      btns.forEach(function (b) { b.disabled = false; });
+      if (!(r && r.ok)) {
+        alert('점수 제외를 저장하지 못했습니다.\n' + ((r && r.error) || '잠시 후 다시 시도해 주세요.'));
+        return;
+      }
+      it.waive = r.waive === true;
+      fill(it);
+      /* 개선율이 바뀌었으므로 요약도 다시 받아 온다 — 화면 위쪽 숫자가 옛 값으로 남으면
+         담당자가 '뺐는데 점수가 그대로다'라고 읽는다. */
+      load();
     }
 
     async function audit(verdict) {
