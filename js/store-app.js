@@ -522,9 +522,16 @@
     sum = sum || {};
     $('#sumCard').style.display = '';
 
+    /* ★이름은 그 달 시트가 쓰는 것을 그대로★ (2026-08-27) — 서버가 찾아 보내 준다.
+       9월은 '위생·CS', 10월부터 'QSC·MS'. 끝의 '점수'만 떼고 적는다.
+       못 받았으면 옛 이름으로 버틴다(빈 머리글보다 낫다). */
+    const short = function (v, fallback) {
+      const t = str(v).replace(/점수$/, '').trim();
+      return t || fallback;
+    };
     const rows = [
-      ['위생', sum.hygiene, sum.hygieneGrade, false],
-      ['CS', sum.cs, sum.csGrade, false],
+      [short(sum.hygieneLabel, '위생'), sum.hygiene, sum.hygieneGrade, false],
+      [short(sum.csLabel, 'CS'), sum.cs, sum.csGrade, false],
       ['종합', sum.total, sum.totalGrade, true],
     ];
     const body = $('#sumBody');

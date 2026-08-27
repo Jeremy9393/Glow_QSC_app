@@ -197,7 +197,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v74', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v75', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3542,6 +3542,11 @@ function buildDash(key) {
          연간(CU열)은 처음부터 개선율인데 formulaOf('2026')는 'legacy'를 돌려주므로,
          종전에는 연간을 열어도 '개선요청(건)'이라 적힌 칸에 94.1(퍼센트)이 찍혔다. */
       improve: (isYear || key >= '2026-10') ? '개선율(%)' : '개선요청(건)',
+      /* ★점수 두 열의 이름도 달마다 다르다★ (2026-08-27) — 통합시트 머리글이 10월부터
+         'QSC 점수·MS 점수'로 바뀌어 있다. 이 열들은 라벨이 아니라 자리(BV·BX)로 읽으므로
+         개선 열과 같은 '달 기준'으로 이름을 정한다. 화면은 이것을 그대로 적는다. */
+      qsc: (key >= '2026-10') ? 'QSC' : '위생',
+      ms: (key >= '2026-10') ? 'MS' : 'CS',
       hasHygieneCs: !isYear   // 연간 구역에는 97·98·99 3열밖에 없어 위생·CS 열이 존재하지 않는다
     },
     stats: stats,
@@ -4043,6 +4048,9 @@ function readStoreTab(ss, sh, store, ym) {
       visitDate: vDate.found ? cell(vDate.v, tz) : null,
       hygiene: scorePct(vHyg.v), hygieneGrade: str(vHygG.v),
       cs: scorePct(vCs.v), csGrade: str(vCsG.v),
+      /* ★그 달 시트가 실제로 쓰는 이름★ — 9월은 '위생점수·CS점수', 10월부터 'QSC점수·MS점수'.
+         화면이 이것을 그대로 적는다(끝의 '점수'만 떼고). 못 찾았으면 화면이 옛 이름으로 버틴다. */
+      hygieneLabel: str(vHyg.name || ''), csLabel: str(vCs.name || ''),
       total: scorePct(vTot.v), totalGrade: str(vTotG.v),
       provisional: isProvisional(ym, tz),
       req: req, prog: prog, done: done, todo: todo, rate: rate,
@@ -4273,7 +4281,7 @@ function labelValue(lm, names) {
       if (raw === '' || raw == null) continue;
       // 숫자·날짜·불리언은 라벨일 수 없다 — 곧바로 값이다
       if (typeof raw === 'number' || typeof raw === 'boolean' || raw instanceof Date) {
-        return { found: true, v: raw, row: p.row, col: c + 1 };
+        return { found: true, v: raw, row: p.row, col: c + 1, name: names[i] };
       }
       const t = String(raw).replace(/\s+/g, '').trim();
       if (t === '') continue;
@@ -4281,9 +4289,12 @@ function labelValue(lm, names) {
          종전처럼 labelMap 등록 여부로 판정하면, 등급값 '미흡'처럼 같은 행에 두 번 나오는
          ★값★을 라벨로 오해해 멈춘다(종합등급이 빈칸이던 원인). LABEL_WORDS 주석 참조. */
       if (LABEL_WORDS[t]) break;
-      return { found: true, v: raw, row: p.row, col: c + 1 };
+      return { found: true, v: raw, row: p.row, col: c + 1, name: names[i] };
     }
-    return { found: true, v: null, row: p.row, col: start + 1 };  // 라벨은 있고 값이 빈 칸
+    /* ★어느 이름으로 찾았는지도 돌려준다★ (2026-08-27) — 같은 칸을 달마다 다르게 부른다
+       (L_QSC = QSC점수·위생점수·위생). 화면이 그 이름을 그대로 쓰면 9월은 '위생',
+       10월은 'QSC'로 저절로 바뀐다. 화면에 글자를 박아 두면 달을 옮길 때마다 어긋난다. */
+    return { found: true, v: null, row: p.row, col: start + 1, name: names[i] };  // 라벨은 있고 값이 빈 칸
   }
   return { found: false, v: null };
 }

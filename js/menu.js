@@ -23,7 +23,7 @@ var Menu = (function () {
     /* ★dashboard·store 문구는 2026-08-16에 바꿨다★ — '순위표'·'지적 사항'은 이 앱을 매장 사람이
        본다는 사실과 맞지 않는다. 줄 세우기가 아니라 개선을 돕는 도구로 읽혀야 해서
        '전체 대시보드'·'개선요청사항'으로 통일했다. index.html의 정적 카드 문구도 같이 바뀌어 있다. */
-    { key: 'dashboard', title: '[감사총무팀_QSC]통합시트', desc: '전 매장 위생·CS·개선 현황',   href: 'dashboard.html', order: 30 },
+    { key: 'dashboard', title: '[감사총무팀_QSC]통합시트', desc: '전 매장 QSC·MS·개선 현황',   href: 'dashboard.html', order: 30 },
     { key: 'store',     title: '매장별 QSC현황',      desc: '개선요청사항 확인과 개선 보고',    href: 'store.html',     order: 40 },
     /* ★home:false★ — 홈에는 안 두고 '관리자 도구'(admin.html) 안에서 연다 (2026-08-26).
        등록표에서 아예 빼지 않는 이유: 서버가 내려주는 메뉴 목록에는 codes가 그대로 들어 있어,
