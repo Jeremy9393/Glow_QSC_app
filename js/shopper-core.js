@@ -183,7 +183,21 @@ async function initShopperForm(opts) {
        손님은 매장을 고를 수도 제출할 수도 없이 '매장명을 선택해 주세요'만 반복해서 보게 된다.
        (제출 검증이 focus를 주는 대상도 잠긴 칸이라 아무 일도 일어나지 않는다 — 막다른 길이다) */
     storeSel.disabled = false;
-    if (preStore && list.indexOf(preStore) >= 0) {
+    if (preStore) {
+      /* ★링크를 믿는다★ (2026-08-27 담당자 지적)
+           "손님은 화면 매장 목록을 볼 필요가 없어
+            내가 제출코드를 매장지정해서 코드를 주니까"
+         종전에는 list.indexOf(preStore) >= 0 일 때만 잠갔다. 그래서 목록이 낡아 그 이름이
+         없으면 손님에게 드롭다운이 열린 채 남았고, 옛 이름을 골라 제출하면 서버가
+         제출코드 대조에 실패시켰다 — 손님은 왜 안 되는지 알 방법이 없었다.
+         이제 없으면 더해 넣고 잠근다. ⇒ 손님 화면은 실시간 매장 목록이 필요 없다.
+         ⚠엉뚱한 이름을 손으로 붙여 넣어도 안전하다 — 서버가 그 코드에 적힌 매장과
+           대조해 거른다(submitWithCode). 화면이 아니라 코드가 매장을 정한다. */
+      if (list.indexOf(preStore) < 0) {
+        const o = document.createElement('option');
+        o.value = preStore; o.textContent = preStore;
+        storeSel.appendChild(o);
+      }
       storeSel.value = preStore;
       storeSel.disabled = true;
     }
