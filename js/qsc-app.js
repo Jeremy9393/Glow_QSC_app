@@ -6,7 +6,17 @@
   const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
   const $ = function (s, el) { return (el || document).querySelector(s); };
   const DRAFT_KEY = 'qsc-draft-v2';
-  const state = { values: {}, memos: {}, photos: {} };
+  /* ★NA 사유★ (2026-08-27 담당자 결정) — NA 로 뺀 이유를 함께 남긴다.
+     점수는 셋 다 똑같이 빠지지만, 몇 달 뒤에 「본사가 안 고쳐준 것」과 「원래 없는 시설」을
+     구별할 수 있어야 한다. 종전에는 둘 다 그냥 'NA' 라 영영 가릴 수 없었다.
+     기본값은 '해당 없음' 이다 — 지금까지 쓰던 대로 NA 만 눌러도 동작이 같다. */
+  const NA_WHY = ['해당 없음', '본사 대기', '확인 불가'];
+  const NA_WHY_TIP = {
+    '해당 없음': '그 매장에 시설·업무가 없습니다',
+    '본사 대기': '매장 권한 밖입니다 — 본사에 요청해 둔 것입니다',
+    '확인 불가': '증빙·상황이 없어 확인하지 못했습니다',
+  };
+  const state = { values: {}, memos: {}, photos: {}, naWhy: {} };
   const allItems = [];
   master.qsc_groups.forEach(function (g) { g.items.forEach(function (it) { it.group = shortName(g.name); allItems.push(it); }); });
   // 안전장치: 심각도 정보가 없으면 구버전 데이터가 캐시된 것 — 잘못된 감점(중대 −1점)을 막는다
@@ -115,7 +125,14 @@
     const preset = naPresetFor(store).filter(function (no) { return updaters[no] && state.values[no] !== 'NA'; });
     if (!preset.length) return;
     if (confirm(store + '\n지난 회차에 NA(해당 없음)였던 ' + preset.length + '개 문항을 이번에도 NA로 적용할까요?\n문항 번호: ' + preset.join(', '))) {
-      preset.forEach(function (no) { state.values[no] = 'NA'; updaters[no](); });
+      /* ★프리셋은 '해당 없음' 만 기억한다★ (2026-08-27 담당자: "1만해")
+         '본사 대기' 는 본사가 고치면 없어지고, '확인 불가' 는 그때뿐이다.
+         자동으로 다시 제안하면 「본사가 아직인가?」를 안 보고 넘기게 된다. */
+      preset.forEach(function (no) {
+        state.values[no] = 'NA';
+        state.naWhy[no] = NA_WHY[0];
+        updaters[no]();
+      });
       recompute();
       saveDraft();
     }
@@ -141,7 +158,7 @@
          가장 비싼 사고이므로, 아직 못 찾은 매장명은 그대로 들고 간다. */
       store: $('#store').value || pendingStore, date: $('#date').value, time: TimePick.get('time'),
       inspector: $('#inspector').value,
-      values: state.values, memos: state.memos, t: Date.now(),
+      values: state.values, memos: state.memos, naWhy: state.naWhy, t: Date.now(),
     }));
     $('#saveNote').textContent = '이 기기에 자동 임시저장됨 ' +
       (photoDraftOn ? '(사진 포함)' : '(사진 제외)') + ' · ' + new Date().toLocaleTimeString('ko-KR');
@@ -290,6 +307,11 @@
       '<div class="seg"><button data-v="0">이상 없음</button><button data-v="NA">NA</button></div>' +
       '<div class="counter"><button class="minus">−</button><span class="cnt empty">–</span><button class="plus">＋</button><span class="cl">건</span></div>' +
       '</div>' +
+      /* NA 사유 — NA 일 때만 보인다. 점수와는 무관하고 기록에만 남는다. */
+      '<div class="naWhy" style="display:none"><div class="seg">' +
+      NA_WHY.map(function (w) {
+        return '<button data-w="' + w + '" title="' + NA_WHY_TIP[w] + '">' + w + '</button>';
+      }).join('') + '</div></div>' +
       /* ★이 칸이 매장에 전달되는 유일한 글이다★ (2026-08-20) — 문항 본문·코드·심각도·건수는
          매장 시트에 가지 않는다. 그래서 이름이 '비고'가 아니라 '개선요청 내용'이다.
          건수를 1 이상 넣으면 제출 전에 반드시 채워야 한다(아래 submit 검사). */
@@ -299,6 +321,12 @@
 
     function setValue(v) {
       state.values[it.no] = v;
+      /* NA 로 들어가면 기본 사유를 넣고, NA 에서 나오면 지운다.
+         ★기본값을 넣는 이유★ — 사유를 고르지 않으면 제출을 막는 방식은 74문항 화면에서
+         너무 성가시다(NA 가 20개 넘는 매장도 있다). 흔한 경우를 기본으로 두고
+         다른 경우에만 바꾸게 한다. */
+      if (v === 'NA') { if (!state.naWhy[it.no]) state.naWhy[it.no] = NA_WHY[0]; }
+      else if (state.naWhy[it.no]) delete state.naWhy[it.no];
       update();
       recompute();
       saveDraft();
@@ -309,6 +337,13 @@
         const v = b.dataset.v === 'NA' ? 'NA' : 0;
         // 켜져 있는 버튼을 다시 누르면 입력 해제(미확인), 아니면 해당 상태로 입력
         setValue(cur === v ? null : v);
+      };
+    });
+    card.querySelectorAll('.naWhy button').forEach(function (b) {
+      b.onclick = function () {
+        state.naWhy[it.no] = b.dataset.w;
+        update();
+        saveDraft();
       };
     });
     $('.plus', card).onclick = function () {
@@ -342,6 +377,15 @@
         const on = (b.dataset.v === 'NA' && v === 'NA') || (b.dataset.v === '0' && v === 0);
         b.className = on ? (b.dataset.v === 'NA' ? 'on-na' : 'on-o') : '';
       });
+      /* 사유 줄은 NA 일 때만 보인다 */
+      const whyBox = $('.naWhy', card);
+      if (whyBox) {
+        whyBox.style.display = (v === 'NA') ? '' : 'none';
+        const w = state.naWhy[it.no] || NA_WHY[0];
+        card.querySelectorAll('.naWhy button').forEach(function (b) {
+          b.className = (b.dataset.w === w) ? 'on-na' : '';
+        });
+      }
       const cnt = $('.cnt', card);
       if (typeof v === 'number') { cnt.textContent = v; cnt.className = v > 0 ? 'cnt hot' : 'cnt'; }
       else { cnt.textContent = '–'; cnt.className = 'cnt empty'; }
@@ -628,6 +672,7 @@
           value: v, deduct: typeof d === 'number' ? d : null,
           rating: v === 'NA' ? 'NA' : (typeof v === 'number' ? (v === 0 ? '이상 없음' : v + '건') : ''),
           score: typeof d === 'number' ? -d : null,
+          naWhy: v === 'NA' ? (state.naWhy[it.no] || NA_WHY[0]) : '',
           memo: state.memos[it.no] || '', photos: state.photos[it.no] || [],
         };
       }),
@@ -727,6 +772,7 @@
     $('#inspector').value = draft.inspector || '';
     Object.assign(state.values, draft.values || {});
     Object.assign(state.memos, draft.memos || {});
+    Object.assign(state.naWhy, draft.naWhy || {});   // NA 사유도 되살린다
     allItems.forEach(function (it) { updaters[it.no](); });
     $('#saveNote').textContent = '임시저장 불러옴 (' + new Date(draft.t).toLocaleString('ko-KR') + ')';
   } else {
