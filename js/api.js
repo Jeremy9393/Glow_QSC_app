@@ -199,15 +199,22 @@ const Api = (function () {
      사람이 헷갈리지 않는다(서버 규칙도 하나다). true면 '덮어쓴다'는 뜻이다.
      ★매장 확인을 먼저 권한다★ — '덮어쓸까요?'만 물으면 사람은 읽지 않고 예를 누른다.
        이 창이 막으려는 사고 1번이 '매장을 잘못 골랐다'이므로, 그 말이 맨 앞에 와야 한다. */
-  function askOverwrite(store, existing) {
+  function askOverwrite(store, existing, storeWrote) {
     const rows = (existing || []).map(function (e) {
       return '   · ' + e.date + (e.time ? ' ' + e.time : '') +
         (e.route ? ' · ' + e.route : '') +
         (e.who ? ' · ' + e.who : '') +
         (typeof e.score === 'number' ? ' · ' + e.score.toFixed(1) + '점' : '');
     });
+    /* ★매장이 이미 적은 답이 있으면 그 줄을 반드시 넣는다★ (2026-08-27)
+       덮어쓰면 그것도 함께 지워진다 — 모르고 누르면 매장의 노동이 조용히 사라진다. */
+    const wrote = storeWrote
+      ? ('\n★매장이 이미 개선 내용을 적은 항목이 ' + storeWrote.touched +
+         '건 있습니다 (' + storeWrote.date + ').\n' +
+         '   덮어쓰면 그 내용도 함께 지워집니다 — 매장에 다시 작성을 요청하셔야 합니다.\n')
+      : '';
     return confirm(store + '\n이번 달에 이미 제출된 기록이 ' + rows.length + '건 있습니다.\n\n' +
-      rows.join('\n') +
+      rows.join('\n') + wrote +
       '\n\n★매장을 잘못 고르지 않으셨는지 먼저 확인해 주세요.★\n' +
       '다른 매장이라면 [취소]를 누르고 매장을 다시 골라 주세요.\n' +
       '작성하신 내용은 그대로 남습니다.\n\n' +

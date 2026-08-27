@@ -432,7 +432,7 @@ async function initShopperForm(opts) {
          ★고객 설문(ADMIN이 아닐 때)에는 오지 않는다★ — survey.submit은 이 검사를 하지 않는다.
            고객은 '이미 있나요'를 판단할 수 없고, 그쪽은 제출 코드가 1회용으로 통제한다. */
       if (ADMIN && r && !r.ok && r.code === 'CONFLICT' && r.existing) {
-        if (!Api.askOverwrite(payload.store, r.existing)) {
+        if (!Api.askOverwrite(payload.store, r.existing, r.storeWrote)) {
           btn.disabled = false; btn.textContent = btnLabel;
           return;   // 작성한 내용은 그대로 남는다 — 매장만 다시 고르면 된다
         }
