@@ -61,7 +61,6 @@
                          사용자가 ✕로 닫아도 문구를 고치면 자동으로 다시 뜬다(id가 문구의 해시라서).
                          공개되는 문구다 — 개인정보를 적지 말 것
      AUTH_ENFORCE        'off'(기본) | 'on'.  off = 토큰 없는 옛 요청도 받아줌(감사로그만)
-     (STORE_IMPROVE_WRITE  — 2026-08-27에 없앴다. 매장 개선보고는 권한만 있으면 늘 저장된다)
      CACHE_EPOCH         숫자. +1 하면 전 캐시 무효. 기본 1
      LOGIN_FAIL_MAX      기본 10 (10분 내 실패 허용 횟수 → 15분 잠금)
      HASH_BUDGET         기본 300 (시간당 느린 해시 실행 '전역' 상한)
@@ -72,8 +71,6 @@
      GLOBAL_FAIL_MAX     기본 40 (시간당 전역 로그인 실패 상한 → 실패 응답 문구만 바뀐다)
      PHOTO_DAY_MAX       기본 200 (계정당 하루 사진 저장 건수)
      IMPROVE_DUE_DAY     기본 10 (익월 며칠까지 종합점수를 '잠정'으로 표시)
-     (STORE_FILE_WRITE·DASHBOARD_WRITE — 2026-08-27에 없앴다. 제출하면 늘 쓴다.
-      되돌리려면 「관리자 도구 → 제출 관리 → 제출 되돌리기」를 쓴다)
 
    (실제 ID는 로컬 문서 `1. QSC\연동_설정값.md`에 기록해 두었다 — 저장소에 올리지 말 것)
 
@@ -93,11 +90,8 @@ const DASHBOARD_SHEET = '데이터';
      ★사고가 나면★ 「관리자 도구 → 제출 관리 → 제출 되돌리기」가 그 제출이 쓴 자리를
        전부 되돌린다(응답 시트·매장 파일 탭·통합시트 점수·사진). 밸브 대신 그쪽을 쓴다.
 
-     ★통합시트 [데이터] 점수 칸(BV·BX)에 대해★ — 등급·개선·종합은 시트 수식이라 안 건드린다.
-       종전에는 `const DASHBOARD_WRITE = false;` 로 코드에 박혀 있었고 그 근거는 "스크립트가 도는
-       계정에 통합시트 '보기' 권한밖에 없다"였다. 2026-08-25에 그 근거가 사실이 아니게 되었고
-       (같은 계정으로 10~12월 수식 204칸을 넣었다), 2026-08-27에 밸브 자체가 없어졌다.
-       ⇒ 지금은 제출이 끝나면 그 달 점수 칸에 늘 들어간다.
+     ★통합시트 [데이터] 점수 칸(BV·BX)★ — 제출이 끝나면 그 달 점수 칸에 늘 들어간다.
+       등급·개선·종합은 시트 수식이라 안 건드린다. 쓰는 계정에 편집 권한이 있다(2026-08-25~).
        ⚠"읽기 전용이라 어떤 버그도 통합시트를 훼손할 수 없다"는 옛 안전장치는 없다. 그 자리를
          writeDashboard() 안의 검사 두 개가 대신한다 — ①올해 자료인지 ②그 칸이 수식은 아닌지. */
 
@@ -166,7 +160,7 @@ const ACCOUNT_PUBLIC = ['id', 'name', 'role', 'status', 'scope', 'hasPw', 'pw', 
 
 /* 속성은 매 실행마다 다시 읽는다 — 그래서 속성 화면에서 값을 고치면 재배포 없이 즉시 반영된다.
    이 성질이 이 시스템의 롤백 수단이다 (AUTH_ENFORCE·CACHE_EPOCH).
-   ※쓰기 밸브 셋은 2026-08-27에 없앴다 — 잘못 들어간 제출은 「제출 관리 → 제출 되돌리기」로 되돌린다. */
+   ※잘못 들어간 제출은 속성이 아니라 「제출 관리 → 제출 되돌리기」로 되돌린다. */
 function prop(key, def) {
   const v = PROPS.getProperty(key);
   return (v === null || v === undefined || v === '') ? def : v;
@@ -177,8 +171,6 @@ function propN(key, def) {
 }
 /* ★오타는 '켜짐' 쪽으로 넘어가야 한다★. 종전 코드는 `=== 'on'` 이라 'ON'·'On'·'true'·'1'·'on '
    가 전부 off로 판정됐다 — 담당자가 켰다고 믿는 상태에서 게이트가 열려 있는 유일한 스위치였다.
-   (한때 `=== 'true'`로 읽던 쓰기 밸브 세 개가 있었으나 2026-08-27에 없앴다. 지금 '켜고 끄는'
-    속성은 이것 하나뿐이다.)
    여기서는 '끔'을 뜻하는 흔한 표기를 명시적으로 적었을 때만 끈다. */
 function enforceOn() {
   const v = String(prop('AUTH_ENFORCE', 'off')).trim().toLowerCase();
@@ -194,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v79', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v80', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3322,9 +3314,8 @@ function saveShopper(ss, p, ctx, isSurvey) {
 
      ⚠이 줄 때문에 ★익명 경로가 매장 파일 한 칸(CS 점수)을 쓰게 된다★.
        쓰는 값은 사용자가 보낸 숫자가 아니라 시트에서 다시 계산한 평균이다.
-       ⚠종전에는 쓰기 밸브(STORE_FILE_WRITE·DASHBOARD_WRITE)가 꺼져 있으면 애초에 쓰지 않았는데
-         2026-08-27에 밸브를 없앴다 — ★이제 이 경로는 늘 쓴다.★ 다만 지금은 제출 코드가 있어
-         (1회용·매장 지정·만료) 아무나 이 경로에 닿지 못한다. 그 코드 검사가 유일한 문지기다. */
+       ⚠★이 경로는 늘 쓴다★ — 막아 주는 것은 제출 코드 하나뿐이다(1회용·매장 지정·만료).
+         그 코드 검사가 유일한 문지기이므로, 그 자리를 느슨하게 만들지 말 것. */
 
   // 통합시트 CS 칸 + 매장 파일 CS점수: 같은 달 쇼퍼가 여러 명이면 "해당 월 평균"으로 기록
   const extra = { dashboard: null, storeFile: null };
@@ -3724,8 +3715,9 @@ function fnStoreGet(ctx, payload, target) {
   /* ★사람마다 달라지는 값은 캐시가 아니라 여기서 붙인다★
      readOnly는 권한이, isNew는 그 계정의 최근접속이 정한다. 캐시에 담으면 먼저 연 사람의
      권한·기준선이 다음 사람에게 그대로 간다. */
-  /* 2026-08-27: 밸브를 지웠으므로 ★권한만★ 본다. 종전에는 STORE_IMPROVE_WRITE 도 함께 봐서,
-     속성이 비어 있으면 권한이 있는 매장에도 「지금은 조회만 가능합니다」가 떴다. */
+  /* ★권한만 본다★ — 매장 개선보고는 권한이 있으면 늘 저장된다.
+     (종전에는 스크립트 속성도 함께 봐서, 그것이 비어 있으면 권한이 있는 매장에도
+      「지금은 조회만 가능합니다」가 떴다. 2026-08-27에 그 조건을 걷어냈다.) */
   out.readOnly = !can(ctx.role, 'store', '쓰기').allow;
   markNewItems(out.items, store, ym, seenBaseline(ctx.id));
   return out;
@@ -4401,8 +4393,8 @@ function dropStoreCache(store, ym) {
 /* ★K~O만 쓴다★. 본사 몫인 B·C·D·J를 쓰는 코드 경로를 매장 기능층에 아예 만들지 않는다
    (§8-3 방어④). 열 번호를 계산하는 코드가 없으므로 오프셋 실수로 본사 칸을 덮을 수 없다. */
 function fnStoreSave(ctx, payload, target) {
-  /* ★사본(_연동테스트)에서는 스위치를 타지 않는다★ — 그 스위치는 실매장 26곳을 위한 것이고,
-     10/1 전에 이 경로를 한 번도 못 돌려 보면 그날 처음 알게 된다. 실매장은 그대로 막힌다.
+  /* ★사본(_연동테스트)으로 미리 돌려 볼 수 있게 열어 둔 자리★ — 실매장을 건드리지 않고
+     이 경로를 시험하기 위한 것이다. 안 그러면 10/1에 처음으로 돌려 보게 된다.
      fileId는 관리자만 보낼 수 있고(이 액션은 menu:'store' 쓰기 권한이 필요하다),
      이름에 _연동테스트가 없으면 곧바로 거절한다. */
   const testId = String((payload && payload.fileId) || '');
@@ -4713,8 +4705,8 @@ function yymm(dateStr) { return dateStr.slice(2, 4) + dateStr.slice(5, 7); } // 
    ★병합을 처리한다★ — 라벨 셀이 G5:H5 병합이면 값 칸은 I5인데 종전 코드는 무조건 c+2(H5)를
      노려 병합 내부에 쓰려다 값이 조용히 사라졌다.
    ★safe()를 통과시킨다★ — 본사 공용 26개 파일에 수식 주입 경로가 열리지 않도록 여기 한 곳에서
-     막는다(숫자 인자는 safe가 그대로 통과시킨다). 쓰기 밸브가 있던 시절에는 '켜는 날'을 대비한
-     장치였으나 2026-08-27에 밸브가 없어져 ★지금은 늘 이 길로 쓴다★ — 그만큼 여기가 중요해졌다. */
+     막는다(숫자 인자는 safe가 그대로 통과시킨다).
+     ★제출은 늘 이 길로 매장 파일에 쓴다★ — 건너뛰는 조건이 없으므로 여기가 유일한 방벽이다. */
 function setByLabel(sh, label, value) {
   const lm = labelMap(sh);
   const at = lm.at[String(label).replace(/\s+/g, '')];
@@ -5790,10 +5782,8 @@ function fnUndoSubmit(ctx, payload) {
     shopMemo.rows.length + na.rows.length) + '행 삭제');
   if (na.rows.length) dropNaCache();   // NA프리셋 줄을 지웠으면 캐시도 버린다
 
-  /* ★쓰기 밸브는 2026-08-27에 없어졌다★ — 되돌리기는 늘 매장 파일과 통합시트를 정리한다.
-     (한때 여기에 STORE_FILE_WRITE·DASHBOARD_WRITE 검사를 넣었다가, 밸브 자체가 사라지면서
-      함께 걷어냈다. 밸브를 다시 만들자는 이야기가 나오면 현재상황.md 의 「하지 말 것」을 볼 것.)
-     멈추는 수단은 「관리자 도구 → 제출 관리 → 제출 되돌리기」 하나다. */
+  /* ★되돌리기는 늘 매장 파일과 통합시트를 정리한다★ — 건너뛰는 조건이 없다.
+     멈추는 수단은 「관리자 도구 → 제출 관리 → 제출 되돌리기」, 곧 이 함수 하나다. */
   const fileId = storeFileId(store);
   if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
   else {
@@ -5888,7 +5878,6 @@ function fnUndoSubmit(ctx, payload) {
 /* 같은 일을 관리자 화면에서도 할 수 있게 — 편집기 함수 목록이 283개라 고르기가 어렵고,
    설정 화면은 위 이유로 영영 읽기 전용이다. 관리자 권한이 있어야 도달한다(ACTIONS 등록표).
 
-   ★admin.switches 는 2026-08-27에 없앴다★ — 쓰기 밸브 세 개를 통째로 지웠기 때문이다.
    잘못 들어간 제출을 되돌리려면 「관리자 도구 → 제출 관리 → 제출 되돌리기」를 쓴다. */
 
 /* 지금 사진이 드라이브를 얼마나 쓰고 있는지 연도별로 알려준다 (앱스 스크립트에서 직접 실행).
@@ -6005,7 +5994,7 @@ function auditStoreFiles(stores, page) {
     line.push('⑤ deptOptions(' + dept.length + '): ' + dept.join(', '));
     /* ⑥ 요약 값 칸이 수식인가 — ★고정 주소로 보지 않는다★
        종전에는 I5~I9를 봤는데 실물 요약 값은 H열이다(라벨 D5:G5 병합 + 값 H5).
-       그래서 전부 '수기'로 나왔고, STORE_FILE_WRITE를 켤지 판단하는 근거가 통째로 틀렸다.
+       그래서 전부 '수기'로 나왔고, 매장 파일에 자동 기록할지 판단하는 근거가 통째로 틀렸다.
        라벨을 찾아 그 값 칸을 보는 방식으로 바꾼다 — 파일마다 열이 달라도 맞는다. */
     try {
       const lm6 = labelMap(sh);
@@ -6257,7 +6246,7 @@ function impGeo(sh) {
 }
 
 /* 항목 번호 → 시트 행. ★저장과 미리보기가 이 함수 하나를 같이 쓴다★ —
-   저장 경로는 STORE_IMPROVE_WRITE가 켜지기 전에는 돌려볼 수 없어서, 행 찾기만 따로 떼어
+   저장 경로는 실제로 써 보지 않고는 돌려볼 수 없어서, 행 찾기만 따로 떼어
    store.upgrade(probe)로 확인할 수 있게 했다. 두 벌로 만들면 확인한 쪽과 도는 쪽이 갈라진다. */
 function impFindRow(sh, g, no) {
   if (g.isNew) {
@@ -7150,7 +7139,6 @@ function fnStoreMakeTab(ctx, payload) {
 
    ★제출 경로와 별개다★ — 원본 탭은 점검 결과가 들어오기 전에 미리 만들어 두는 것이 목적이라,
    제출 쪽 규칙을 그대로 적용하면 기능 자체가 성립하지 않는다.
-   (한때 STORE_FILE_WRITE 스위치를 일부러 타지 않게 해 둔 자리였다 — 2026-08-27에 밸브가 없어졌다.)
    좁히는 수단은 세 가지다: ①관리자 인증 ②기본 미리보기 ③한 번에 10곳. */
 /* ---------- 매장 파일 「월별 QSC현황표」 수리 (2026-08-24) ----------
 
@@ -7494,8 +7482,7 @@ function fnImproveAudit(ctx, payload) {
   let ss, label;
   if (p.fileId) {
     /* ★사본에만 열어 준다★ — store.upgrade와 같은 규칙이다. 실매장은 매장명으로만 부른다.
-       (사본은 실매장 26곳을 위한 규칙을 타지 않는다. 한때 STORE_FILE_WRITE 스위치가 그 갈림길이었으나
-        2026-08-27에 없어졌고, 지금은 아래 '_연동테스트' 이름 검사가 그 자리를 대신한다.) */
+       사본과 실매장을 가르는 것은 아래 '_연동테스트' 이름 검사 하나다. */
     try { ss = SpreadsheetApp.openById(String(p.fileId)); }
     catch (e) { return err('BAD_REQUEST', '그 ID로 파일을 열지 못했습니다'); }
     if (String(ss.getName()).indexOf('_연동테스트') < 0) {
