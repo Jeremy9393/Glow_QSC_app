@@ -1,6 +1,6 @@
 {
- "sha256": "04a783e703b619c66b705fd7ddc4e5330e1297fdf00d7a272ffc81ce01070732",
- "version": 78,
- "when": "2026-08-28 09:33:02",
- "description": "2026-08-28 09:32 배포"
+ "sha256": "23eb5b8054f08c9af0a35d304198a6adcbdb02b353d3861c6319943ad5e806b3",
+ "version": 79,
+ "when": "2026-08-28 11:28:55",
+ "description": "2026-08-28 낡은 주석 정리 — 밸브 흔적·fnTidyLog 앞 주석"
 }
