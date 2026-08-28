@@ -197,7 +197,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v77', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v78', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -1076,6 +1076,44 @@ function tidyAuditLog(sh, ss) {
     ]));
   } catch (e) { }
   return cnt;
+}
+
+/* ★밸브 셋을 하나씩 여닫는다★ (2026-08-26) — 종전에는 세 개가 함께만 움직였다.
+   멈추고 싶은 자리가 서로 다르기 때문에 따로 잠글 수 있어야 한다:
+     STORE_FILE_WRITE     매장 파일에 쓰는 것 전부 (점수·방문일·★개선요청 표★)
+     STORE_IMPROVE_WRITE  ★매장이★ 답을 쓰는 것 (담당부서·진행/완료 내용·개선 후 사진)
+     DASHBOARD_WRITE      통합시트 [데이터] 그 달 점수 칸
+
+   부르는 법
+     {}                                  지금 상태만 본다 (아무것도 안 바꾼다)
+     {on:true} / {on:false}              세 개를 한꺼번에 (종전 그대로)
+     {set:{STORE_FILE_WRITE:false}}      하나만
+     {set:{DASHBOARD_WRITE:true, STORE_FILE_WRITE:true}}   골라서 여럿
+
+   ★모르는 이름·엉뚱한 값은 거절한다★ — 조용히 무시하면 껐다고 믿는 채로 계속 써진다.
+     이 액션이 막으려는 사고가 바로 그것이라, 여기서 조용하면 안 된다. */
+function fnTidyLog(ctx, payload) {
+  const ss = authSS();
+  if (!ss) return err('SERVER_ERROR', '인증 시트를 열지 못했습니다.');
+  const sh = ss.getSheetByName(AUTH_LOG_SHEET);
+  if (!sh) return err('SERVER_ERROR', '감사로그 탭이 없습니다.');
+  const before = Math.max(0, sh.getLastRow() - 1);
+  let moved = 0;
+  if (payload && payload.run === true) {
+    TIDY_RUNNING = true;                       // 이 안에서 남기는 로그가 정리를 또 부르지 않게
+    try { moved = tidyAuditLog(sh, ss); } finally { TIDY_RUNNING = false; }
+  }
+  const after = Math.max(0, sh.getLastRow() - 1);
+  return {
+    ok: true, keepDays: AUDIT_KEEP_DAYS, before: before, after: after, deleted: moved,
+    lastTidy: PROPS.getProperty('LOG_TIDY_DAY') || '(아직 없음)',
+    log: [
+      '감사로그 보관 기간: ' + AUDIT_KEEP_DAYS + '일',
+      '마지막 자동 정리: ' + (PROPS.getProperty('LOG_TIDY_DAY') || '(아직 없음)'),
+      '지금 줄 수: ' + before + (payload && payload.run === true ? (' → ' + after + '  (' + moved + '줄 삭제)') : ''),
+      (payload && payload.run === true) ? '' : '지금 바로 정리하려면 {run:true} 를 넣어 다시 부르십시오.',
+    ].filter(String),
+  };
 }
 
 /* 무인증 통과 기록. config.get은 앱을 열 때마다 오므로 매번 appendRow하면 체감 속도가 무너진다.
