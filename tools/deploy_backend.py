@@ -179,6 +179,30 @@ else:
     ok('라벨 v%s \u2192 v%d' % (cur.group(1), NEXT))
 
 
+# ── 2-5. ★올리기 전에 한 번 돌려 본다★ ─────────────────────────
+#
+#  2026-08-28 사고: 쓰기 스위치를 지우면서 바로 위의 fnTidyLog 까지 함께 지웠는데,
+#  ACTIONS 등록표가 그 함수를 계속 가리키고 있었다. 등록표를 만드는 순간 터지므로
+#  ★로그인·매장목록·제출 — 요청이 무엇이든 전부 죽었다.★ 26곳이 앱을 못 썼다.
+#  `node --check` 는 문법만 보고, 시험 93개는 함수를 하나씩 떼어 돌려 등록표를 안 본다.
+#  그래서 여기서 ①등록표가 가리키는 함수가 실제로 있는지 ②가짜 서버로 요청을 한 번
+#  보내 봤을 때 살아 있는지를 확인한다. 자세한 것은 tools/check_backend.py 주석.
+line('2-5. 올리기 전 실행 점검', 27)
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import check_backend
+    _problems = check_backend.check(printer=ok)
+except Exception as _e:  # noqa: BLE001
+    _problems = ['점검을 돌리지 못했습니다: %s' % _e]
+if _problems:
+    for _p in _problems:
+        fail(_p)
+    print('')
+    print('★올리지 않았습니다★ — 이대로 배포하면 앱이 통째로 멈춥니다.')
+    print('  실서버는 아직 지난 버전 그대로라 사람들은 계속 쓸 수 있습니다.')
+    sys.exit(1)
+
+
 # ── 3. 올린다 ───────────────────────────────────────────────────
 line('3. 코드 올리기 (clasp push)', 27)
 code, out = run(['push', '--force'])
