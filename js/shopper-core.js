@@ -31,11 +31,14 @@ async function initShopperForm(opts) {
     { id: 'store', label: '매장명 *', full: true, control: '<select id="store"><option value="">방문한 매장 선택</option></select>' },
     { id: 'date', label: '방문날짜 *', control: '<input type="date" id="date">' },
     { id: 'time', label: '방문 시간 *', control: TimePick.html('time') },
-    /* ★이름·얼굴·체형은 받지 않는다★ (2026-08-27 담당자 결정)
+    /* ★이름·얼굴·체형은 받지 않는다★ (2026-08-27 담당자 결정 · 2026-09-01 완화)
        손님이 적은 이 글은 시트에 그대로 남고 본사가 본다. 사람을 알아볼 수 있는 내용을
        남길 이유가 없다 — 개선 지도에 필요한 것은 「언제·무슨 상황」이다.
-       여러 명이라 구분이 필요하면 역할 닉네임(카운터·홀)까지만 받는다. */
-    { id: 'staff', label: '응대 시간대·상황 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 카운터에서 결제 응대 · 카운터 직원">' },
+       ★2026-09-01 담당자 결정 — 명찰의 「닉네임」까지는 받는다★
+       가이드북 5-2-1 이 「응대직원은 명찰(이름 또는 닉네임)이 고객이 볼 수 있는 위치에」를
+       요구한다. 손님이 보라고 매장이 내건 것을 손님이 적는 것은, 외모를 관찰해 특정하는 것과
+       성격이 다르다. ★이름은 여전히 안 받는다★ — 명찰이 이름이면 역할 닉네임(카운터·홀)으로. */
+    { id: 'staff', label: '응대 시간대·상황 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 카운터에서 결제 응대 · 카운터 직원 (명찰 닉네임이 있으면 함께)">' },
     { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
     { id: 'demo', label: '연령대·성별 (작성자 본인) *', full: true, control: '<input type="text" id="demo" placeholder="직원이 아닌 본인 기준 — 예: 30대 여성">' },
   ];
@@ -380,7 +383,7 @@ async function initShopperForm(opts) {
       const val = f.get ? f.get() : $('#' + f.id).value.trim();
       if (!val) {
         alert(withEulReul(f.label) + ' ' + (f.verb || (f.pick ? '선택해' : '입력해')) + ' 주세요.' +
-          (f.id === 'staff' ? '\n언제·무슨 상황이었는지 적어 주세요. ★직원의 이름·얼굴·체형은 적지 않습니다.★\n여러 명이라 구분이 필요하면 카운터 직원·홀 직원처럼만 적어 주세요.\n예) 14시경 카운터에서 결제 응대 · 카운터 직원' : '') +
+          (f.id === 'staff' ? '\n언제·무슨 상황이었는지 적어 주세요. ★직원의 이름·얼굴·체형은 적지 않습니다.★\n명찰에 닉네임이 있으면 그 닉네임을, 명찰이 이름이거나 못 보셨으면 카운터 직원·홀 직원처럼 적어 주세요.\n예) 14시경 카운터에서 결제 응대 · 카운터 직원' : '') +
           (f.id === 'demo' ? '\n응대 직원이 아니라, 설문을 작성하시는 본인 기준으로 적어 주세요.' : ''));
         $('#' + (f.focus || f.id)).focus();
         return;
