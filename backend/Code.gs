@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v81', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v82', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -195,6 +195,20 @@ function doGet(e) {
    (속성은 매 실행마다 다시 읽으므로 재배포가 필요 없다 — 이것이 이 스위치의 존재 이유). */
 function maintMsg() {
   return String(prop('MAINT', '')).trim().slice(0, 300);
+}
+
+/* 점검의 부가 정보 — 시작 시각(MAINT_AT)과 예상 소요분(MAINT_MIN).
+   ★두 값은 없어도 된다★ — 속성 화면에서 MAINT 한 칸만 손으로 채우는 옛 방식이 그대로 살아 있어야
+   장애 대응 중에 화면을 못 열어도 점검을 켤 수 있다. 없으면 화면이 경과 시간을 안 보여 줄 뿐이다. */
+function maintInfo() {
+  const msg = maintMsg();
+  if (!msg) return { on: false, msg: '', at: '', min: 0 };
+  return {
+    on: true,
+    msg: msg,
+    at: String(prop('MAINT_AT', '')).trim(),
+    min: Number(prop('MAINT_MIN', 0)) || 0
+  };
 }
 
 /* 점검 중 통과 판정. ★역할 이름을 비교하지 않는다★ — 계정관리(accounts) 메뉴 읽기 권한을
@@ -223,7 +237,11 @@ function maintBlock(token) {
       auditLog(anonCtx(), 'maint', '', '차단', 'MAINT', msg.slice(0, 100));
     }
   } catch (e) { }
-  return { ok: false, res: { ok: false, code: 'MAINT', error: msg } };
+  /* 화면이 「몇 분 걸리고 몇 분 지났는지」를 보여 줄 수 있게 시작 시각과 예상 소요분을 함께 준다.
+     ★속성을 세 번 읽는 것이 아니다★ — maintMsg()는 이미 위에서 읽었고, 나머지 둘은 점검 중일 때만
+     읽으므로 평소(점검 아님)에는 이 줄에 오지도 않는다. */
+  const info = maintInfo();
+  return { ok: false, res: { ok: false, code: 'MAINT', error: msg, at: info.at, min: info.min } };
 }
 
 /* ---------- 공지 배너 (NOTICE) ---------- */
@@ -317,6 +335,10 @@ function actionTable() {
     /* 감사로그 40일 정리 — 평소엔 하루 한 번 자동으로 돈다. 이 액션은 지금 바로 돌려보거나
        몇 줄 남았는지 확인할 때 쓴다. {}=상태만 · {run:true}=지금 정리 */
     'admin.tidyLog':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnTidyLog },
+    /* [점검 모드] 매장을 잠그고 푼다. {}=상태만 · {on:true,msg,min}=켠다 · {off:true}=끈다.
+       ★점검 중에도 이 액션은 통과한다★ (maintBlock 이 계정관리 권한자를 통과시킨다) —
+       그렇지 않으면 켠 사람이 스스로 끄지 못한다. */
+    'admin.maint':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnAdminMaint },
     /* 사진 공유를 폴더 한 번으로 걸어도 되는지 실제로 해 보는 시험 (2026-08-27).
        임시 폴더에 1x1 그림 하나를 만들었다 지우기만 한다 — 실매장 자료는 건드리지 않는다. */
     'admin.photoShareTest': { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnPhotoShareTest },
@@ -6209,6 +6231,60 @@ function setMaintenance(msg) {
   const out = s ? '점검 모드 켜짐: ' + s : '점검 모드 해제';
   Logger.log(out);
   return out;
+}
+
+/* ---------- 점검 모드 — 화면에서 켜고 끄기 (admin.maint) ----------
+
+   ★왜 필요한가★ 여태 점검을 켜려면 앱스 스크립트 편집기를 열거나 스크립트 속성 화면에서
+   MAINT 칸을 손으로 채워야 했다. 담당자가 앱을 고치는 동안 매장을 잠그는 일은 자주 있을
+   일이라, 관리자 도구에서 버튼으로 되어야 한다.
+
+   ★이 액션은 점검 중에도 통과한다★ — maintBlock 이 계정관리 권한자를 통과시키기 때문이다.
+   그렇지 않으면 켠 사람이 스스로 끄지 못해 편집기를 여는 수밖에 없다.
+
+   부르는 법
+     Api.call('admin.maint', {})                          지금 상태만 (아무것도 안 바꾼다)
+     Api.call('admin.maint', {on:true, msg:'…', min:10})   켠다 (msg 를 비우면 기본 문구)
+     Api.call('admin.maint', {off:true})                   끈다
+
+   돌려주는 것: { ok, on, msg, at, min, elapsedMin } — elapsedMin 은 켠 지 몇 분 지났는지다.
+   ★켠 사람 본인은 점검 중에도 막히지 않아 화면에 아무 흔적이 없다★ — 그래서 관리 화면이
+   이 값을 주기적으로 물어 상태등을 그린다. 끄는 것을 잊는 사고를 막는 유일한 장치다. */
+const MAINT_DEFAULT_MSG =
+  '앱을 업데이트하고 있습니다. 잠시 뒤 다시 시도해 주세요. 끝나면 이 화면이 저절로 사라집니다.';
+
+function fnAdminMaint(ctx, payload) {
+  const p = payload || {};
+
+  if (p.on) {
+    const msg = String(p.msg == null ? '' : p.msg).trim().slice(0, 300) || MAINT_DEFAULT_MSG;
+    const min = Math.max(0, Math.min(600, Number(p.min) || 0));
+    PROPS.setProperty('MAINT', msg);
+    PROPS.setProperty('MAINT_AT', new Date().toISOString());
+    if (min) PROPS.setProperty('MAINT_MIN', String(min));
+    else { try { PROPS.deleteProperty('MAINT_MIN'); } catch (e) { } }
+    auditLog(ctx, 'admin.maint', '', '성공', '', '점검 시작 · ' + (min ? min + '분 예상 · ' : '') + msg.slice(0, 60));
+  } else if (p.off) {
+    /* ★끌 때는 MAINT 를 먼저 지운다★ — 여기서 실패하면 매장이 계속 잠긴 채로 남는다.
+       부가 정보(AT·MIN)는 지워지지 않아도 무해하므로(maintInfo 가 msg 없으면 off 로 본다) 뒤에 둔다. */
+    try { PROPS.deleteProperty('MAINT'); } catch (e) {
+      return err('SERVER_ERROR', '점검 모드를 끄지 못했습니다. 다시 시도해 주세요.');
+    }
+    try { PROPS.deleteProperty('MAINT_AT'); } catch (e) { }
+    try { PROPS.deleteProperty('MAINT_MIN'); } catch (e) { }
+    auditLog(ctx, 'admin.maint', '', '성공', '', '점검 해제');
+  }
+
+  const info = maintInfo();
+  let elapsed = 0;
+  if (info.on && info.at) {
+    const t = new Date(info.at).getTime();
+    if (t) elapsed = Math.max(0, Math.floor((Date.now() - t) / 60000));
+  }
+  return {
+    ok: true, on: info.on, msg: info.msg, at: info.at, min: info.min,
+    elapsedMin: elapsed, defaultMsg: MAINT_DEFAULT_MSG
+  };
 }
 
 /* 월 탭 하나를 만든다. ★스프레드시트 객체를 인자로 받는다★ —

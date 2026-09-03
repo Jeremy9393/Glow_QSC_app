@@ -219,6 +219,10 @@ const Auth = (function () {
     if (r && r.code === 'MAINT') maintNow = String(r.error || r.msg || '현재 점검 중입니다.');
     else if (r && r.ok && typeof r.maint === 'string') maintNow = r.maint;
 
+    /* 점검 잠금 덮개 — login.html은 api.js를 싣지 않으므로 이 경로가 유일한 신호다.
+       ★덮개가 실패해도 로그인 흐름은 그대로 흘러야 한다★ */
+    try { if (window.Maint) window.Maint.saw(r); } catch (e) { /* 무시 */ }
+
     /* 공지 낚아채기. 화면마다 "응답에서 notice를 꺼내 배너를 그린다"를 반복하면 새 화면에서
        반드시 빠뜨리므로, 응답이 지나가는 이 한 곳에서 처리한다.
        ★ok일 때만 본다★ — 거절 응답(MAINT·AUTH_*)에는 notice가 없는데 그것을 '공지 없음'으로
@@ -652,7 +656,7 @@ const Auth = (function () {
    "앱 화면 제일 하단에 버전정보 및 업데이트 날짜 표기"
 
    ★손으로 적는 자리를 만들지 않는다★ — 손으로 적는 버전은 반드시 낡는다.
-     · 버전 숫자: 이 파일이 불러와진 주소(js/auth.js?v=92)에서 뽑는다.
+     · 버전 숫자: 이 파일이 불러와진 주소(js/auth.js?v=93)에서 뽑는다.
        그 숫자는 tools/release.py 가 배포마다 자동으로 올리는 값이고,
        ★지금 이 화면이 실제로 불러온 것★ 이라 캐시에 묶인 폰은 옛 숫자를 보여 준다 —
        매장이 낡은 화면을 붙들고 있는지 그 자리에서 알 수 있다.

@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=92">
+<link rel="stylesheet" href="css/app.css?v=93">
 </head>
 <body>
 <header class="topbar">
@@ -47,6 +47,26 @@
        「저장 완료」가 뜨는데 시트는 비어 있었다. 10/1에 밟을 함정이라 없앴다.
        잘못 들어간 제출은 위 「제출 관리」에서 되돌린다. -->
 
+  <!-- ★점검 모드(공사중)★ — 앱을 고치는 동안 매장을 잠근다.
+       이것은 위에서 지운 「쓰기 스위치」와 전혀 다르다: 쓰기 스위치는 조용히 잠겨 「저장 완료」라고
+       거짓말을 했지만, 점검 모드는 ★막혔다는 사실이 매장 화면을 통째로 덮어 보인다★.
+       ⚠켠 사람(관리자)은 서버가 통과시키므로 덮개를 못 본다 — 그래서 위 상태등이 유일한 흔적이다. -->
+  <section class="card">
+    <h2>점검 모드 (공사중)</h2>
+    <p class="note">앱을 고치는 동안 <b>관리자를 뺀 모두</b>가 쓰지 못하게 막습니다.
+      매장 화면은 안내문으로 덮이고, 끝나면 <b>저절로 풀립니다</b>(매장이 새로고침하지 않아도 됩니다).<br>
+      ⚠<b>켠 사람은 막히지 않아 화면에 흔적이 없습니다</b> — 위의 초록/빨강 띠로 확인하세요.</p>
+    <div class="meta-grid">
+      <div class="full"><label class="f">매장에 보일 안내</label>
+        <input type="text" id="maintMsg" maxlength="300" placeholder="비우면 기본 문구가 나갑니다"></div>
+      <div class="full"><label class="f">예상 소요 (분) — 비워도 됩니다</label>
+        <input type="number" id="maintMin" min="0" max="600" step="5" placeholder="예: 10"></div>
+    </div>
+    <button type="button" id="maintOn" class="issueBtn warn">공사 시작 — 매장 잠그기</button>
+    <button type="button" id="maintOff" class="issueBtn">해제 — 매장 열기</button>
+    <p class="note" id="maintResult"></p>
+  </section>
+
 </div>
 
 <!-- auth.js는 항상 가장 먼저. 이 화면은 본사 담당자 전용 도구라 세션이 없으면 login.html로 보낸다.
@@ -54,9 +74,59 @@
        권한의 정본이 그것이다. 여기에 새 메뉴 키를 만들면 구글시트 「역할」 탭까지 고쳐야 하고,
        고치기 전까지는 아무에게도 안 보인다. 같은 열쇠를 쓰는 편이 맞다.
      이것은 안내를 앞당기는 장치일 뿐 보안이 아니다 — 진짜 차단은 서버 ACTIONS 등록표와 can()이다. -->
-<script src="js/auth.js?v=92"></script>
+<script src="js/maint.js?v=93"></script>
+<script src="js/auth.js?v=93"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts');</script>
-<script src="js/api.js?v=92"></script>
+<script src="js/api.js?v=93"></script>
+<script>
+/* 점검 모드 칸. ★상태등은 maint.js가 그린다★ — 켠 사람은 서버가 통과시켜 덮개를 못 보므로,
+   이 띠가 「켜 둔 것을 잊었다」를 막는 유일한 장치다. 20초마다 스스로 갱신된다. */
+(function () {
+  var wrap = document.querySelector('.wrap') || document.body;
+  var badge = (typeof Maint !== 'undefined') ? Maint.adminBadge(wrap) : null;
+
+  var note = document.getElementById('maintResult');
+  var msgEl = document.getElementById('maintMsg');
+  var minEl = document.getElementById('maintMin');
+
+  function say(t, bad) {
+    note.textContent = t;
+    note.className = 'note' + (bad ? ' noteErr' : ' noteOk');
+  }
+
+  /* 지금 상태를 읽어 입력칸을 채운다 — 켜져 있으면 무슨 문구로 켰는지 보여야 고칠 수 있다 */
+  Api.call('admin.maint', {}).then(function (r) {
+    if (!r || !r.ok) return;
+    if (r.on) {
+      if (r.msg) msgEl.value = r.msg;
+      if (r.min) minEl.value = r.min;
+      say('지금 공사중입니다' + (r.elapsedMin ? ' (' + r.elapsedMin + '분 경과)' : '') + '.', true);
+    }
+    if (r.defaultMsg) msgEl.placeholder = '비우면: ' + r.defaultMsg;
+  }).catch(function () { });
+
+  document.getElementById('maintOn').onclick = function () {
+    if (!confirm('매장을 잠급니다.\n\n관리자를 뺀 모든 사람이 앱을 쓸 수 없게 됩니다.\n(고객 설문도 함께 막힙니다)\n\n시작할까요?')) return;
+    say('시작하는 중…');
+    Api.call('admin.maint', { on: true, msg: msgEl.value, min: Number(minEl.value) || 0 })
+      .then(function (r) {
+        if (!r || !r.ok) { say((r && (r.error || r.msg)) || '실패했습니다.', true); return; }
+        say('공사중으로 바꿨습니다. 끝나면 반드시 [해제]를 눌러 주세요.', true);
+        if (badge) badge.paint(r);
+      }).catch(function () { say('실패했습니다. 다시 시도해 주세요.', true); });
+  };
+
+  document.getElementById('maintOff').onclick = function () {
+    say('해제하는 중…');
+    Api.call('admin.maint', { off: true })
+      .then(function (r) {
+        if (!r || !r.ok) { say((r && (r.error || r.msg)) || '실패했습니다.', true); return; }
+        say('해제했습니다. 매장이 다시 쓸 수 있습니다 — 잠겨 있던 화면은 저절로 풀립니다.');
+        if (badge) badge.paint(r);
+      }).catch(function () { say('실패했습니다. 다시 시도해 주세요.', true); });
+  };
+})();
+</script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
