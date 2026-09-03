@@ -1,6 +1,6 @@
 {
- "version": "2026-09-03",
- "source_sha": "378e5cd2a82d",
+ "version": "2026-09-04",
+ "source_sha": "88fa7975836b",
  "source": "QSC·MS 평가표.xlsx",
  "stores": [
   "금종제과",
@@ -198,7 +198,7 @@
      "no": 13,
      "code": "B-06",
      "row": 22,
-     "text": "유증상자 근무 (발열·설사·기침 등 — 배제·격리 미조치)",
+     "text": "유증상자 조치 미이행 (발열·구토·설사·기침 등 — 증상에 맞는 배제·재배치·보고를 안 함)",
      "severity": "S1",
      "critical": true
     },
