@@ -1,6 +1,6 @@
 {
- "sha256": "f288b75e5378bb3b84055ced2ff1b9a4eb66bd0321555663d929bb2ec0e01b6a",
- "version": 80,
- "when": "2026-08-28 11:45:51",
- "description": "2026-08-28 밸브 흔적 주석 정리 — 묘비 한 곳만 남김"
+ "sha256": "f7fdd0f3728cd281a868946fbcda8a073ea63cfafe9dc35e28d665734b70565d",
+ "version": 81,
+ "when": "2026-09-03 10:34:55",
+ "description": "2026-09-03 주인 없는 밸브 주석 1줄 삭제"
 }
