@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v83', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v85', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -348,6 +348,8 @@ function actionTable() {
     'admin.mergeAuth':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMergeAuth },
     /* 매장 월 탭 보호 — 인자가 없으면 대상 목록만 보여준다(아무것도 걸지 않는다). */
     'admin.protect':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnProtect },
+    /* 「차기 월 목표」 걷어내기 — 일회성. 기본이 미리보기다(apply를 안 주면 아무것도 안 지운다). */
+    'admin.dropGoal':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnDropGoal },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -5266,6 +5268,123 @@ function fnProtect(ctx, payload) {
   ] };
 }
 
+/* ═══ 「차기 월 목표」 걷어내기 — 관리자 화면에서 부르기 (admin.dropGoal) ═══════════
+   본체는 dropGoalBox / goalBoxIn 이다(§차기 월 목표). 이 함수는 26곳을 도는 껍데기다.
+
+     await Api.call('admin.dropGoal', {})                           ← 대상 목록·규칙만
+     await Api.call('admin.dropGoal', {store:'금종제과'})             ← ★미리보기★ (안 지운다)
+     await Api.call('admin.dropGoal', {store:'금종제과', apply:true}) ← 그 한 곳을 지운다
+     await Api.call('admin.dropGoal', {page:0})                     ← 10곳 미리보기 (0·1·2)
+     await Api.call('admin.dropGoal', {page:0, apply:true})         ← 10곳 적용
+     await Api.call('admin.dropGoal', {fileId:'…의 사본'})            ← 사본으로 먼저
+
+   ★기본이 미리보기다★ — apply:true 가 없으면 아무것도 지우지 않고 「어느 칸에 무엇이 있는지」만 준다.
+   ★대상은 새 원본 탭과 2610~ 월 탭뿐★ (2026-09-03 담당자 선택) — 1~9월 탭은 사람이 적어 둔
+   기록이라 그대로 둔다. 옛 달은 본사 자물쇠가 걸려 있어 어차피 앱이 손을 못 댄다.
+   ★한 번 더 돌려도 안전하다★ — 이미 비운 탭은 '표 없음'으로 지나간다. */
+function dropGoalIn(ss, apply) {
+  const out = [];
+  const tabs = ss.getSheets().map(function (sh) { return sh.getName().trim(); })
+    .filter(function (n) { return n === TPL_NEW || (/^\d{4}$/.test(n) && n >= '2610'); })
+    .sort();
+  if (!tabs.length) return ['· 대상 탭이 없습니다 (새 원본도 2610~ 월 탭도 없음)'];
+
+  for (let i = 0; i < tabs.length; i++) {
+    const sh = ss.getSheetByName(tabs[i]);
+    if (!sh) continue;
+    const box = goalBoxIn(sh);
+    if (!box) { out.push('· ' + tabs[i] + ' — 표 없음 (이미 걷어냈거나 원래 없음)'); continue; }
+
+    if (!apply) {
+      out.push('· ' + tabs[i] + ' — ' + colLetter(box.col) + box.row + ':' +
+        colLetter(box.col + box.cols - 1) + (box.row + box.rows - 1) + ' 를 지울 예정');
+      out.push.apply(out, box.shown.map(function (s) { return '    ' + s; }));
+      if (box.extra.length) out.push('    ★오른쪽에 글자가 더 있습니다 — 안 지웁니다: ' + box.extra.join(' · ') + '★');
+      continue;
+    }
+    const r = dropGoalBox(sh);
+    out.push((r.hit ? '✓ ' : '✗ ') + tabs[i] + ' — ' + (r.hit ? r.a1 + ' 비웠습니다' : r.why));
+    if (r.hit && r.extra && r.extra.length) {
+      out.push('    ★오른쪽 글자는 그대로 뒀습니다: ' + r.extra.join(' · ') + '★');
+    }
+  }
+  return out;
+}
+
+/* 10곳씩 돈다 — 파일을 여는 일이라 26곳을 한 번에 하면 6분 한도에 걸린다(admin.protect 와 같다). */
+function dropGoalStoreTabs(stores, page, apply) {
+  const sel = pickPage(stores, page);
+  const t0 = Date.now();
+  const out = ['=== 차기 월 목표 걷어내기 ' + (apply ? '★적용★' : '미리보기') + ' ' +
+    (sel.page + 1) + '쪽 · ' + sel.list.length + '곳 (전체 ' + sel.total + '곳) ==='];
+
+  for (let i = 0; i < sel.list.length; i++) {
+    const store = sel.list[i];
+    const lines = [];
+    try {
+      const id = storeFileId(store);
+      if (!id) lines.push('✗ 파일 ID 없음');
+      else lines.push.apply(lines, dropGoalIn(SpreadsheetApp.openById(id), apply));
+    } catch (e) { lines.push('✗ ' + String(e).slice(0, 90)); }
+
+    out.push('', '── ' + store + ' (' + (i + 1) + '/' + sel.list.length + ') ──');
+    out.push.apply(out, lines);
+    Logger.log(store + '\n' + lines.join('\n'));   // 다음 매장에서 끊겨도 여기까지는 남는다
+
+    if (Date.now() - t0 > 4.5 * 60 * 1000 && i + 1 < sel.list.length) {
+      out.push('', '★시간이 부족해 ' + (i + 1) + '곳에서 멈췄습니다★ (6분 한도)');
+      out.push('   남은 곳: ' + sel.list.slice(i + 1).join(', '));
+      return out;
+    }
+  }
+  if (sel.left) {
+    out.push('', '다음 쪽: {page:' + (sel.page + 1) + (apply ? ', apply:true' : '') + '}  (남은 곳 ' + sel.left + ')');
+  }
+  return out;
+}
+
+function fnDropGoal(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+
+  if (p.fileId) {
+    /* 사본 전용 길 — 이름으로 막는다(admin.protect 와 같은 방어다). */
+    const ss = SpreadsheetApp.openById(String(p.fileId));
+    const nm = ss.getName();
+    if (!/연동테스트|의 사본/.test(nm)) {
+      return err('BAD_REQUEST', '사본이 아닙니다 (' + nm + ') — 이름에 「연동테스트」나 「의 사본」이 들어간 파일에만 씁니다.');
+    }
+    const lines = dropGoalIn(ss, apply);
+    if (apply) auditLog(ctx, 'admin.dropGoal', '', '성공', '', '사본 ' + nm);
+    return { ok: true, apply: apply, target: nm, lines: lines };
+  }
+
+  if (p.store) {
+    const lines = dropGoalStoreTabs([String(p.store)], 0, apply);
+    if (apply) auditLog(ctx, 'admin.dropGoal', String(p.store), '성공', '', '차기 월 목표 걷어냄');
+    return { ok: true, apply: apply, lines: lines };
+  }
+
+  if (typeof p.page === 'number' && p.page >= 0) {
+    const lines = dropGoalStoreTabs(null, p.page, apply);
+    if (apply) auditLog(ctx, 'admin.dropGoal', '', '성공', '', '차기 월 목표 걷어냄 ' + (p.page + 1) + '쪽');
+    return { ok: true, apply: apply, lines: lines };
+  }
+
+  /* 기본 — 파일을 열지 않고 대상과 규칙만 보여준다. */
+  const all = displayStores();
+  const pages = [];
+  for (let i = 0; i < all.length; i += 10) pages.push((i / 10) + '쪽: ' + all.slice(i, i + 10).join(', '));
+  return { ok: true, preview: true, total: all.length, pages: pages, 규칙: [
+    '대상 : 새 원본 탭(' + TPL_NEW + ')과 2610~ 월 탭뿐',
+    '1~9월 탭은 손대지 않는다 — 사람이 적어 둔 기록이고, 본사 자물쇠가 걸려 있다',
+    '지우는 것 : 제목 「차기 월 목표」 아래 6줄 × 2칸의 내용·서식·병합 (열은 그대로 둔다)',
+    '라벨·값 두 칸 밖에 글자가 있으면 지우지 않고 적어 낸다',
+    '★apply:true 를 주기 전에는 아무것도 지우지 않는다★ — 먼저 {page:0} 으로 눈으로 볼 것',
+    '앞으로 태어나는 탭은 makeMonthTabIn·templateTabIn 이 알아서 걷어낸다 (한 번만 돌리면 된다)',
+  ] };
+}
+
 /* ═══ 인증 시트를 응답 시트로 합치기 — 일회성 (admin.mergeAuth) ═══════════════════
    담당자 요청(2026-08-25): "시트 두 개를 따로 두는 게 불편하다. 「QSC관리자 시트」 하나에 탭으로 두자."
 
@@ -6680,6 +6799,10 @@ function makeMonthTabIn(ss, ym) {
       const up = upgradeMonthTab(sh);
       if (!up.ok) throw new Error('개선요청 서식을 올리지 못했습니다 — ' + up.why);
       upNote = '  · 개선요청 서식 ✓';
+      /* ★차기 월 목표는 10월부터 안 쓴다★ (2026-09-03 담당자) — clearMonthBody 범위(A1:J10) 밖이라
+         여기서 걷어내지 않으면 지난 달 목표 문장이 그대로 따라온다. 못 지워도 탭은 살린다. */
+      const dg = dropGoalBox(sh);
+      if (dg.hit) upNote += '  · 차기 월 목표 걷어냄 ✓';
     }
 
     /* ★새 달 탭을 만든 자리에서 바로 잠근다★ (2026-08-25)
@@ -6934,6 +7057,9 @@ function templateTabIn(ss, dry, rebuild) {
   sh.setName(TPL_NEW);
   try {
     clearMonthBody(sh);
+    /* ★차기 월 목표도 원본 단계에서 걷어낸다★ (2026-09-03 담당자) — 이 원본은 2610~ 전용이고,
+       clearMonthBody 는 A1:J10 밖을 안 비우므로 여기서 지우지 않으면 원본이 지난 달 목표를 안는다. */
+    dropGoalBox(sh);
     /* ★원본 단계에서 이름과 산식을 바꿔 둔다★ — 그래야 이 원본에서 뜨는 10월 이후 탭이
        처음부터 QSC점수·MS점수와 새 종합 산식을 갖고 태어난다. 1~9월 탭은 손대지 않는다. */
     const ren = renameScoreLabels(sh);
@@ -8228,6 +8354,78 @@ function goalCellsIn(sh) {
     }
   }
   return null;
+}
+
+/* ═══ 「차기 월 목표」 표 걷어내기 (2026-09-03 담당자 결정) ═══════════════════════
+   "목표달성여부에 대한 확인칸은 따로 안만들꺼야, 왜냐하면 시트에 차기 월 목표 칸을
+    없앨 예정이기때문에" — 가이드북 회신(202행)에서 나온 결정이다.
+
+   ★앱은 이 표를 읽지도 쓰지도 않는다★ — labelMap 이 A1:J10 만 보기 때문이다(§9-7).
+   그래서 지워도 점수·개선율 산식과 연동은 그대로다. goalCellsIn 이 못 찾으면 null 을
+   돌려주고, 보호 쪽은 그때 '답변만 · 차기 월 목표 표 없음'으로 정상 진행한다.
+
+   ★안 지우면 지난 달 목표가 따라온다★ — clearMonthBody 는 A1:J10 라벨과 개선요청 본문만
+   비운다. 이 표는 그 밖(비고 오른쪽)이라 ★복제될 때 값째로 따라온다★. 그냥 두면 10월 탭이
+   9월의 "CS재교육을 통해 95%달성" 같은 문장을 안고 태어난다.
+
+   ★열은 지우지 않는다 — 내용·서식만 지운다★ (2026-09-03 담당자 선택)
+   열을 지우면 그 오른쪽을 가리키는 수식이 조용히 밀린다. 요약 탭 VLOOKUP('2608'!D2:I9)과
+   통합시트 IMPORTRANGE(월별 QSC현황표!L8·M8·N8)는 이 표와 안 겹치므로 자리만 비우면 된다.
+
+   ★모르는 것은 지우지 않는다★ — 라벨·값 두 칸 밖에 글자가 있으면 이 표의 일부인지 알 수
+   없다. 지우지 않고 extra 로 적어 낸다. */
+
+/* 표의 상자 자리. 제목이 (r,c)면 ★제목 1줄 + 라벨 5줄 = 6줄★ · ★라벨·값 2칸★이다
+   (goalCellsIn 은 값 칸만 본다 — 여기서는 제목까지 덮는 상자를 돌려준다).
+   못 찾으면 null — 이미 걷어냈거나 원래 없는 탭이다. 실패가 아니다. */
+function goalBoxIn(sh) {
+  const NG = function (v) { return String(v == null ? '' : v).replace(/\s+/g, ''); };
+  let vals = [];
+  try { vals = sh.getRange(1, 1, Math.min(12, sh.getMaxRows()), sh.getMaxColumns()).getValues(); }
+  catch (e) { return null; }
+  for (let r = 0; r < vals.length; r++) {
+    for (let c = 0; c < vals[r].length; c++) {
+      if (NG(vals[r][c]) !== '차기월목표') continue;
+      const box = { row: r + 1, col: c + 1, rows: 6, cols: 2, shown: [], extra: [] };
+      for (let i = 0; i < box.rows; i++) {
+        const rr = r + i;
+        if (rr >= vals.length) break;
+        const line = [];
+        for (let j = 0; j < box.cols; j++) {
+          line.push(c + j < vals[rr].length ? String(vals[rr][c + j] == null ? '' : vals[rr][c + j]).slice(0, 40) : '');
+        }
+        box.shown.push((rr + 1) + '행: ' + line.join(' | '));
+        for (let j = box.cols; j < box.cols + 2 && c + j < vals[rr].length; j++) {
+          if (NG(vals[rr][c + j]) !== '') {
+            box.extra.push(colLetter(c + j + 1) + (rr + 1) + '=' + String(vals[rr][c + j]).slice(0, 20));
+          }
+        }
+      }
+      return box;
+    }
+  }
+  return null;
+}
+
+/* 탭 하나에서 실제로 비운다.
+   ★예외를 밖으로 내보내지 않는다★ — 월 탭을 만드는 길 위에 있어서, 여기서 던지면
+   탭 자체가 안 만들어진다(그쪽이 훨씬 비싸다). 못 지우면 못 지웠다고 적어 낼 뿐이다. */
+function dropGoalBox(sh) {
+  let box = null;
+  try { box = goalBoxIn(sh); } catch (e) { return { hit: false, why: '못 읽음: ' + String(e).slice(0, 40) }; }
+  if (!box) return { hit: false, why: '표 없음' };
+  try {
+    const rng = grid(sh, box.row, box.col, box.rows, box.cols);
+    if (!rng) return { hit: false, why: '자리가 시트 밖입니다' };
+    /* 병합을 먼저 푼다 — 남겨 두면 지운 뒤에도 테두리 상자가 그대로 보인다 */
+    try { rng.breakApart(); } catch (e) { }
+    rng.clearContent();
+    try { rng.clearDataValidations(); } catch (e) { }
+    try { rng.clearFormat(); } catch (e) { }
+    return { hit: true, a1: rng.getA1Notation(), extra: box.extra };
+  } catch (e) {
+    return { hit: false, why: String(e).slice(0, 60) };
+  }
 }
 
 function protectMonthTabsIn(ss, withOld) {
