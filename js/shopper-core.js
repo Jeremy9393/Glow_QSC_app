@@ -38,7 +38,7 @@ async function initShopperForm(opts) {
        가이드북 5-2-1 이 「응대직원은 명찰(이름 또는 닉네임)이 고객이 볼 수 있는 위치에」를
        요구한다. 손님이 보라고 매장이 내건 것을 손님이 적는 것은, 외모를 관찰해 특정하는 것과
        성격이 다르다. ★이름은 여전히 안 받는다★ — 명찰이 이름이면 역할 닉네임(카운터·홀)으로. */
-    { id: 'staff', label: '응대 시간대·상황 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 카운터에서 결제 응대 · 카운터 직원 (명찰 닉네임이 있으면 함께)">' },
+    { id: 'staff', label: '응대 시간대·상황·직원 설명 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 계산대에서 결제 시, 픽업 당시">' },
     { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
     { id: 'demo', label: '연령대·성별 (작성자 본인) *', full: true, control: '<input type="text" id="demo" placeholder="직원이 아닌 본인 기준 — 예: 30대 여성">' },
   ];
@@ -61,6 +61,9 @@ async function initShopperForm(opts) {
   const state = { answers: {}, memos: {} };
   const allQs = [];
   master.shopper_categories.forEach(function (c) { c.questions.forEach(function (q) { allQs.push(q); }); });
+  // 문항 번호로 바로 찾는 표 — isFilled 가 만족도(likert) 여부를 알아야 한다
+  const QBY = {};
+  allQs.forEach(function (q) { QBY[q.no] = q; });
   const updaters = {};
   const LIKERT_LABEL = { 1: '매우 아니다', 2: '아니다', 3: '보통', 4: '그렇다', 5: '매우 그렇다' };
 
@@ -124,7 +127,11 @@ async function initShopperForm(opts) {
 
   // 문항 하나가 '완료'로 인정되는 기준: 답변 또는 비고 중 하나라도 있으면 됨
   // (기억이 안 나거나 판단이 어려운 경우, 비고에 상황만 적어도 응답으로 인정)
+  // ★단, 만족도 문항(11~13)은 점수를 반드시 골라야 한다★ — 방문하면 누구나 답할 수 있는
+  // 문항이라 NA가 없고(엑셀 U2 원칙), 비고만으로 넘어가면 채점 분모에서 조용히 빠진다.
   function isFilled(no) {
+    const q = QBY[no];
+    if (q && q.scale === 'likert') return state.answers[no] != null;
     return state.answers[no] != null || !!(state.memos[no] || '').trim();
   }
 
@@ -134,7 +141,7 @@ async function initShopperForm(opts) {
     { id: 'store', label: '매장명' },
     { id: 'date', label: '방문날짜' },
     { id: 'time', label: '방문 시간', pick: true, focus: 'timeH', get: function () { return TimePick.get('time'); } },
-    { id: 'staff', label: '응대 시간대·상황' },
+    { id: 'staff', label: '응대 시간대·상황·직원 설명' },
     { id: 'order', label: '주문내역' },
     { id: 'demo', label: '연령대·성별' },
   ];
@@ -274,11 +281,13 @@ async function initShopperForm(opts) {
     card.className = 'item qcard';
     const likert = q.scale === 'likert';
     // 관찰 문항 NA는 관리자 전용 (엑셀 D11:D40 유효성과 동일) — 고객 화면에는 없음
+    /* ★만족도 척도는 5점이 왼쪽★ — 1~10번 관찰 문항은 「예」가 왼쪽이라 긍정이 왼쪽인데,
+       만족도만 1점(부정)이 왼쪽이면 손이 먼저 가는 자리의 뜻이 뒤집힌다. 값은 그대로 1~5. */
     const optsHtml = likert
-      ? '<div class="opts likert">' + [1, 2, 3, 4, 5].map(function (n) {
+      ? '<div class="opts likert">' + [5, 4, 3, 2, 1].map(function (n) {
           return '<button data-v="' + n + '">' + n + '</button>';
         }).join('') + '</div>' +
-        '<div class="likert-cap">1 매우 아니다 · 3 보통 · 5 매우 그렇다</div>'
+        '<div class="likert-cap">5 매우 그렇다 · 3 보통 · 1 매우 아니다</div>'
       : '<div class="opts"><button data-v="예">예</button><button data-v="아니오">아니오</button>' +
         (ADMIN ? '<button data-v="NA">NA</button>' : '') + '</div>';
     card.innerHTML =
@@ -291,7 +300,9 @@ async function initShopperForm(opts) {
     card.querySelectorAll('.opts button').forEach(function (b) {
       b.onclick = function () {
         const v = likert ? parseInt(b.dataset.v, 10) : b.dataset.v;
-        state.answers[q.no] = state.answers[q.no] === v ? null : v;
+        // 만족도는 ★반드시 하나를 고른 상태★ 여야 하므로 같은 점수를 다시 눌러도 풀리지 않는다
+        // (잘못 눌렀으면 다른 점수를 누르면 된다). 관찰 문항은 종전대로 다시 누르면 해제.
+        state.answers[q.no] = (!likert && state.answers[q.no] === v) ? null : v;
         update();
         recompute();
         saveDraft();
@@ -383,7 +394,7 @@ async function initShopperForm(opts) {
       const val = f.get ? f.get() : $('#' + f.id).value.trim();
       if (!val) {
         alert(withEulReul(f.label) + ' ' + (f.verb || (f.pick ? '선택해' : '입력해')) + ' 주세요.' +
-          (f.id === 'staff' ? '\n언제·무슨 상황이었는지 적어 주세요. ★직원의 이름·얼굴·체형은 적지 않습니다.★\n명찰에 닉네임이 있으면 그 닉네임을, 명찰이 이름이거나 못 보셨으면 카운터 직원·홀 직원처럼 적어 주세요.\n예) 14시경 카운터에서 결제 응대 · 카운터 직원' : '') +
+          (f.id === 'staff' ? '\n언제·무슨 상황이었는지 적어 주세요. ★직원의 이름·얼굴·체형은 적지 않습니다.★\n명찰에 닉네임이 있으면 그 닉네임을, 명찰이 이름이거나 못 보셨으면 카운터 직원·홀 직원처럼 적어 주세요.\n예) 14시경 계산대에서 결제 시, 픽업 당시' : '') +
           (f.id === 'demo' ? '\n응대 직원이 아니라, 설문을 작성하시는 본인 기준으로 적어 주세요.' : ''));
         $('#' + (f.focus || f.id)).focus();
         return;
