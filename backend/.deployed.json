@@ -1,6 +1,6 @@
 {
- "sha256": "f7fdd0f3728cd281a868946fbcda8a073ea63cfafe9dc35e28d665734b70565d",
- "version": 81,
- "when": "2026-09-03 10:34:55",
- "description": "2026-09-03 주인 없는 밸브 주석 1줄 삭제"
+ "sha256": "29fdb6cd39a59451ff36fb2b14663dd2cd1d3c35029e8be571f3595dc59b82c6",
+ "version": 83,
+ "when": "2026-09-03 11:21:39",
+ "description": "2026-09-03 점검 모드 버튼(admin.maint) — 배포 확인 404 재시도분"
 }
