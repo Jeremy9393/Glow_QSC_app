@@ -105,6 +105,11 @@ const Api = (function () {
       // 오프라인·DNS 실패 등. 던지지 않고 코드로 돌려줘 화면이 분기할 수 있게 한다.
       return { ok: false, code: 'NETWORK', error: '네트워크에 연결할 수 없습니다.', _err: err };
     }
+    /* 점검 모드(공사중) 판정은 maint.js 한 곳에 맡긴다 — 응답을 보여만 주고 흐름은 바꾸지 않는다.
+       ★MAINT면 화면 전체가 덮이고, ok면 덮개가 걷힌다.★ maint.js가 없어도(구버전 캐시 등)
+       그냥 지나가야 하므로 존재를 확인하고 부른다. */
+    try { if (window.Maint) window.Maint.saw(data); } catch (e) { /* 덮개 실패가 요청을 깨면 안 된다 */ }
+
     /* 여기서 가로채는 것은 AUTH_* 세 코드뿐이다.
        MAINT(점검 모드)·LOCKED·FORBIDDEN 등 나머지 코드는 손대지 않고 그대로 호출부로 넘긴다 —
        점검 모드 안내 문구는 서버가 정하고 화면이 그대로 보여 주는 것이 설계다. */
