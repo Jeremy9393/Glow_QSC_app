@@ -49,6 +49,11 @@ b, strong { font-weight: 700; }
 /* ---------- 카드·폼 ---------- */
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 15px 14px; margin: 10px 0; }
 .card h2 { font-size: 14px; font-weight: 700; letter-spacing: -0.005em; margin-bottom: 11px; }
+/* 관리자에게만 보이는 '아직 안 굳은 점수' — 확정 점수보다 조용해야 한다 */
+.liveTag { font-size: 11px; font-weight: 700; color: #b58a2b; background: #2a2418;
+  border: 1px solid #4a3d1e; border-radius: 4px; padding: 1px 5px; white-space: nowrap; }
+/* 「마지막으로」 안에서 묶음의 머리 — 문항 라벨보다 크고 카드 제목보다 작다 */
+.metaHead { font-size: 14px; font-weight: 800; color: #e6e6e6; margin: 4px 0 -2px; }
 .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .meta-grid .full { grid-column: 1 / -1; }
 label.f { display: block; font-size: 11.5px; font-weight: 400; color: var(--sub); margin-bottom: 5px; letter-spacing: 0; }

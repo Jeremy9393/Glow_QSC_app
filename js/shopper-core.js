@@ -60,12 +60,20 @@ async function initShopperForm(opts) {
        이 칸이 하는 일은 하나다 — ★어느 직원이었는지 알아보게 하는 것★.
        ★못 봤을 때는 역할로 받는다★ — 그래야 특정도 되고 외모 묘사가 안 들어온다
        (2026-08-27 「이름·얼굴·체형은 받지 않는다」 · 2026-09-01 「명찰 닉네임까지는 받는다」). */
-    { id: 'staff', label: '응대 직원(닉네임, 성별 등) *', full: true, control: '<input type="text" id="staff" placeholder="못 보셨다면 홀 직원, 주방 직원 등 간단히 적어 주세요">' },
-    { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
+    /* ★「마지막으로」의 순서는 담당자가 정했다★ (2026-09-04)
+         연령대·성별 → 주문내역 → 「추가로 하고 싶은 말 (선택)」 묶음(응대 직원 · 내용)
+       앞의 둘은 반드시 받는 것이고, 뒤의 묶음은 통째로 선택이다.
+       ★응대 직원이 필수에서 빠졌다★ — 선택 묶음 안에 필수가 섞여 있으면 앞뒤가 안 맞는다.
+       (REQUIRED_META 에서도 뺐다) */
     { id: 'demo', label: '연령대·성별 (작성자 본인) *', full: true, control: '<input type="text" id="demo" placeholder="직원이 아닌 본인 기준 — 예: 30대 여성">' },
+    { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
     /* ★총평은 선택이다★ (2026-09-04 담당자) — 문항으로 못 담는 이야기를 받는 자리다.
-       필수로 만들지 않는다(REQUIRED_META 에 넣지 않았다) — 마지막 칸을 막으면 다 쓰고도 못 낸다. */
-    { id: 'overall', label: '추가로 하고 싶은 말 (선택)', full: true,
+       필수로 만들지 않는다 — 마지막 칸을 막으면 다 쓰고도 못 낸다. */
+    { id: '__extra', head: '추가로 하고 싶은 말 (선택)' },
+    /* ★이름·얼굴·체형은 받지 않는다★ (2026-08-27) · ★명찰의 닉네임까지는 받는다★ (2026-09-01)
+       — 위 주석 참고. 자리만 옮겼고 받는 내용은 그대로다. */
+    { id: 'staff', label: '응대 직원(닉네임, 성별 등)', full: true, control: '<input type="text" id="staff" placeholder="못 보셨다면 홀 직원, 주방 직원 등 간단히 적어 주세요">' },
+    { id: 'overall', label: '내용', full: true,
       control: '<textarea id="overall" rows="3" maxlength="500" ' +
         'placeholder="문항으로 담기 어려운 이야기가 있다면 자유롭게 적어 주세요"></textarea>' },
   ];
@@ -88,9 +96,11 @@ async function initShopperForm(opts) {
            손님이 첫 화면에서 넘어야 할 칸이 7개에서 3개(손님은 매장이 잠기니 2개)로 준다
      ★상자는 JS가 만들어 #cats 뒤에 끼운다★ — 화면 두 개(shopper.html·survey.html)를
      따로 고치면 어긋난다. 한 뿌리에서 나와야 한다는 원칙(파일 첫 주석)을 지킨다. */
-  const LATE_IDS = { staff: 1, order: 1, demo: 1, overall: 1 };
+  const LATE_IDS = { demo: 1, order: 1, __extra: 1, staff: 1, overall: 1 };
   function metaHtml(list) {
     return '<div class="meta-grid">' + list.map(function (f) {
+      // head 만 있는 항목은 입력칸이 아니라 묶음의 머리다 (아래 칸들이 그 밑에 딸린다)
+      if (f.head) return '<div class="full metaHead">' + f.head + '</div>';
       return '<div' + (f.full ? ' class="full"' : '') + '><label class="f">' + f.label + '</label>' + f.control + '</div>';
     }).join('') + '</div>';
   }
@@ -193,7 +203,7 @@ async function initShopperForm(opts) {
     { id: 'store', label: '매장명' },
     { id: 'date', label: '방문날짜' },
     { id: 'time', label: '방문 시간', pick: true, focus: 'timeH', get: function () { return TimePick.get('time'); } },
-    { id: 'staff', label: '응대 직원' },
+    /* ★응대 직원은 필수가 아니다★ (2026-09-04 담당자) — 「추가로 하고 싶은 말 (선택)」 묶음으로 옮겼다 */
     { id: 'order', label: '주문내역' },
     { id: 'demo', label: '연령대·성별' },
   ];
