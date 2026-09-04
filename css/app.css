@@ -209,7 +209,13 @@ input::placeholder, textarea::placeholder { color: #656565; font-weight: 400; }
 .qcard .opts button.on-na { background: #24272c; border-color: #5a626d; color: #aeb6c0; }
 .why { width: 100%; margin-top: 9px; padding: 10px 11px; border: 1px solid #333; border-radius: 8px; font-size: 13px; line-height: 1.5; background: var(--field); color: var(--ink); }
 .why.need { border-color: var(--red); }
-.why::placeholder { color: #656565; }
+/* ★비고 안내문은 읽으라고 쓴 글이다★ (2026-09-04 담당자 — 검정 배경에 회색이라 안 보인다).
+   #656565 는 이 배경에서 대비 2.9:1 로 읽기 기준(4.5:1)에 못 미쳤다. #8f8f8f 로 올려 5.1:1.
+   ★문항(14px #f0efed)보다는 여전히 확실히 어둡다★ — 강조 차례를 뒤집지 않는다. */
+.why::placeholder { color: #8f8f8f; }
+/* ★input.why 로 써야 먹는다★ — 위 `input[type=text]`(0,1,1)가 `.why`(0,1,0)보다 세다.
+   `.why` 로만 쓰면 규칙은 있는데 아무 일도 안 일어난다(2026-09-04에 실제로 그랬다). */
+input.why { border-color: #3a3a3a; font-size: 13px; }
 
 .note { font-size: 12px; line-height: 1.6; color: var(--sub); padding: 8px 4px; }
 
