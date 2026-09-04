@@ -33,7 +33,7 @@ def cutconst(name):
 
 
 body = '\n'.join([cut('daysInMonth'), cutconst('MONTH_OPEN_HOUR'),
-                  cut('monthClosed'), cut('setTotalFormula')])
+                  cut('monthClosed'), cut('prevYm'), cut('setTotalFormula')])
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
@@ -99,6 +99,21 @@ ok('★2/28 23시에 열린다★', closedAt('2026-02-28 23', '2026-02-10'), tru
 ok('2/28 22시엔 아직', closedAt('2026-02-28 22', '2026-02-10'), false);
 ok('윤년 2/28 23시엔 아직 (29일이 남았다)', closedAt('2028-02-28 23', '2028-02-10'), false);
 ok('윤년 2/29 23시에 열린다', closedAt('2028-02-29 23', '2028-02-10'), true);
+
+// ── ③-2 매일 23시 트리거가 고르는 달 ────────────────────────
+console.log('\n③-2 매일 23시에 돌 때 어느 달을 보는가');
+function pick(now) {                       // monthCloseTrigger 의 판단부와 같은 규칙
+  NOW = now;
+  const today = now.slice(0, 10), thisYm = today.slice(0, 7);
+  return monthClosed(today, 'Asia/Seoul') ? thisYm : prevYm(thisYm);
+}
+ok('10/31 23시 → 10월', pick('2026-10-31 23'), '2026-10');
+ok('10/30 23시 → 아직 9월을 본다(이미 됐으면 지나감)', pick('2026-10-30 23'), '2026-09');
+ok('11/01 23시 → 10월 (거른 밤을 메운다)', pick('2026-11-01 23'), '2026-10');
+ok('★해 넘김★ 1/05 23시 → 지난해 12월', pick('2027-01-05 23'), '2026-12');
+ok('12/31 23시 → 12월', pick('2026-12-31 23'), '2026-12');
+ok('prevYm 1월 → 지난해 12월', prevYm('2026-01'), '2025-12');
+ok('prevYm 3월 → 2월', prevYm('2026-03'), '2026-02');
 
 // ── ④ 종합 수식 ─────────────────────────────────────────────
 console.log('\n④ 종합점수 수식 — QSC·MS 둘 다 있어야');
