@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v90', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v92', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -5580,11 +5580,48 @@ function monthClosed(dateStr, tz) {
   return now >= (last + ' ' + ('0' + MONTH_OPEN_HOUR).slice(-2));
 }
 
-/* 트리거가 부르는 자리. ★인자도 반환도 없어야 한다★ — 트리거는 인자를 못 준다. */
+/* ym 문자열 산술 — Date 를 쓰지 않는다(§9-4 타임존 사고) */
+function prevYm(ym) {
+  let y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7)) - 1;
+  if (m === 0) { m = 12; y -= 1; }
+  return y + '-' + ('0' + m).slice(-2);
+}
+
+/* 그 달을 이미 반영했는가 — 「월말반영」 기록을 본다.
+   ★실패·못한 곳이 있었으면 아직 안 끝난 것으로 본다★ — 다음 날 밤에 저절로 다시 시도한다. */
+function monthCloseDone(ss, ym) {
+  const sh = ss.getSheetByName('월말반영');
+  if (!sh) return false;
+  const last = sh.getLastRow();
+  if (last < 2) return false;
+  const n = Math.min(200, last - 1);
+  const rng = grid(sh, last - n + 1, 1, n, 6);
+  const vals = rng ? rng.getValues() : [];
+  for (let i = vals.length - 1; i >= 0; i--) {
+    if (String(vals[i][1]) !== ym) continue;
+    if (Number(vals[i][4] || 0) === 0 && Number(vals[i][5] || 0) === 0) return true;  // 실패·못한곳 0
+  }
+  return false;
+}
+
+/* ★트리거가 부르는 자리★ — 인자도 반환도 없어야 한다(트리거는 인자를 못 준다).
+
+   ★매일 23시에 돌린다★ — 앱스 스크립트의 '월 단위 타이머'는 날짜를 1~31 중에서 고르게 하는데,
+   말일은 달마다 다르다(28·29·30·31). 31일로 잡으면 2·4·6·9·11월에는 ★아예 안 돈다★.
+   그래서 매일 부르고, 말일인지는 이 함수가 판단한다.
+
+   ★거른 밤을 스스로 메운다★ — 구글이 한 번 걸러도(그런 일이 있다) 다음 날 밤에 다시 본다.
+   이미 반영한 달은 기록을 보고 그냥 지나간다. 그래서 매일 돌아도 안전하다. */
 function monthCloseTrigger() {
-  const out = monthCloseRun(null, true, null);
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const tz = ss.getSpreadsheetTimeZone();
+  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const thisYm = today.slice(0, 7);
+  /* 오늘이 말일 23시를 지났으면 이번 달이 대상이고, 아니면 지난 달을 (아직 안 됐으면) 본다 */
+  const ym = monthClosed(today, tz) ? thisYm : prevYm(thisYm);
+  if (monthCloseDone(ss, ym)) { Logger.log(ym + ' 은 이미 반영했습니다 — 아무것도 하지 않습니다'); return; }
+  const out = monthCloseRun(ym, true, null);
   Logger.log(out.lines.join('\n'));
-  return out;
 }
 
 function monthCloseRun(ym, apply, stores) {
