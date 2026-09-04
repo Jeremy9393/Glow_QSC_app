@@ -17,15 +17,32 @@ async function initShopperForm(opts) {
 
   // ---------- 공통 블록 렌더 (안내문·방문 정보) — 엑셀 쇼퍼 시트 안내 블록과 짝 (수정 시 함께!) ----------
   const GUIDE = [
-    { tip: '필수 요청사항', html: '직원에게 간단한 질문이나 요청을 <b>1회 이상</b> 부탁드립니다. (화장실 위치, 메뉴 추천, 물티슈 요청 등)' },
+    /* ★이 줄만 제목처럼 세운다★ (2026-09-04 담당자) — 나머지는 '알아 두실 것'인데
+       이것만 ★손님이 실제로 해야 할 일★이다. 안내 여섯 줄이 전부 같은 무게라 눈에 안 들어온다는
+       지적을 받아, 꼬리표를 윗줄로 올리고 조금 키웠다. */
+    /* ★차례가 곧 중요도다★ (2026-09-04 담당자) — 손님이 위에서부터 읽다 만다.
+       담당자가 꼽은 중요한 셋을 위로 올리고, 익명 보장과 척도 안내는 맨 아래로 내렸다.
+       담당자 원문: *"평가 전 안내에서 중요한건 필수요청사항 진행하는거, 답변에 대한 특이사항 작성,
+       기억이 안나거나 판단이 어려운건 비고에 상황이나 이유 적는거 이런게 중요하거든"* */
+    { head: '필수 요청사항', html: '직원에게 간단한 요청이나 질문을 <b>1회 이상</b> 부탁드립니다. (화장실 위치, 메뉴 추천, 물티슈 요청 등)' },
+    /* ★「특이사항을 자유롭게」는 「안 써도 된다」로 읽힌다★ (2026-09-04 담당자 — 예/아니오만
+       고르고 이유를 안 적는다). 무엇을 왜 적는지로 바꾸고, 이유가 꼭 필요한 쪽을 집어 준다. */
+    /* ★두 줄을 하나로 합쳤다★ (2026-09-04 담당자) — 「이유를 적어라」와 「판단이 어려우면 비고에」가
+       따로 있어 말이 겹치고 상자만 길어졌다. 뒷줄의 기능(비고만 적어도 응답으로 인정)은 그대로다. */
+    { html: '<b>아니오 혹은 낮은 점수</b>를 고른 문항은 <b>비고에 이유를 간단히</b> 작성 부탁드립니다. ' +
+        '기억이 안 나거나 판단이 어려운 문항도 비고에 상황을 적어 주시면 됩니다. ' +
+        '(매장을 개선하는 데 큰 도움이 됩니다.)' },
+    /* ★「연령대·성별은 본인 기준」 줄은 2026-09-04 담당자 지시로 뺐다★ — 같은 말이 아래 칸에
+       세 번 더 있다: 칸 이름 「연령대·성별 (작성자 본인) *」 · 칸 안내문 「직원이 아닌 본인 기준
+       — 예: 30대 여성」 · 안 채우고 제출하면 뜨는 경고. 안내 상자에서 한 번 더 말할 이유가 없다.
+       ★그 세 곳을 지우면 이 말이 어디에도 없게 된다 — 함께 지우지 말 것★ */
     /* '냉정하고'를 쓰지 않는다 — 손님에게 가게를 깎으라고 신호를 보내는 말이다.
        이 설문은 매장을 깎으려는 것이 아니라 무엇을 고치면 좋을지 알려는 것이고,
        그 결과를 읽는 사람은 그 매장에서 일하는 직원들이다. */
     { html: '본 평가는 <b>철저하게 익명이 보장</b>됩니다. 보고 느끼신 그대로 편하게 남겨 주세요.' },
-    { html: '1~10번 카테고리는 <b>예 / 아니오</b> 중 하나를, 11~13번 카테고리(맛·양·만족도)는 <b>1~5점</b> 중 하나를 선택해 주세요.' },
-    { html: '답변에 대한 특이사항은 <b>비고</b>에 자유롭게 적어주세요.' },
-    { html: '기억이 안 나거나 판단이 어려운 문항은, <b>비고에 상황이나 이유를 꼭 적어주시길</b> 부탁드립니다.' },
-    { html: '<b>연령대·성별</b>은 직원이 아니라 <b>설문을 작성하시는 본인</b> 기준으로 적어주세요.' },
+    /* ★척도 안내는 2026-09-04 담당자 지시로 여기서 뺐다★ — 「1~10번은 예/아니오, 11~13번은
+       1~5점」은 정작 고르는 순간엔 화면 밖이었다. 지금은 ★카테고리 제목 줄★에 붙는다
+       (아래 catsEl 렌더의 gstat). ★그 자리를 지우면 답하는 법이 어디에도 없게 된다★ */
   ];
   const META_FIELDS = [
     { id: 'store', label: '매장명 *', full: true, control: '<select id="store"><option value="">방문한 매장 선택</option></select>' },
@@ -38,21 +55,51 @@ async function initShopperForm(opts) {
        가이드북 5-2-1 이 「응대직원은 명찰(이름 또는 닉네임)이 고객이 볼 수 있는 위치에」를
        요구한다. 손님이 보라고 매장이 내건 것을 손님이 적는 것은, 외모를 관찰해 특정하는 것과
        성격이 다르다. ★이름은 여전히 안 받는다★ — 명찰이 이름이면 역할 닉네임(카운터·홀)으로. */
-    { id: 'staff', label: '응대 시간대·상황·직원 설명 *', full: true, control: '<input type="text" id="staff" placeholder="예: 14시경 계산대에서 결제 시, 픽업 당시">' },
+    /* ★상황·시간대는 여기서 뺐다★ (2026-09-04 담당자) — 시간대는 바로 위 「방문 시간」 칸이
+       이미 받고, 무슨 일이 있었는지는 문항 비고가 받는다. 여기서 또 물으면 같은 이야기를 두 번 쓴다.
+       이 칸이 하는 일은 하나다 — ★어느 직원이었는지 알아보게 하는 것★.
+       ★못 봤을 때는 역할로 받는다★ — 그래야 특정도 되고 외모 묘사가 안 들어온다
+       (2026-08-27 「이름·얼굴·체형은 받지 않는다」 · 2026-09-01 「명찰 닉네임까지는 받는다」). */
+    { id: 'staff', label: '응대 직원(닉네임, 성별 등) *', full: true, control: '<input type="text" id="staff" placeholder="못 보셨다면 홀 직원, 주방 직원 등 간단히 적어 주세요">' },
     { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
     { id: 'demo', label: '연령대·성별 (작성자 본인) *', full: true, control: '<input type="text" id="demo" placeholder="직원이 아닌 본인 기준 — 예: 30대 여성">' },
   ];
   if ($('#guideBox')) {
     $('#guideBox').innerHTML = '<h2>평가 전 안내</h2><ul class="guideList">' +
       GUIDE.map(function (g) {
+        /* head 가 있으면 제목 줄로 세우고 본문을 그 아래에 둔다 (tip 은 같은 줄에 붙는 꼬리표) */
+        if (g.head) {
+          return '<li class="lead"><span class="head">' + g.head + '</span>' +
+            '<span class="body">' + g.html + '</span></li>';
+        }
         return '<li>' + (g.tip ? '<span class="tip">' + g.tip + '</span> ' : '') + g.html + '</li>';
       }).join('') + '</ul>';
   }
+  /* ★방문 정보를 둘로 가른다★ (2026-09-04 담당자)
+       앞  매장명 · 방문날짜 · 방문 시간   — 문항보다 먼저 받아야 하는 것
+           ★매장을 뒤로 미루지 않는다★ — 38문항을 다 쓰고 나서 매장을 잘못 골랐다는 걸 알게 된다
+             (QSC 쪽에서 매장 오선택으로 남의 점수가 조용히 사라진 사고가 있었다)
+       뒤  응대 직원 · 주문내역 · 연령대·성별 — 문항을 읽는 동안 기억이 살아나는 것들
+           손님이 첫 화면에서 넘어야 할 칸이 7개에서 3개(손님은 매장이 잠기니 2개)로 준다
+     ★상자는 JS가 만들어 #cats 뒤에 끼운다★ — 화면 두 개(shopper.html·survey.html)를
+     따로 고치면 어긋난다. 한 뿌리에서 나와야 한다는 원칙(파일 첫 주석)을 지킨다. */
+  const LATE_IDS = { staff: 1, order: 1, demo: 1 };
+  function metaHtml(list) {
+    return '<div class="meta-grid">' + list.map(function (f) {
+      return '<div' + (f.full ? ' class="full"' : '') + '><label class="f">' + f.label + '</label>' + f.control + '</div>';
+    }).join('') + '</div>';
+  }
   if ($('#metaBox')) {
-    $('#metaBox').innerHTML = '<h2>방문 정보</h2><div class="meta-grid">' +
-      META_FIELDS.map(function (f) {
-        return '<div' + (f.full ? ' class="full"' : '') + '><label class="f">' + f.label + '</label>' + f.control + '</div>';
-      }).join('') + '</div>';
+    $('#metaBox').innerHTML = '<h2>방문 정보</h2>' +
+      metaHtml(META_FIELDS.filter(function (f) { return !LATE_IDS[f.id]; }));
+    const late = META_FIELDS.filter(function (f) { return LATE_IDS[f.id]; });
+    if (late.length && $('#cats')) {
+      const box = document.createElement('section');
+      box.className = 'card';
+      box.id = 'metaLate';
+      box.innerHTML = '<h2>마지막으로</h2>' + metaHtml(late);
+      $('#cats').insertAdjacentElement('afterend', box);
+    }
   }
   /* ★영수증 사진 첨부는 2026-08-20에 없앴다★ (사용자 지시 — 없던 것으로).
      그래서 이 화면은 사진을 한 장도 다루지 않는다. PhotoPick(js/ui-photo.js)도 부르지 않는다
@@ -141,7 +188,7 @@ async function initShopperForm(opts) {
     { id: 'store', label: '매장명' },
     { id: 'date', label: '방문날짜' },
     { id: 'time', label: '방문 시간', pick: true, focus: 'timeH', get: function () { return TimePick.get('time'); } },
-    { id: 'staff', label: '응대 시간대·상황·직원 설명' },
+    { id: 'staff', label: '응대 직원' },
     { id: 'order', label: '주문내역' },
     { id: 'demo', label: '연령대·성별' },
   ];
@@ -342,9 +389,12 @@ async function initShopperForm(opts) {
   master.shopper_categories.forEach(function (c) {
     const sec = document.createElement('section');
     sec.className = 'group';
+    /* ★답하는 법은 카테고리 제목 줄에 붙인다★ (2026-09-04 담당자) — 종전에는 안내 상자 맨 아래에
+       「1~10번은 예/아니오, 11~13번은 1~5점」 한 줄로 있었는데, 정작 고르는 순간엔 화면 밖이었다.
+       제목 줄 오른쪽은 이미 비어 있던 자리라 상자 높이가 늘지 않는다. */
     const likertCat = c.questions.length && c.questions[0].scale === 'likert';
     sec.innerHTML = '<div class="ghead"><h2></h2>' +
-      (likertCat ? '<span class="gstat">5점 척도</span>' : '') + '</div>';
+      '<span class="gstat">' + (likertCat ? '1~5점 중 선택' : '예 / 아니오') + '</span></div>';
     $('.ghead h2', sec).textContent = c.name;
     c.questions.forEach(function (q) { sec.appendChild(buildQ(q)); });
     catsEl.appendChild(sec);
@@ -394,7 +444,7 @@ async function initShopperForm(opts) {
       const val = f.get ? f.get() : $('#' + f.id).value.trim();
       if (!val) {
         alert(withEulReul(f.label) + ' ' + (f.verb || (f.pick ? '선택해' : '입력해')) + ' 주세요.' +
-          (f.id === 'staff' ? '\n언제·무슨 상황이었는지 적어 주세요. ★직원의 이름·얼굴·체형은 적지 않습니다.★\n명찰에 닉네임이 있으면 그 닉네임을, 명찰이 이름이거나 못 보셨으면 카운터 직원·홀 직원처럼 적어 주세요.\n예) 14시경 계산대에서 결제 시, 픽업 당시' : '') +
+          (f.id === 'staff' ? '\n명찰의 닉네임을 적어 주세요. ★직원의 이름·얼굴·체형은 적지 않습니다.★\n못 보셨거나 명찰이 이름이면 홀 직원·주방 직원처럼 역할로 적어 주세요.\n무슨 일이 있었는지는 그 문항의 비고에 적으시면 됩니다.' : '') +
           (f.id === 'demo' ? '\n응대 직원이 아니라, 설문을 작성하시는 본인 기준으로 적어 주세요.' : ''));
         $('#' + (f.focus || f.id)).focus();
         return;
@@ -409,13 +459,23 @@ async function initShopperForm(opts) {
         : '아직 답변하지 않은 문항이 ' + missing + '개 있습니다.\n답을 선택하거나, 판단이 어려우면 비고에 상황을 적어 주세요.');
       return;
     }
+    /* ★어느 문항인지 번호로 알려 준다★ (2026-09-04 담당자) — 종전에는 개수만 말해서
+       「N개 비었다」는 말을 듣고도 어디를 채워야 할지 몰라 그냥 넘겼다.
+       ★막지는 않는다★ — 손님이 기억이 안 날 수도 있고, 여기서 막으면 설문을 버리고 나간다. */
     const noReason = allQs.filter(function (q) {
       const v = state.answers[q.no];
       const low = q.scale === 'likert' ? (typeof v === 'number' && v <= 2) : v === '아니오';
       return low && !(state.memos[q.no] || '').trim();
-    }).length;
-    if (noReason > 0 &&
-        !confirm('아쉬웠다고 답한 문항 중 ' + noReason + '개에 비고가 비어 있어요.\n어떤 상황이었는지 한 줄만 적어 주시면 개선에 큰 도움이 됩니다.\n이대로 제출할까요?')) return;
+    });
+    if (noReason.length) {
+      const nums = noReason.map(function (q) {
+        return (String(q.text).match(/^(\d+-\d+)\./) || [])[1] || String(q.no);
+      });
+      const shown = nums.slice(0, 8).join(', ') + (nums.length > 8 ? ' 외 ' + (nums.length - 8) + '개' : '');
+      if (!confirm('이유를 안 적은 문항이 ' + noReason.length + '개 있습니다 (' + shown + ').\n\n' +
+          '「아니오」·낮은 점수는 ★이유가 있어야★ 매장이 무엇을 고칠지 압니다.\n' +
+          '한 줄만 적어 주시면 큰 도움이 됩니다.\n\n이대로 제출할까요?')) return;
+    }
 
     const res = Scoring.shopperScore(answersInOrder());
     if (ADMIN && res.score != null &&
