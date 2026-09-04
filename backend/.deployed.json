@@ -1,6 +1,6 @@
 {
- "sha256": "42e0772904d0c4b172cd8ce5a2f405f08fa5b768f15710cfcc7e8a65d82f017c",
- "version": 93,
- "when": "2026-09-04 12:18:23",
+ "sha256": "dfdc88dc0cbeca1e0386c3cbba02b93f2effa791f7fa7ae02f37d6ce72fd4905",
+ "version": 94,
+ "when": "2026-09-04 12:27:38",
  "description": "2026-09-04 월말 반영(말일 23시) · 지문은 실서버 ping + 로컬 sha 로 직접 맞춤"
 }
