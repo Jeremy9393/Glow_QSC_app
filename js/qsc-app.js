@@ -17,6 +17,40 @@
     '확인 불가': '증빙·상황이 없어 확인하지 못했습니다',
   };
   const state = { values: {}, memos: {}, photos: {}, naWhy: {} };
+
+  /* ★건별로 갈라 둔다★ (2026-09-04 담당자 — 같은 문항 2건이라도 고칠 것이 다르다)
+       state.memos[문항]  = ['월 누락', '일 누락']        건마다 문장 하나
+       state.photos[문항] = [[url], [url, url]]          건마다 사진 목록
+     ★옛 임시저장을 되살릴 때가 문제다★ — 그때는 문장이 문자열 하나, 사진이 납작한 배열이었다.
+     문자열은 첫 건의 문장으로, 납작한 사진은 앞에서부터 한 건에 한 장씩 나눠 넣는다
+     (서버가 종전에 사진을 다루던 순서와 같다). 잃는 것은 없다. */
+  function memosOf(no) {
+    let m = state.memos[no];
+    if (typeof m === 'string') m = m ? [m] : [];
+    if (!Array.isArray(m)) m = [];
+    state.memos[no] = m;
+    return m;
+  }
+  function photosOf(no) {
+    let p = state.photos[no];
+    if (Array.isArray(p) && p.some(function (x) { return typeof x === 'string'; })) {
+      p = p.map(function (x) { return typeof x === 'string' ? [x] : (Array.isArray(x) ? x : []); });
+    }
+    if (!Array.isArray(p)) p = [];
+    state.photos[no] = p;
+    return p;
+  }
+  function shotCount(no) {
+    return photosOf(no).reduce(function (n, arr) { return n + ((arr && arr.length) || 0); }, 0);
+  }
+  /* 서버로 보낼 모양 — 사진은 납작하게 펴고, 몇 번째 건의 것인지를 나란히 보낸다 */
+  function flatShots(no) {
+    const urls = [], slots = [];
+    photosOf(no).forEach(function (arr, ci) {
+      (arr || []).forEach(function (u) { urls.push(u); slots.push(ci); });
+    });
+    return { urls: urls, slots: slots };
+  }
   const allItems = [];
   master.qsc_groups.forEach(function (g) { g.items.forEach(function (it) { it.group = shortName(g.name); allItems.push(it); }); });
   // 안전장치: 심각도 정보가 없으면 구버전 데이터가 캐시된 것 — 잘못된 감점(중대 −1점)을 막는다
@@ -280,12 +314,14 @@
     const files = Array.from(e.target.files);
     e.target.value = '';
     if (photoTarget == null || !files.length) return;
-    /* 줄이기(shrink)는 await이라, 그 사이에 다른 문항의 [사진]을 누르면 photoTarget이 바뀐다.
-       지금 값을 붙잡아 두지 않으면 사진이 엉뚱한 문항에 붙는다. */
-    const no = photoTarget;
+    /* 줄이기(shrink)는 await이라, 그 사이에 다른 칸의 [사진]을 누르면 photoTarget이 바뀐다.
+       지금 값을 붙잡아 두지 않으면 사진이 엉뚱한 곳에 붙는다. ★건 번호까지 붙잡는다★ */
+    const no = photoTarget.no;
+    const ci = photoTarget.ci || 0;
     for (const f of files) {
       const url = await PhotoPick.shrink(f);
-      (state.photos[no] = state.photos[no] || []).push(url);
+      const arr = photosOf(no);
+      (arr[ci] = arr[ci] || []).push(url);
     }
     updaters[no]();
     photoSave(no);
@@ -315,11 +351,31 @@
       /* ★이 칸이 매장에 전달되는 유일한 글이다★ (2026-08-20) — 문항 본문·코드·심각도·건수는
          매장 시트에 가지 않는다. 그래서 이름이 '비고'가 아니라 '개선요청 내용'이다.
          건수를 1 이상 넣으면 제출 전에 반드시 채워야 한다(아래 submit 검사). */
-      '<div class="meta-row"><span class="score-chip">미확인</span><input type="text" class="memo" placeholder="개선요청 내용 — 매장에 이 글만 전달됩니다"><button class="photoBtn">사진</button></div>' +
-      '<div class="thumbs"></div>';
+      /* ★건마다 한 칸★ (2026-09-04 담당자) — 같은 문항 2건이라도 고칠 것이 다르다
+         (내부 라벨: 하나는 월 누락, 하나는 일 누락). 건수를 올리면 칸이 그만큼 펼쳐진다. */
+      '<div class="meta-row"><span class="score-chip">미확인</span></div>' +
+      '<div class="cases"></div>';
     $('.q .txt', card).textContent = it.text;
 
     function setValue(v) {
+      /* ★건수를 줄이면 뒤 칸이 사라진다 — 조용히 버리지 않는다★ (2026-09-04)
+         적어 둔 문장·사진이 말없이 없어지면 낸 사람은 전달된 줄 안다. 먼저 묻는다. */
+      const before = state.values[it.no];
+      const oldN = (typeof before === 'number' && before >= 1) ? before : 1;
+      const newN = (typeof v === 'number' && v >= 1) ? v : 1;
+      if (newN < oldN) {
+        const notes = memosOf(it.no), shots = photosOf(it.no);
+        let lost = 0;
+        for (let i = newN; i < oldN; i++) {
+          if (String(notes[i] || '').trim()) lost++;
+          if ((shots[i] || []).length) lost++;
+        }
+        if (lost && !confirm('건수를 ' + oldN + ' → ' + newN + ' 으로 줄이면 ' +
+            (newN + 1) + '건 이후 칸에 적은 내용과 사진이 지워집니다.\n계속할까요?')) return;
+        notes.length = Math.min(notes.length, newN);
+        shots.length = Math.min(shots.length, newN);
+        photoSave(it.no);
+      }
       state.values[it.no] = v;
       /* NA 로 들어가면 기본 사유를 넣고, NA 에서 나오면 지운다.
          ★기본값을 넣는 이유★ — 사유를 고르지 않으면 제출을 막는 방식은 74문항 화면에서
@@ -362,14 +418,8 @@
       const n = parseInt(inp, 10);
       if (!isNaN(n) && n >= 0) setValue(n);
     };
-    $('.photoBtn', card).onclick = function () {
-      photoTarget = it.no;
-      $('#photoInput').click();
-    };
-    $('.memo', card).addEventListener('input', function (e) {
-      state.memos[it.no] = e.target.value;
-      saveDraft();
-    });
+    /* 건별 칸은 update() 안에서 그때그때 그린다 — 여기서는 걸 수 있는 것이 없다
+       (건수가 바뀌면 칸 수가 바뀐다). 사진·문장 손잡이는 renderCases 가 건다. */
 
     function update() {
       const v = state.values[it.no] == null ? null : state.values[it.no];
@@ -398,36 +448,65 @@
         chip.textContent = (it.severity ? sevLabel(it.severity) + ' ' : '') + '−' + d + '점';
         chip.className = 'score-chip ' + (it.severity ? 's-x' : 's-d');
       }
-      const memo = $('.memo', card);
-      if (memo.value !== (state.memos[it.no] || '')) memo.value = state.memos[it.no] || '';
-      const ph = state.photos[it.no] || [];
-      const pbtn = $('.photoBtn', card);
-      pbtn.textContent = ph.length ? '사진 ' + ph.length : '사진';
-      // 개선 필요(1건 이상)인데 사진이 없으면 빨간 테두리로 촬영 유도 (추적성)
-      /* 빨간 테두리 두 방향 (2026-08-26)
-         ㆍ개선 필요인데 사진이 없다      → 촬영을 유도한다(추적성)
-         ㆍ사진은 있는데 개선 필요가 아니다 → ★그 사진은 매장에 안 간다★. 제출도 막힌다.
-           둘 다 '지금 이 칸이 어긋나 있다'는 같은 뜻이라 같은 표시를 쓴다. */
-      const orphanPhoto = ph.length > 0 && !(typeof v === 'number' && v > 0);
-      pbtn.className = 'photoBtn' + (ph.length ? ' has' : '') +
-        ((typeof v === 'number' && v > 0 && !ph.length) || orphanPhoto ? ' need' : '');
-      pbtn.title = orphanPhoto
-        ? '개선 필요 건수가 없어 이 사진은 매장에 전달되지 않습니다 — 건수를 올리시거나 사진을 지워 주세요'
-        : '';
-      const thumbs = $('.thumbs', card);
-      thumbs.innerHTML = '';
-      ph.forEach(function (url, i) {
-        const im = document.createElement('img');
-        im.src = url;
-        im.onclick = function () {
-          if (!confirm('이 사진을 삭제할까요?')) return;
-          ph.splice(i, 1);
-          update();
-          photoSave(it.no);   // 지운 것도 임시저장에 반영한다(안 하면 다시 들어올 때 되살아난다)
+      renderCases(v);
+    }
+
+    /* ★건마다 한 칸을 그린다★ (2026-09-04)
+       칸 수 = 건수 (0·NA·미확인이면 한 칸만 — 종전과 같은 모양이라 눈에 띄는 변화가 없다).
+       칸마다 개선요청 문장과 사진이 따로 붙고, 그대로 매장 시트의 한 줄이 된다.
+       ★다시 그릴 때마다 손잡이를 새로 건다★ — 칸 수가 바뀌면 옛 칸은 사라진다. */
+    function renderCases(v) {
+      const n = (typeof v === 'number' && v >= 1) ? v : 1;
+      const many = n > 1;
+      const box = $('.cases', card);
+      const notes = memosOf(it.no);
+      const shots = photosOf(it.no);
+      box.innerHTML = '';
+      for (let ci = 0; ci < n; ci++) {
+        const row = document.createElement('div');
+        row.className = 'case-row';
+        row.innerHTML =
+          (many ? '<span class="case-no">' + (ci + 1) + '건</span>' : '') +
+          '<input type="text" class="memo" placeholder="개선요청 내용 — 매장에 이 글만 전달됩니다">' +
+          '<button class="photoBtn">사진</button>' +
+          '<div class="thumbs"></div>';
+        const memo = $('.memo', row);
+        memo.value = notes[ci] || '';
+        memo.addEventListener('input', function (e) {
+          memosOf(it.no)[ci] = e.target.value;
           saveDraft();
+        });
+        const ph = shots[ci] || (shots[ci] = []);
+        const pbtn = $('.photoBtn', row);
+        pbtn.textContent = ph.length ? '사진 ' + ph.length : '사진';
+        pbtn.onclick = function () {
+          photoTarget = { no: it.no, ci: ci };
+          $('#photoInput').click();
         };
-        thumbs.appendChild(im);
-      });
+        /* 빨간 테두리 두 방향 (2026-08-26)
+           ㆍ개선 필요인데 사진이 없다      → 촬영을 유도한다(추적성)
+           ㆍ사진은 있는데 개선 필요가 아니다 → ★그 사진은 매장에 안 간다★. 제출도 막힌다. */
+        const orphanPhoto = ph.length > 0 && !(typeof v === 'number' && v > 0);
+        pbtn.className = 'photoBtn' + (ph.length ? ' has' : '') +
+          ((typeof v === 'number' && v > 0 && !ph.length) || orphanPhoto ? ' need' : '');
+        pbtn.title = orphanPhoto
+          ? '개선 필요 건수가 없어 이 사진은 매장에 전달되지 않습니다 — 건수를 올리시거나 사진을 지워 주세요'
+          : '';
+        const thumbs = $('.thumbs', row);
+        ph.forEach(function (url, i) {
+          const im = document.createElement('img');
+          im.src = url;
+          im.onclick = function () {
+            if (!confirm('이 사진을 삭제할까요?')) return;
+            ph.splice(i, 1);
+            update();
+            photoSave(it.no);   // 지운 것도 임시저장에 반영한다(안 하면 다시 들어올 때 되살아난다)
+            saveDraft();
+          };
+          thumbs.appendChild(im);
+        });
+        box.appendChild(row);
+      }
     }
     updaters[it.no] = update;
     update();
@@ -569,7 +648,7 @@
       off.forEach(function (it) {
         const v = state.values[it.no];
         const d = Scoring.itemDeduct(v, it.severity);
-        const ph = (state.photos[it.no] || []).length;
+        const ph = shotCount(it.no);
         const row = document.createElement('div');
         row.className = 'offRow' + (it.severity ? ' crit' : '');
         row.innerHTML = '<span class="no">' + (it.code || it.no) + '</span><span class="t"></span><span class="v">' +
@@ -603,9 +682,13 @@
     /* ★개선 필요 건이 있는 문항은 개선요청 문장이 있어야 한다★ (2026-08-20 사용자 결정)
        매장 시트에는 문항 본문이 가지 않는다. 이 문장이 비면 매장은 사진만 받고
        무엇을 고쳐야 하는지 알 길이 없다 — 그래서 제출을 막는다. */
+    /* ★건마다 봐야 한다★ (2026-09-04) — 2건인데 1건 칸만 적혀 있으면 나머지 줄이 빈 채로 간다 */
     const noText = allItems.filter(function (it) {
       const v = state.values[it.no];
-      return typeof v === 'number' && v >= 1 && !String(state.memos[it.no] || '').trim();
+      if (!(typeof v === 'number' && v >= 1)) return false;
+      const notes = memosOf(it.no);
+      for (let i = 0; i < v; i++) if (!String(notes[i] || '').trim()) return true;
+      return false;
     });
     if (noText.length) {
       alert('개선요청 내용을 적지 않은 문항이 ' + noText.length + '개 있습니다.\n\n' +
@@ -630,7 +713,7 @@
        건수를 대신 올려 주지 않는다 — 점수를 앱이 몰래 바꾸는 셈이 된다. 사람이 정해야 한다. */
     const orphan = allItems.filter(function (it) {
       const v = state.values[it.no];
-      return (state.photos[it.no] || []).length > 0 && !(typeof v === 'number' && v >= 1);
+      return shotCount(it.no) > 0 && !(typeof v === 'number' && v >= 1);
     });
     if (orphan.length) {
       alert('사진은 붙였는데 개선 필요 건수가 없는 문항이 ' + orphan.length + '개 있습니다.\n\n' +
@@ -638,7 +721,7 @@
           const v = state.values[it.no];
           const st = (v === 'NA') ? 'NA' : (v === 0 ? '이상 없음' : '미확인');
           return '· ' + (it.code ? it.code + ' ' : '') + it.text + '  (' + st + ' · 사진 ' +
-            (state.photos[it.no] || []).length + '장)';
+            shotCount(it.no) + '장)';
         }).join('\n') +
         (orphan.length > 6 ? '\n· 외 ' + (orphan.length - 6) + '개' : '') +
         '\n\n이대로 내면 그 사진은 매장에 전달되지 않습니다.\n' +
@@ -673,7 +756,12 @@
           rating: v === 'NA' ? 'NA' : (typeof v === 'number' ? (v === 0 ? '이상 없음' : v + '건') : ''),
           score: typeof d === 'number' ? -d : null,
           naWhy: v === 'NA' ? (state.naWhy[it.no] || NA_WHY[0]) : '',
-          memo: state.memos[it.no] || '', photos: state.photos[it.no] || [],
+          /* ★건별로 보낸다★ (2026-09-04) — notes[i] 가 그대로 매장 시트의 한 줄이 되고,
+             photoSlots[i] 가 그 사진이 몇 번째 건의 것인지 알려 준다(어느 건에 사진이 없어도
+             뒤 사진이 앞 줄로 밀리지 않는다). memo 는 옛 기록(QSC_상세)을 위해 남긴다. */
+          memo: (memosOf(it.no).find(function (x) { return String(x || '').trim(); }) || ''),
+          notes: memosOf(it.no).map(function (x) { return String(x == null ? '' : x); }),
+          photos: flatShots(it.no).urls, photoSlots: flatShots(it.no).slots,
         };
       }),
     };

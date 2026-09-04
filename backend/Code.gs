@@ -4905,11 +4905,29 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   found.forEach(function (it) {
     const ph = photoMap[it.no] || [];
     const cnt = Math.max(1, Math.round(Number(it.value) || 1));
+    /* ★사진을 '몇 번째 건의 것인가'로 모은다★ (2026-09-04) — 어느 건에 사진이 없으면
+       순서만으로는 뒤 사진이 앞 줄로 밀린다. 옛 앱(slot 없음)은 순서를 건 번호로 본다. */
+    const bySlot = {};
+    ph.forEach(function (x, i) {
+      const s = (x && x.slot != null) ? x.slot : i;
+      (bySlot[s] = bySlot[s] || []).push(x);
+    });
+    /* 건수 밖(건수를 줄인 뒤 남은 것)은 잃지 않게 마지막 줄로 모은다 */
+    const overflow = [];
+    Object.keys(bySlot).forEach(function (k) {
+      if (Number(k) >= cnt) overflow.push.apply(overflow, bySlot[k]);
+    });
+    /* 건별 문장. notes 가 없으면(옛 앱) 문항 문장 하나를 모든 줄에 쓴다 */
+    const notes = it.notes && it.notes.length ? it.notes : null;
     for (let i = 0; i < cnt; i++) {
+      const mine = bySlot[i] || [];
+      const extra = mine.slice(1);                       // 한 건에 두 장 이상이면 나머지는 글로
+      if (i === cnt - 1) extra.push.apply(extra, overflow);
       expanded.push({
         src: it,
-        photo: ph[i] || null,
-        extra: (i === cnt - 1 && ph.length > cnt) ? ph.slice(cnt) : [],
+        note: notes ? String(notes[i] == null ? '' : notes[i]).trim() : null,
+        photo: mine[0] || null,
+        extra: extra,
       });
     }
   });
@@ -4949,7 +4967,11 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
     const tail = e.extra.length
       ? '\n· 사진 ' + e.extra.length + '장 더: ' + e.extra.map(function (x) { return x.url; }).join(' ')
       : '';
-    const body = String(it.memo == null ? '' : it.memo).trim();
+    /* ★건마다 다른 문장★ (2026-09-04 담당자) — 같은 문항 2건이라도 「월 누락」·「일 누락」처럼
+       고칠 것이 다르다. 건별 문장이 오면 그것을 쓰고, 없으면(옛 앱) 문항 문장을 쓴다. */
+    const body = (e.note != null && e.note !== '')
+      ? e.note
+      : String(it.memo == null ? '' : it.memo).trim();
     /* ★한 문항이 여러 줄이 되었으므로 같은 문항을 여러 번 세지 않는다★ */
     if (!body && !noTextSeen[it.no]) { noTextSeen[it.no] = 1; noText.push(it.code || ('문항 ' + it.no)); }
     bc.push([newFmt ? dueVal : no, '']);   // ★구분(대분류)도 비운다★ — 평가체계의 구조를 드러내지 않는다
@@ -5099,7 +5121,12 @@ function savePhotos(p, ctx) {
   let used = 0;
   p.items.forEach(function (it) {
     const list = (it.photos || []).slice(0, 40);
+    /* ★사진이 몇 번째 「건」의 것인지 함께 가져온다★ (2026-09-04)
+       개선요청이 건마다 한 줄이 되면서, 사진도 그 줄에 맞춰 들어가야 한다.
+       옛 앱은 photoSlots 를 안 보내므로 그때는 순서를 그대로 건 번호로 본다. */
+    const slots = it.photoSlots || null;
     list.forEach(function (dataUrl, i) {
+      if (!dataUrl) return;                      // 빈 자리는 조용히 건너뛴다 (경고 대상이 아니다)
       if (used >= budget) { skipped++; return; }
       if (validPhoto(dataUrl)) { skipped++; return; }
       used++;
@@ -5129,7 +5156,10 @@ function savePhotos(p, ctx) {
         fileSafe(p.date) + '_' + safeName + '_문항' + it.no + '_' + (i + 1) + '.jpg');
       const f = dayFolder.createFile(blob);
       if (PHOTO_EMBED && !folderShared) f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      (out[it.no] = out[it.no] || []).push({ url: f.getUrl(), id: f.getId() });
+      (out[it.no] = out[it.no] || []).push({
+        url: f.getUrl(), id: f.getId(),
+        slot: (slots && slots[i] != null) ? Number(slots[i]) : i,
+      });
     });
   });
   if (skipped) out.__skipped = skipped;
