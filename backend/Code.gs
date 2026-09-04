@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v92', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v94', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -5569,9 +5569,17 @@ function daysInMonth(ym) {
 }
 const MONTH_OPEN_HOUR = 23;          // 말일 몇 시에 여는가 (2026-09-04 담당자: 23시)
 
+/* ★이 달부터만 늦춘다★ (2026-09-04 담당자 지적 — 첫 실행은 10월이어야 한다)
+   9월은 ★종전 방식으로 QSC 평가가 돌고 있고, QSC·MS 교차검증 시험 중★이다.
+   지연을 9월에 걸면 ①매장 파일 MS점수가 비어 교차검증을 못 보고 ②9/30 23시에 트리거가
+   시험 중인 달을 닫아 버린다. 그래서 2026-09 이전은 ★늘 '이미 끝난 달'로 본다★ —
+   즉 종전처럼 제출 즉시 매장 파일에 쓴다. 트리거도 이 달 전은 건너뛴다(monthCloseTrigger). */
+const MS_DEFER_FROM = '2026-10';
+
 function monthClosed(dateStr, tz) {
   const ym = String(dateStr || '').slice(0, 7);
   if (!/^\d{4}-\d{2}$/.test(ym)) return false;
+  if (ym < MS_DEFER_FROM) return true;               // 지연 적용 전의 달 — 종전대로 즉시
   const now = Utilities.formatDate(new Date(), tz || ssTz(), 'yyyy-MM-dd HH');
   const nowYm = now.slice(0, 7);
   if (ym < nowYm) return true;                       // 이미 지난 달
@@ -5619,6 +5627,9 @@ function monthCloseTrigger() {
   const thisYm = today.slice(0, 7);
   /* 오늘이 말일 23시를 지났으면 이번 달이 대상이고, 아니면 지난 달을 (아직 안 됐으면) 본다 */
   const ym = monthClosed(today, tz) ? thisYm : prevYm(thisYm);
+  /* ★지연을 시작하는 달 전에는 아무것도 하지 않는다★ — 9월은 종전 방식으로 돌고 있고
+     QSC·MS 교차검증 시험 중이다. 9/30 23시에 이 트리거가 그 달을 닫으면 시험을 망친다. */
+  if (ym < MS_DEFER_FROM) { Logger.log(ym + ' 은 지연 적용 전(' + MS_DEFER_FROM + '~)입니다 — 아무것도 하지 않습니다'); return; }
   if (monthCloseDone(ss, ym)) { Logger.log(ym + ' 은 이미 반영했습니다 — 아무것도 하지 않습니다'); return; }
   const out = monthCloseRun(ym, true, null);
   Logger.log(out.lines.join('\n'));

@@ -32,7 +32,7 @@ def cutconst(name):
     return next(l for l in lines if l.startswith('const %s ' % name))
 
 
-body = '\n'.join([cut('daysInMonth'), cutconst('MONTH_OPEN_HOUR'),
+body = '\n'.join([cut('daysInMonth'), cutconst('MONTH_OPEN_HOUR'), cutconst('MS_DEFER_FROM'),
                   cut('monthClosed'), cut('prevYm'), cut('setTotalFormula')])
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
@@ -95,20 +95,33 @@ ok('2월 29일 (2028년 윤년)', daysInMonth('2028-02'), 29);
 ok('2100년은 윤년이 아니다', daysInMonth('2100-02'), 28);
 ok('2000년은 윤년이다', daysInMonth('2000-02'), 29);
 ok('4월은 30일', daysInMonth('2026-04'), 30);
-ok('★2/28 23시에 열린다★', closedAt('2026-02-28 23', '2026-02-10'), true);
-ok('2/28 22시엔 아직', closedAt('2026-02-28 22', '2026-02-10'), false);
+/* ★2027년으로 잰다★ — 2026-02 는 지연 적용 전(MS_DEFER_FROM='2026-10')이라 늘 열려 있어
+   말일 경계를 재는 데 못 쓴다. 적용 후의 2월로 봐야 이 시험이 뜻이 있다. */
+ok('★2/28 23시에 열린다★', closedAt('2027-02-28 23', '2027-02-10'), true);
+ok('2/28 22시엔 아직', closedAt('2027-02-28 22', '2027-02-10'), false);
 ok('윤년 2/28 23시엔 아직 (29일이 남았다)', closedAt('2028-02-28 23', '2028-02-10'), false);
 ok('윤년 2/29 23시에 열린다', closedAt('2028-02-29 23', '2028-02-10'), true);
+
+// ── ②-2 9월은 건드리지 않는다 (교차검증 중) ─────────────────
+console.log('\n②-2 ★2026-10 부터만 늦춘다★ — 9월은 종전대로 즉시 (교차검증 시험 중)');
+ok('9월 방문분은 9월 중에도 ★즉시★', closedAt('2026-09-10 09', '2026-09-05'), true);
+ok('9/30 22시에도 9월은 열려 있다', closedAt('2026-09-30 22', '2026-09-05'), true);
+ok('8월도 마찬가지', closedAt('2026-09-10 09', '2026-08-20'), true);
+ok('★10월부터는 늦춘다★', closedAt('2026-10-15 09', '2026-10-05'), false);
+ok('12월(시험 입력)도 늦춘다', closedAt('2026-12-10 09', '2026-12-05'), false);
 
 // ── ③-2 매일 23시 트리거가 고르는 달 ────────────────────────
 console.log('\n③-2 매일 23시에 돌 때 어느 달을 보는가');
 function pick(now) {                       // monthCloseTrigger 의 판단부와 같은 규칙
   NOW = now;
   const today = now.slice(0, 10), thisYm = today.slice(0, 7);
-  return monthClosed(today, 'Asia/Seoul') ? thisYm : prevYm(thisYm);
+  const ym = monthClosed(today, 'Asia/Seoul') ? thisYm : prevYm(thisYm);
+  return ym < MS_DEFER_FROM ? '(아무것도 안 함)' : ym;
 }
-ok('10/31 23시 → 10월', pick('2026-10-31 23'), '2026-10');
-ok('10/30 23시 → 아직 9월을 본다(이미 됐으면 지나감)', pick('2026-10-30 23'), '2026-09');
+ok('★9/30 23시 → 아무것도 안 한다★ (교차검증 중인 달을 안 닫는다)', pick('2026-09-30 23'), '(아무것도 안 함)');
+ok('9월 아무 날 23시에도 안 한다', pick('2026-09-15 23'), '(아무것도 안 함)');
+ok('★첫 실행은 10/31 23시 → 10월★', pick('2026-10-31 23'), '2026-10');
+ok('10/30 23시 → 9월은 대상이 아니라 아무것도 안 함', pick('2026-10-30 23'), '(아무것도 안 함)');
 ok('11/01 23시 → 10월 (거른 밤을 메운다)', pick('2026-11-01 23'), '2026-10');
 ok('★해 넘김★ 1/05 23시 → 지난해 12월', pick('2027-01-05 23'), '2026-12');
 ok('12/31 23시 → 12월', pick('2026-12-31 23'), '2026-12');
