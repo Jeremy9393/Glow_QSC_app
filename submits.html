@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=100">
+<link rel="stylesheet" href="css/app.css?v=101">
 </head>
 <body>
 <header class="topbar">
@@ -33,6 +33,23 @@
     <div id="undoPlan"></div>
   </section>
 
+  <!-- ★월말 반영★ (2026-09-04) — 매장 파일 MS점수는 그 달 말일 23시에 열린다.
+       평소에는 시간 트리거가 알아서 돌고, 이 칸은 ①안 돌았을 때 손으로 만회하고
+       ②무엇이 반영될지 미리 보는 자리다. 트리거와 ★같은 함수★를 부른다. -->
+  <section class="card">
+    <h2>월말 반영 (MS점수)</h2>
+    <p class="note">매장 파일의 <b>MS점수·종합점수</b>는 그 달 <b>말일 23시</b>에 열립니다.
+      매장이 「이번 달 점검 끝났다」고 읽지 않도록 늦춰 둔 것입니다.<br>
+      통합시트(본사)는 <b>제출 즉시</b> 쓰이므로 월중에도 다 보입니다.<br>
+      평소에는 <b>자동으로 돌아갑니다</b>. 이 버튼은 자동 실행이 걸렀을 때 쓰는 예비입니다.</p>
+    <div class="meta-grid">
+      <div><label class="f">대상 월</label><input type="month" id="mcYm"></div>
+      <div><label class="f">&nbsp;</label>
+        <button class="miniBtn" id="mcPreview">무엇이 반영될지 보기</button></div>
+    </div>
+    <div id="mcOut"></div>
+  </section>
+
 </div>
 
 <!-- auth.js는 항상 가장 먼저. 이 화면은 본사 담당자 전용 도구라 세션이 없으면 login.html로 보낸다.
@@ -40,11 +57,11 @@
        권한의 정본이 그것이다. 여기에 새 메뉴 키를 만들면 구글시트 「역할」 탭까지 고쳐야 하고,
        고치기 전까지는 아무에게도 안 보인다. 같은 열쇠를 쓰는 편이 맞다.
      이것은 안내를 앞당기는 장치일 뿐 보안이 아니다 — 진짜 차단은 서버 ACTIONS 등록표와 can()이다. -->
-<script src="js/maint.js?v=100"></script>
-<script src="js/auth.js?v=100"></script>
+<script src="js/maint.js?v=101"></script>
+<script src="js/auth.js?v=101"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts');</script>
-<script src="js/api.js?v=100"></script>
-<script src="js/submits-app.js?v=100"></script>
+<script src="js/api.js?v=101"></script>
+<script src="js/submits-app.js?v=101"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

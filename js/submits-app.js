@@ -4,11 +4,13 @@
      원상복구할 때 쓴다. '재제출로 덮어쓰기'와는 다른 일이다 — 덮어쓰기는 제출할 때
      서버가 먼저 되묻고(guardResubmit) 알아서 정리한다.
 
-   ★날짜 한 줄, 통째로★ — 서버는 ★양쪽(QSC·MS)을 함께 되돌릴 때만★ 매장 파일 탭까지
-     정리한다(한쪽만 지우면 반대쪽 자료가 그 탭에 남으니 당연한 규칙이다).
-     그래서 종류별로 줄을 나누고 늘 kind를 보내면 개선요청 행을 영영 못 지운다 —
-     기능을 하나 잃는 셈이다. 기본은 '그 날짜 제출을 통째로'.
-     시간(time)도 보내지 않는다(보내면 NA프리셋·매장 파일 정리를 건너뛴다).
+   ★QSC·MS 를 따로 되돌린다★ — 묶음마다 kind('qsc'|'shopper')를 보낸다(아래 preview 호출).
+     서버가 doQsc·doShop 으로 갈라 그 갈래의 점수 칸·응답 시트·매장 파일만 건드린다.
+     ⚠한쪽만 되돌려도 ★점수·방문일·개선요청 행까지★ 지운다. 안 지우는 것은 월 탭 자체뿐이고,
+       그건 빈 양식이라 다음 달에 그대로 쓰인다.
+     ⚠2026-08-26 판 주석에는 '늘 통째로 보낸다'라고 적혀 있었는데 ★v75에서 바뀐 뒤로 낡은 말★이라
+       2026-09-04 에 고쳤다(그 낡은 줄을 믿고 '나눌 수 있느냐'를 다시 검토한 일이 있었다).
+     시간(time)은 여전히 보내지 않는다(보내면 NA프리셋·매장 파일 정리를 건너뛴다).
 
    ★지우기 전에 반드시 보여 준다★ — admin.undoSubmit 은 apply 없이 부르면 계획만 돌려준다.
      이 화면은 그 계획을 펴 놓고, 사람이 한 번 더 누를 때만 apply:true 를 보낸다.
@@ -166,5 +168,44 @@
       loadList(store);
     };
     undoPlan.appendChild(go);
+  }
+
+  /* ---------- 월말 반영 (2026-09-04) ----------
+     ★평소에는 시간 트리거가 돈다★ — 이 칸은 걸렀을 때 손으로 만회하는 예비 입구다.
+     서버의 admin.monthClose 는 트리거가 부르는 monthCloseRun 과 ★같은 함수★를 부른다.
+     ★미리보기가 먼저다★ — 무엇이 반영될지 보고, 그 다음에만 실제로 연다. */
+  const mcYm = $('#mcYm'), mcOut = $('#mcOut'), mcBtn = $('#mcPreview');
+  if (mcYm && mcBtn) {
+    const now = new Date();
+    mcYm.value = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2);
+
+    async function monthClose(apply) {
+      const ym = (mcYm.value || '').trim();
+      if (!/^\d{4}-\d{2}$/.test(ym)) { alert('대상 월을 골라 주세요.'); return; }
+      mcBtn.disabled = true;
+      const req = { ym: ym };
+      if (apply) req.apply = true;
+      const r = await Api.call('admin.monthClose', req).catch(function () { return null; });
+      mcBtn.disabled = false;
+      setHtml(mcOut, '');
+      if (!(r && r.ok)) {
+        /* ★아직 안 끝난 달이면 서버가 막는다★ — 그 안내를 그대로 보여 준다(임의로 열지 않는다) */
+        mcOut.appendChild(note('반영하지 못했습니다. ' + ((r && r.error) || ''), 'mockNote'));
+        return;
+      }
+      list(mcOut, r.lines || [], apply ? '한 일' : '반영될 것');
+      if (!apply && r.done > 0) {
+        const go = document.createElement('button');
+        go.className = 'miniBtn warn';
+        go.textContent = '지금 반영합니다';
+        go.onclick = function () {
+          if (!confirm(ym + ' 의 MS점수를 매장 파일에 지금 반영할까요?\n' +
+            '매장 화면에 점수가 보이게 됩니다.')) return;
+          monthClose(true);
+        };
+        mcOut.appendChild(go);
+      }
+    }
+    mcBtn.onclick = function () { monthClose(false); };
   }
 })();

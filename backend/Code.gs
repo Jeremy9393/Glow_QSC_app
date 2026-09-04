@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v89', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v90', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -350,6 +350,8 @@ function actionTable() {
     'admin.protect':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnProtect },
     /* 「차기 월 목표」 걷어내기 — 일회성. 기본이 미리보기다(apply를 안 주면 아무것도 안 지운다). */
     'admin.dropGoal':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnDropGoal },
+    /* 월말 반영 — 매장 파일 MS점수를 그 달 말일 23시에 연다. 트리거와 같은 함수를 부른다. */
+    'admin.monthClose':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMonthClose },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -3358,8 +3360,16 @@ function saveShopper(ss, p, ctx, isSurvey) {
     try {
       extra.dashboard = writeDashboard(p.store, p.date, avg / 100, 2);
     } catch (err) { extra.dashboard = { ok: false, error: opErr('통합시트 기록', err) }; }
+    /* ★매장 파일 MS점수는 그 달이 끝나야 연다★ (2026-09-04 담당자 결정)
+       매장은 MS가 월 1회인 것을 안다. 점수가 제출 즉시 보이면 「이번 달 끝났다」로 읽고
+       남은 날 응대가 느슨해질 수 있다. 그래서 ★매장이 보는 곳(매장 파일)만★ 말일 23시에 연다.
+       ⚠통합시트는 그대로 즉시 쓴다 — 본사 것이고 매장은 못 본다. 본사는 월중에도 다 본다.
+       ⚠이미 끝난 달(지난 달 자료를 늦게 넣는 경우)은 숨길 이유가 없으므로 즉시 쓴다.
+       월말에 여는 일은 monthCloseRun() 이 한다(트리거·관리자 버튼 공용). */
     try {
-      extra.storeFile = writeStoreShopper(p.store, p.date, avg / 100);
+      extra.storeFile = monthClosed(p.date, ss.getSpreadsheetTimeZone())
+        ? writeStoreShopper(p.store, p.date, avg / 100)
+        : { ok: true, deferred: true, msg: '매장 파일에는 그 달 말일 23시에 반영합니다' };
     } catch (err) { extra.storeFile = { ok: false, error: opErr('매장 파일 기록', err) }; }
   }
   dropDashCache(p.date);
@@ -5530,6 +5540,120 @@ function fnMergeAuth(ctx, payload) {
   return { ok: true, preview: false, plan: plan, done: done, rows: rows, oldAuthId: src };
 }
 
+/* ═══ 월말 반영 — 매장 파일 MS점수를 그 달 말일 23시에 연다 ═══════════════════
+   (2026-09-04 담당자 결정) 매장은 MS가 월 1회인 것을 안다. 제출 즉시 점수가 보이면
+   「이번 달 끝났다」로 읽고 남은 날 응대가 느슨해질 수 있다. 그래서 ★매장이 보는 곳만★ 늦춘다.
+   통합시트(본사)는 즉시 쓴다 — 본사는 월중에도 다 본다.
+
+   ★점검이 20일에 끝나도 말일에 열린다★ — 그것이 이 장치의 요점이다. 사람이 "끝났으니 지금
+   넣자"고 판단할 여지를 없애려고 시각을 못 박았다. 그래서 기본 입구는 ★시간 트리거★다.
+
+     트리거   매달 말일 23시에 monthCloseTrigger() — 담당자가 편집기에서 한 번 만든다
+     버튼     Api.call('admin.monthClose', {})            ← 미리보기(무엇이 반영될지만)
+              Api.call('admin.monthClose', {apply:true})  ← 실제로 연다
+              {ym:'2026-10'} 로 특정 달, {force:true} 로 아직 안 끝난 달도 (시험용)
+
+   ★같은 함수를 두 입구가 부른다★ — 트리거가 안 돌았을 때 손으로 만회할 수 있고,
+   두 길이 다른 일을 할 수가 없다. 몇 번을 돌려도 결과가 같다(덮어쓰기).
+
+   ★하는 일은 둘★ ①그 달 쇼퍼 평균을 매장 파일 MS점수에 쓴다 ②종합 수식을 새 규칙으로 고쳐 둔다
+   (setTotalFormula — 옛 탭은 `COUNT(...)=0` 이라 MS가 비면 틀린 종합이 뜬다). */
+
+/* 그 달이 끝났는가 — 말일 23시가 지났으면 끝난 것으로 본다.
+   ★날짜 계산을 Date 로 하지 않는다★ (§9-4) — 앱스 스크립트 타임존과 시트 타임존이 달라
+   달이 하나 밀리는 사고가 실제로 있었다. 글자와 산술로만 판정한다. */
+function daysInMonth(ym) {
+  const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  return [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+}
+const MONTH_OPEN_HOUR = 23;          // 말일 몇 시에 여는가 (2026-09-04 담당자: 23시)
+
+function monthClosed(dateStr, tz) {
+  const ym = String(dateStr || '').slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(ym)) return false;
+  const now = Utilities.formatDate(new Date(), tz || ssTz(), 'yyyy-MM-dd HH');
+  const nowYm = now.slice(0, 7);
+  if (ym < nowYm) return true;                       // 이미 지난 달
+  if (ym > nowYm) return false;                      // 아직 오지 않은 달
+  const last = ym + '-' + ('0' + daysInMonth(ym)).slice(-2);
+  return now >= (last + ' ' + ('0' + MONTH_OPEN_HOUR).slice(-2));
+}
+
+/* 트리거가 부르는 자리. ★인자도 반환도 없어야 한다★ — 트리거는 인자를 못 준다. */
+function monthCloseTrigger() {
+  const out = monthCloseRun(null, true, null);
+  Logger.log(out.lines.join('\n'));
+  return out;
+}
+
+function monthCloseRun(ym, apply, stores) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const tz = ss.getSpreadsheetTimeZone();
+  const target = ym || Utilities.formatDate(new Date(), tz, 'yyyy-MM');
+  const t0 = Date.now();
+  const lines = ['=== 월말 반영 ' + target + (apply ? ' ★적용★' : ' 미리보기') + ' ==='];
+  const resp = ss.getSheetByName('쇼퍼_응답');
+  if (!resp) return { ok: false, error: '쇼퍼_응답 시트가 없습니다', lines: lines };
+
+  const list = (stores && stores.length) ? stores.map(normStore) : displayStores();
+  const done = [], skip = [], bad = [], left = [];
+  for (let i = 0; i < list.length; i++) {
+    if (Date.now() - t0 > 4.5 * 60 * 1000) { left.push.apply(left, list.slice(i)); break; }
+    const store = list[i];
+    try {
+      const avg = shopperMonthAvg(resp, store, target + '-01', tz);
+      if (!avg) { skip.push(store); continue; }
+      if (!apply) { done.push(store + ' → ' + round1(avg) + '점'); continue; }
+      const r = writeStoreShopper(store, target + '-01', avg / 100);
+      /* 종합 수식도 이때 새 규칙으로 고쳐 둔다 — 옛 탭은 MS가 비면 틀린 종합을 띄운다 */
+      try {
+        const id = storeFileId(store);
+        const sh2 = id ? SpreadsheetApp.openById(id).getSheetByName(yymm(target + '-01')) : null;
+        if (sh2) setTotalFormula(sh2);
+      } catch (e) { /* 수식 교정 실패가 점수 기록을 되돌릴 이유는 없다 */ }
+      if (r && r.ok) done.push(store + ' → ' + round1(avg) + '점');
+      else bad.push(store + ' — ' + ((r && r.error) || '기록 실패'));
+    } catch (e) { bad.push(store + ' — ' + String(e).slice(0, 70)); }
+  }
+
+  lines.push('반영 ' + done.length + '곳 · 그 달 응답 없음 ' + skip.length + '곳 · 실패 ' + bad.length + '곳');
+  done.forEach(function (x) { lines.push('  ✓ ' + x); });
+  bad.forEach(function (x) { lines.push('  ✗ ' + x); });
+  if (skip.length) lines.push('  · 응답 없음: ' + skip.join(', '));
+  if (left.length) lines.push('★시간이 부족해 ' + left.length + '곳을 못 했습니다★ — 다시 돌리십시오: ' + left.join(', '));
+
+  /* ★돌았다는 사실을 시트에 남긴다★ — 트리거는 조용히 실패한다. 기록이 없으면 아무도 모른다. */
+  if (apply) {
+    try {
+      const log = sheet(ss, '월말반영', ['실행시각', '대상월', '반영', '응답없음', '실패', '못한곳', '비고']);
+      log.appendRow(safeRow([nowIso(), target, done.length, skip.length, bad.length, left.length,
+        bad.concat(left).join(' / ').slice(0, 400)]));
+    } catch (e) { lines.push('(실행 기록을 남기지 못했습니다: ' + String(e).slice(0, 50) + ')'); }
+  }
+  return { ok: true, apply: !!apply, ym: target, done: done.length, skipped: skip.length,
+    failed: bad.length, left: left.length, lines: lines };
+}
+
+function fnMonthClose(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+  const tz = ssTz();
+  const target = p.ym || Utilities.formatDate(new Date(), tz, 'yyyy-MM');
+  /* ★아직 안 끝난 달을 실수로 열지 않는다★ — 열면 이 장치의 목적이 통째로 사라진다.
+     시험용으로 일부러 열고 싶으면 force 를 준다(그때는 결과에 크게 적어 남긴다). */
+  if (apply && p.force !== true && !monthClosed(target + '-01', tz)) {
+    return err('BAD_REQUEST', target + ' 은 아직 끝나지 않았습니다 (말일 ' + MONTH_OPEN_HOUR +
+      '시에 열립니다). 일부러 지금 열려면 {force:true} 를 주십시오.');
+  }
+  const out = monthCloseRun(target, apply, p.store ? [String(p.store)] : null);
+  if (apply) {
+    auditLog(ctx, 'admin.monthClose', p.store ? String(p.store) : '', '성공', '',
+      target + ' 반영 ' + out.done + '곳' + (p.force === true ? ' ★force★' : ''));
+  }
+  return out;
+}
+
 /* ═══ 제출 되돌리기 ═══════════════════════════════════════════════════════════
    제출 한 회차를, 기록이 남는 네 곳에서 한 번에 없앤다.
    ★시험 자료 정리용으로 만들었지만 실무에도 필요하다★ — 잘못 낸 제출을 되돌릴 수단이
@@ -7012,7 +7136,14 @@ function setTotalFormula(sh) {
     const cR = labelValue(lmF, L_RATE);
     if (!(cH.found && cC.found && cT.found && cR.found)) return false;
     const a1 = function (pv) { return grid(sh, pv.row, pv.col, 1, 1).getA1Notation(); };
-    const f = '=IF(COUNT(' + a1(cH) + ',' + a1(cC) + ')=0,"",' +
+    /* ★QSC·MS 둘 다 있어야 계산한다★ (2026-09-04) — 종전은 `=0`, 즉 ★둘 다 비었을 때만★
+       빈칸이었다. MS만 비면 빈칸이 산술에서 0으로 취급돼 그 30%가 통째로 0이 된 값이
+       매장 화면에 뜬다(QSC 90점이면 종합 64점). MS를 월말에 여는 규칙과 겹치면
+       그 틀린 숫자가 ★한 달 내내★ 보인다.
+       ★개선율은 빈칸이어도 계산한다★ — 개선요청 0건이면 rate 가 null 이라 칸이 비는데
+       (recountSummary), 그건 잘한 매장이다. 빈칸은 만점으로 친다.
+       통합시트(CA·CH·CO)가 이미 쓰는 규칙과 같아진다. */
+    const f = '=IF(COUNT(' + a1(cH) + ',' + a1(cC) + ')<2,"",' +
       a1(cH) + '*0.6+' + a1(cC) + '*0.3+IF(' + a1(cR) + '="",1,' + a1(cR) + ')*0.1)';
     grid(sh, cT.row, cT.col, 1, 1).setFormula(f);
     return true;
