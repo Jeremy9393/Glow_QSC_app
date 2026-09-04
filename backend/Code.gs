@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v101', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v103', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -355,6 +355,10 @@ function actionTable() {
        2026-09-04 에 실제로 헷갈려 fnMonthClose 를 두 번 선언했고, 뒤엣것이 이겨
        이 액션이 엉뚱한 함수를 불렀다(그래서 msOpen 으로 갈랐다). */
     'admin.msOpen':       { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMsMonthOpen },
+    /* 매장 파일·통합시트가 지금 누구에게 열려 있는지 ★읽기만★ 한다 (아무것도 안 바꾼다) */
+    'admin.shareProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnShareProbe },
+    /* 앱 계정을 매장 파일 편집자로 못 박는다 — ★기본이 미리보기★ */
+    'admin.shareFix':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnShareFix },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -5819,6 +5823,155 @@ function fixTotalFormulaRun(stores, apply) {
    (액션 month.close)이 쓰고 있었다. 같은 이름을 또 선언해서 ★뒤엣것이 이겨★ 이 기능이
    한 번도 안 돌았다. 등록표 검사는 「가리키는 함수가 있는가」만 보므로 이것을 못 잡았다
    — check_backend.py 에 중복 선언 검사를 그때 추가했다. */
+/* ---------- 매장 파일 공유 상태 진단 (2026-09-04) ----------
+
+   ★아무것도 바꾸지 않는다★ — 읽기만 한다. 그래서 act 가 '읽기'다.
+
+   왜 필요한가 —
+   10월부터 매장은 앱으로만 자기 점수를 보게 하려 한다(2026-09-04 담당자). 그러려면 매장 파일
+   공유를 끊어야 하는데, ★지금 무엇이 어떻게 열려 있는지 모르는 채로 끊으면 안 된다★:
+     · 앱 계정의 편집 권한까지 끊기면 ★제출이 통째로 죽는다★ (앱이 매장 파일에 점수를 쓴다)
+     · 매장이 개별 초대인지 「링크가 있는 모든 사용자」인지에 따라 할 일이 완전히 다르다
+     · 26곳을 사람이 하나씩 열어 보는 것은 현실적이지 않고, 무엇보다 ★바꾼 뒤 대조★가 안 된다
+
+   ⚠구글 시트는 ★탭 단위 열람 권한이 없다★ — 공유는 파일 통째로다. 그래서 '9월 탭은 보이고
+     10월 탭부터 안 보이게'는 권한으로 만들 수 없다. 매장은 앱에서 지난 달을 본다.
+
+   부르는 법
+     await Api.call('admin.shareProbe', {})                ← 앞에서 8곳 (page 0)
+     await Api.call('admin.shareProbe', {page:1})          ← 다음 8곳 (0·1·2·3)
+     await Api.call('admin.shareProbe', {store:'금종제과'})  ← 한 곳만
+     await Api.call('admin.shareProbe', {dashboard:true})  ← 통합시트 자신
+
+   ⚠26곳을 한 번에 부르지 말 것 — 파일마다 드라이브 호출이 여러 번이라 45초 시한에 걸린다. */
+function fnShareProbe(ctx, payload) {
+  const p = payload || {};
+
+  function look(id, label) {
+    const out = { 무엇: label };
+    let f = null;
+    try { f = DriveApp.getFileById(id); } catch (e) { out.오류 = '파일을 열 수 없습니다: ' + String(e).slice(0, 60); return out; }
+    try { out.이름 = f.getName(); } catch (e) { }
+    try { out.주인 = f.getOwner().getEmail(); } catch (e) { out.주인 = '못 읽음'; }
+    /* ★링크 공유★ — 여기가 '링크만 알면 누구나'인지 아닌지를 가른다.
+       ANYONE·ANYONE_WITH_LINK 이면 링크를 받은 사람은 전부 들어온다(초대 목록과 무관). */
+    try { out.링크공유 = String(f.getSharingAccess()); } catch (e) { out.링크공유 = '못 읽음'; }
+    try { out.링크권한 = String(f.getSharingPermission()); } catch (e) { out.링크권한 = '못 읽음'; }
+    try { out.편집자 = f.getEditors().map(function (u) { return u.getEmail(); }); } catch (e) { out.편집자 = ['못 읽음']; }
+    try { out.보는사람 = f.getViewers().map(function (u) { return u.getEmail(); }); } catch (e) { out.보는사람 = ['못 읽음']; }
+    return out;
+  }
+
+  let me = '?';
+  try { me = Session.getEffectiveUser().getEmail(); } catch (e) { }
+
+  if (p.dashboard === true) {
+    if (!DASHBOARD_ID) return err('BAD_REQUEST', '통합시트 ID가 설정돼 있지 않습니다.');
+    return { ok: true, 앱계정: me, 목록: [look(DASHBOARD_ID, '통합시트')] };
+  }
+
+  const all = displayStores();
+  const size = 8;
+  const page = Math.max(0, parseInt(p.page || 0, 10) || 0);
+  const list = p.store ? [normStore(String(p.store))] : all.slice(page * size, (page + 1) * size);
+  if (!list.length) return { ok: true, 앱계정: me, 목록: [], 안내: '그 쪽에는 매장이 없습니다 (총 ' + all.length + '곳)' };
+
+  const rows = [];
+  list.forEach(function (store) {
+    const id = storeFileId(store);
+    if (!id) { rows.push({ 무엇: store, 오류: '매장 파일 링크를 통합시트 D열에서 찾지 못했습니다' }); return; }
+    rows.push(look(id, store));
+  });
+  return {
+    ok: true, 앱계정: me, 쪽: page, 전체매장: all.length,
+    남은쪽: Math.max(0, Math.ceil(all.length / size) - 1 - page),
+    목록: rows
+  };
+}
+
+/* ---------- ④-1 앱 계정을 매장 파일 편집자로 못 박는다 (2026-09-04) ----------
+
+   왜 필요한가 —
+   매장 파일 26곳은 지금 「링크가 있는 모든 사용자 · 편집」이다. ★앱도 그 링크 공유로 들어간다★ —
+   편집자 목록이 26곳 전부 비어 있다(admin.shareProbe 로 확인). 그래서 링크 공유를 끊거나
+   VIEW 로 낮추는 순간 ★앱이 매장 파일에 점수를 못 쓰고 제출이 죽는다★.
+
+   이 함수는 ★더하기만 한다★ — 지금 열려 있는 것은 조금도 안 건드린다. 링크 공유도 그대로다.
+   그래서 돌려도 매장·앱 어느 쪽도 달라지지 않고, 나중에 링크를 끊을 때 앱만 살아남는다.
+
+   ⚠매장 담당자는 여기 넣지 않는다 (2026-09-04 담당자: *"각 매장 담당자들은 불특정 다수라서
+     개개인을 초대할수가 없음"*). 매장은 앱 아이디·비밀번호로 들어온다 — 구글 계정이 필요 없다.
+
+   부르는 법
+     await Api.call('admin.shareFix', {})                    ← 앞 8곳 무엇이 바뀔지만 (page 0)
+     await Api.call('admin.shareFix', {page:1})              ← 다음 8곳 (0·1·2·3)
+     await Api.call('admin.shareFix', {page:0, apply:true})  ← 실제로 등록
+     await Api.call('admin.shareFix', {store:'금종제과', apply:true})
+     await Api.call('admin.shareFix', {page:0, apply:true, undo:true})  ← 되돌리기(뺀다)
+
+   ⚠26곳을 한 번에 부르지 말 것 — 드라이브 호출이 파일마다 여러 번이라 45초 시한에 걸린다.
+   ⚠주인 계정은 편집자로 넣을 수 없다(넣을 필요도 없다) — 그런 곳은 건너뛴다. */
+function fnShareFix(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+  const undo = p.undo === true;
+  let who = '';
+  try { who = String(p.email ? p.email : Session.getEffectiveUser().getEmail() || ''); } catch (e) { }
+  if (!who) return err('SERVER_ERROR', '앱 계정 주소를 읽지 못했습니다.');
+
+  const all = displayStores();
+  const size = 8;
+  const page = Math.max(0, parseInt(p.page || 0, 10) || 0);
+  const list = p.store ? [normStore(String(p.store))] : all.slice(page * size, (page + 1) * size);
+  if (!list.length) return { ok: true, 안내: '그 쪽에는 매장이 없습니다 (총 ' + all.length + '곳)' };
+
+  const rows = [];
+  let 바꿀것 = 0, 바꿨다 = 0, 실패 = 0;
+  list.forEach(function (store) {
+    const id = storeFileId(store);
+    if (!id) { rows.push(store + ' — ★매장 파일 링크를 못 찾음★'); 실패++; return; }
+    let f = null;
+    try { f = DriveApp.getFileById(id); } catch (e) { rows.push(store + ' — ★파일을 열 수 없음: ' + String(e).slice(0, 50) + '★'); 실패++; return; }
+
+    let owner = '';
+    try { owner = f.getOwner().getEmail(); } catch (e) { }
+    if (owner && owner.toLowerCase() === who.toLowerCase()) {
+      rows.push(store + ' — 건너뜀 (이 계정이 파일 주인입니다)');
+      return;
+    }
+    let eds = [];
+    try { eds = f.getEditors().map(function (u) { return String(u.getEmail() || '').toLowerCase(); }); } catch (e) { }
+    const 있다 = eds.indexOf(who.toLowerCase()) >= 0;
+
+    if (!undo && 있다) { rows.push(store + ' — 이미 편집자입니다'); return; }
+    if (undo && !있다) { rows.push(store + ' — 편집자가 아니라 뺄 것이 없습니다'); return; }
+
+    바꿀것++;
+    if (!apply) { rows.push(store + ' → ' + (undo ? '편집자에서 뺍니다' : '편집자로 넣습니다')); return; }
+    try {
+      if (undo) f.removeEditor(who); else f.addEditor(who);
+      바꿨다++;
+      rows.push(store + ' ✓ ' + (undo ? '뺐습니다' : '넣었습니다'));
+    } catch (e) {
+      실패++;
+      rows.push(store + ' — ★실패: ' + String(e).slice(0, 70) + '★');
+    }
+  });
+
+  if (apply) {
+    auditLog(ctx, 'admin.shareFix', p.store ? String(p.store) : ('page' + page), '성공', '',
+      (undo ? '편집자 제거 ' : '편집자 등록 ') + who + ' · ' + 바꿨다 + '곳');
+  }
+  return {
+    ok: true, 계정: who, 적용: apply, 되돌리기: undo,
+    쪽: page, 전체매장: all.length,
+    남은쪽: p.store ? 0 : Math.max(0, Math.ceil(all.length / size) - 1 - page),
+    바꿀것: 바꿀것, 바꿨다: 바꿨다, 실패: 실패,
+    한일: rows,
+    안내: apply ? '' : '실제로 하려면 {apply:true} 를 붙여 다시 부르십시오 (지금은 아무것도 안 바꿨습니다)'
+  };
+}
+
 function fnMsMonthOpen(ctx, payload) {
   const p = payload || {};
   const apply = p.apply === true;
