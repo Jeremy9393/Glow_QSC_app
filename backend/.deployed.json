@@ -1,6 +1,6 @@
 {
- "sha256": "7ff03839d796e22326bda1acc5566018d8578be5aa2a7374b6748b20aea3d709",
- "version": 100,
- "when": "2026-09-04 15:08:47",
- "description": "2026-09-04 관리자에게만 이번 달 잠정 MS (attachAdminLive)"
+ "sha256": "77bfc29fb2492cc3202ab0456687188cba4eb68b3c4ce8dcde19f47339556333",
+ "version": 101,
+ "when": "2026-09-04 16:09:41",
+ "description": "2026-09-04 통합시트 MS도 말일에 연다 (제출·월말반영·되돌리기 세 곳)"
 }

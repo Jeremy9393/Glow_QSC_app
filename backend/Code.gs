@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v100', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v101', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3368,19 +3368,27 @@ function saveShopper(ss, p, ctx, isSurvey) {
     const avg = shopperMonthAvg(sh, p.store, p.date, ss.getSpreadsheetTimeZone());
     /* dashboard와 storeFile의 catch를 분리한다 — 합쳐 두면 매장 파일 실패가
        성공한 dashboard 결과를 오류로 덮어써 원인을 잘못 보게 된다. */
-    try {
-      extra.dashboard = writeDashboard(p.store, p.date, avg / 100, 2);
-    } catch (err) { extra.dashboard = { ok: false, error: opErr('통합시트 기록', err) }; }
-    /* ★매장 파일 MS점수는 그 달이 끝나야 연다★ (2026-09-04 담당자 결정)
+    /* ★MS 점수는 그 달이 끝나야 연다 — 매장 파일과 통합시트 ★둘 다★★ (2026-09-04 담당자 결정)
+
        매장은 MS가 월 1회인 것을 안다. 점수가 제출 즉시 보이면 「이번 달 끝났다」로 읽고
-       남은 날 응대가 느슨해질 수 있다. 그래서 ★매장이 보는 곳(매장 파일)만★ 말일 23시에 연다.
-       ⚠통합시트는 그대로 즉시 쓴다 — 본사 것이고 매장은 못 본다. 본사는 월중에도 다 본다.
+       남은 날 응대가 느슨해질 수 있다.
+
+       ★종전 주석은 「통합시트는 본사 것이고 매장은 못 본다」였는데 그것이 틀렸다★ —
+       통합시트는 공유 설정이 「웹에 공개 · 링크가 있는 인터넷상의 모든 사용자」다(2026-09-04 실물 확인).
+       매장 파일만 늦추면 매장이 통합시트에서 그대로 보므로 늦추는 장치가 통째로 무의미해진다.
+       그래서 두 곳에 ★같은 가드★를 건다 — 늦추는 규칙은 monthClosed 한 곳뿐이다.
+
+       ⚠늦추는 것은 MS 하나다. QSC 점수(offset 0)는 지금처럼 즉시 쓴다.
        ⚠이미 끝난 달(지난 달 자료를 늦게 넣는 경우)은 숨길 이유가 없으므로 즉시 쓴다.
+       ⚠통합시트 종합 수식은 =IF(COUNT(BV,BX)<2,"",…) 이라 MS 칸이 비면 종합도 저절로 빈다.
        월말에 여는 일은 monthCloseRun() 이 한다(트리거·관리자 버튼 공용). */
+    const msOpen = monthClosed(p.date, ss.getSpreadsheetTimeZone());
+    const deferMsg = { ok: true, deferred: true, msg: '그 달 말일 23시에 반영합니다' };
     try {
-      extra.storeFile = monthClosed(p.date, ss.getSpreadsheetTimeZone())
-        ? writeStoreShopper(p.store, p.date, avg / 100)
-        : { ok: true, deferred: true, msg: '매장 파일에는 그 달 말일 23시에 반영합니다' };
+      extra.dashboard = msOpen ? writeDashboard(p.store, p.date, avg / 100, 2) : deferMsg;
+    } catch (err) { extra.dashboard = { ok: false, error: opErr('통합시트 기록', err) }; }
+    try {
+      extra.storeFile = msOpen ? writeStoreShopper(p.store, p.date, avg / 100) : deferMsg;
     } catch (err) { extra.storeFile = { ok: false, error: opErr('매장 파일 기록', err) }; }
   }
   dropDashCache(p.date);
@@ -5726,14 +5734,24 @@ function monthCloseRun(ym, apply, stores) {
       if (!avg) { skip.push(store); continue; }
       if (!apply) { done.push(store + ' → ' + round1(avg) + '점'); continue; }
       const r = writeStoreShopper(store, target + '-01', avg / 100);
+      /* ★통합시트도 이때 함께 연다★ (2026-09-04) — 제출 때 둘 다 미뤄 두었으므로
+         둘 다 여기서 채워야 한다. 한쪽만 채우면 같은 달 점수가 두 곳에서 달라진다.
+         ⚠매장 파일 기록이 실패해도 통합시트는 시도한다 — 하나가 막혔다고 나머지를
+           비워 둘 이유가 없고, 실패는 아래 bad 줄에 그대로 적힌다. */
+      let d = null;
+      try {
+        d = DASHBOARD_ID ? writeDashboard(store, target + '-01', avg / 100, 2) : null;
+      } catch (e) { d = { ok: false, error: String(e).slice(0, 70) }; }
       /* 종합 수식도 이때 새 규칙으로 고쳐 둔다 — 옛 탭은 MS가 비면 틀린 종합을 띄운다 */
       try {
         const id = storeFileId(store);
         const sh2 = id ? SpreadsheetApp.openById(id).getSheetByName(yymm(target + '-01')) : null;
         if (sh2) setTotalFormula(sh2);
       } catch (e) { /* 수식 교정 실패가 점수 기록을 되돌릴 이유는 없다 */ }
-      if (r && r.ok) done.push(store + ' → ' + round1(avg) + '점');
-      else bad.push(store + ' — ' + ((r && r.error) || '기록 실패'));
+      const okS = !!(r && r.ok), okD = !d || !!d.ok;
+      if (okS && okD) done.push(store + ' → ' + round1(avg) + '점');
+      else bad.push(store + ' — ' + (okS ? '' : ('매장 파일: ' + ((r && r.error) || '기록 실패'))) +
+        (okS || okD ? '' : ' · ') + (okD ? '' : ('통합시트: ' + (d.error || '기록 실패'))));
     } catch (e) { bad.push(store + ' — ' + String(e).slice(0, 70)); }
   }
 
@@ -6280,12 +6298,12 @@ function fnUndoSubmit(ctx, payload) {
     const avg = shopperMonthAvg(shop.sh, store, date, tz);
     return (typeof avg === 'number') ? avg / 100 : '';
   }
-  /* ★매장 파일에 쓸 때만 한 번 더 거른다★ (2026-09-04 검수에서 찾은 구멍)
+  /* ★MS 를 쓰는 곳은 전부 한 번 더 거른다★ (2026-09-04 검수에서 찾은 구멍)
      되돌리기는 남은 자료로 점수를 다시 계산해 쓴다. 그런데 그 달이 아직 안 끝났으면
-     ★매장 파일에 쓰는 순간 지연이 무너진다★ — 월중에 MS 점수가 매장 화면에 뜬다.
+     ★쓰는 순간 지연이 무너진다★ — 월중에 MS 점수가 매장 화면에 뜬다.
      그 달이 열리기 전에는 빈칸으로 둔다(월말 반영이 그때 채운다).
-     ⚠통합시트는 그대로 쓴다 — 본사 것이고 매장은 못 본다. */
-  function msAfterForStore() { return monthClosed(date, tz) ? msAfter() : ''; }
+     ★매장 파일과 통합시트에 똑같이 건다★ — 통합시트도 웹에 공개돼 매장이 본다. */
+  function msAfterVisible() { return monthClosed(date, tz) ? msAfter() : ''; }
 
   /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
   [round, detail, shop, shopMemo, na].forEach(function (t) {
@@ -6308,12 +6326,12 @@ function fnUndoSubmit(ctx, payload) {
       /* ★탭의 방문일이 다르면 지우지 않는다★ — 응답 시트에서는 안 보이는 회차가 그 탭에
          들어 있다는 뜻이다(담당자가 손으로 만든 탭 등). 지우면 되돌릴 수 없다. */
       if (doQsc) setByLabelAny(sh2, L_QSC, qscAfter());
-      if (doShop) setByLabelAny(sh2, L_MS, msAfterForStore());
+      if (doShop) setByLabelAny(sh2, L_MS, msAfterVisible());
       done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 고쳤습니다');
     }
     else if (monthEmpty) { ss2.deleteSheet(sh2); done.push('매장 파일 ' + tab + ' 탭 삭제'); }
     else {
-      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfterForStore() : '';
+      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfterVisible() : '';
       if (doQsc) setByLabelAny(sh2, L_QSC, qv);
       if (doShop) setByLabelAny(sh2, L_MS, mv);
       const parts = [(qv === '' && mv === '')
@@ -6365,7 +6383,7 @@ function fnUndoSubmit(ctx, payload) {
         ? (a.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (남은 자료로 다시 계산)'))) : a.error));
     }
     if (doShop) {
-      const v = msAfter();
+      const v = msAfterVisible();      // ★통합시트도 월중에는 빈칸으로 둔다★
       const b = writeDashboard(store, date, v, 2);
       done.push('통합시트 MS 칸: ' + (b.ok
         ? (b.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (그 달 남은 ' + shop.monthLeft + '건 평균)'))) : b.error));
