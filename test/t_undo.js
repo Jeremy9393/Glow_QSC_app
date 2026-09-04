@@ -31,6 +31,11 @@ var SpreadsheetApp = { openById: function () { return {
   deleteSheet: function () { DELETED.push('탭삭제'); } }; } };
 function ssTz() { return 'Asia/Seoul'; }
 function fileTz() { return 'Asia/Seoul'; }
+/* ★그 달이 열렸는가★ — 되돌리기가 매장 파일 MS점수를 쓸지 말지를 이걸로 가른다(2026-09-04).
+   이 시험은 '남은 자료로 다시 계산하는가'를 보는 것이라 ★열린 달★로 둔다.
+   닫힌 달일 때 빈칸으로 두는지는 monthclose-test 가 경계값으로 따로 본다. */
+var MONTH_OPEN = true;
+function monthClosed() { return MONTH_OPEN; }
 function normStore(v) { return String(v == null ? '' : v).replace(/\s+/g, ''); }
 function dateOfCell(v) { return String(v == null ? '' : v).slice(0, 10); }
 function ymOfCell(v) { return String(v == null ? '' : v).slice(0, 7); }
@@ -224,6 +229,12 @@ function fnUndoSubmit(ctx, payload) {
     const avg = shopperMonthAvg(shop.sh, store, date, tz);
     return (typeof avg === 'number') ? avg / 100 : '';
   }
+  /* ★매장 파일에 쓸 때만 한 번 더 거른다★ (2026-09-04 검수에서 찾은 구멍)
+     되돌리기는 남은 자료로 점수를 다시 계산해 쓴다. 그런데 그 달이 아직 안 끝났으면
+     ★매장 파일에 쓰는 순간 지연이 무너진다★ — 월중에 MS 점수가 매장 화면에 뜬다.
+     그 달이 열리기 전에는 빈칸으로 둔다(월말 반영이 그때 채운다).
+     ⚠통합시트는 그대로 쓴다 — 본사 것이고 매장은 못 본다. */
+  function msAfterForStore() { return monthClosed(date, tz) ? msAfter() : ''; }
 
   /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
   [round, detail, shop, shopMemo, na].forEach(function (t) {
@@ -246,12 +257,12 @@ function fnUndoSubmit(ctx, payload) {
       /* ★탭의 방문일이 다르면 지우지 않는다★ — 응답 시트에서는 안 보이는 회차가 그 탭에
          들어 있다는 뜻이다(담당자가 손으로 만든 탭 등). 지우면 되돌릴 수 없다. */
       if (doQsc) setByLabelAny(sh2, L_QSC, qscAfter());
-      if (doShop) setByLabelAny(sh2, L_MS, msAfter());
+      if (doShop) setByLabelAny(sh2, L_MS, msAfterForStore());
       done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 고쳤습니다');
     }
     else if (monthEmpty) { ss2.deleteSheet(sh2); done.push('매장 파일 ' + tab + ' 탭 삭제'); }
     else {
-      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfter() : '';
+      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfterForStore() : '';
       if (doQsc) setByLabelAny(sh2, L_QSC, qv);
       if (doShop) setByLabelAny(sh2, L_MS, mv);
       const parts = [(qv === '' && mv === '')
@@ -390,6 +401,20 @@ ok('담당자 것만 지워졌다', !SHEETS['쇼퍼_응답'].some(function (x) {
 var ms = wroteOf('통합시트:MS');
 ok('★통합시트 MS = 남은 3건 평균 0.90★', Math.abs(ms - 0.9) < 1e-9, '값=' + ms);
 ok('매장 파일 MS 도 같은 값', Math.abs(wroteOf('매장파일:MS점수') - 0.9) < 1e-9, '값=' + wroteOf('매장파일:MS점수'));
+
+console.log('\n[1-2] ★그 달이 아직 안 끝났으면 매장 파일에는 안 쓴다★ (2026-09-04 지연 규칙)');
+MONTH_OPEN = false;                       // 월중에 되돌린 경우
+reset([
+  ['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60],
+  ['2026-10-10T10:00','2026-10-10','','금종제과','','','','고객 직접',90],
+]);
+r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
+ok('되돌리기 성공', r.ok === true, JSON.stringify(r.error || ''));
+ok('★통합시트에는 그대로 쓴다★ (본사 것이라 매장이 못 본다)',
+   Math.abs(wroteOf('통합시트:MS') - 0.9) < 1e-9, '값=' + wroteOf('통합시트:MS'));
+ok('★매장 파일에는 빈칸★ — 월중에 점수가 보이면 지연이 무너진다',
+   wroteOf('매장파일:MS점수') === '', '값=' + JSON.stringify(wroteOf('매장파일:MS점수')));
+MONTH_OPEN = true;                        // 나머지 시험은 열린 달 기준
 
 console.log('\n[2] 그 달에 아무것도 안 남으면 ★빈칸★ (0점이 아니다)');
 reset([['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60]]);

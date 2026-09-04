@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v96', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v97', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -6212,6 +6212,12 @@ function fnUndoSubmit(ctx, payload) {
     const avg = shopperMonthAvg(shop.sh, store, date, tz);
     return (typeof avg === 'number') ? avg / 100 : '';
   }
+  /* ★매장 파일에 쓸 때만 한 번 더 거른다★ (2026-09-04 검수에서 찾은 구멍)
+     되돌리기는 남은 자료로 점수를 다시 계산해 쓴다. 그런데 그 달이 아직 안 끝났으면
+     ★매장 파일에 쓰는 순간 지연이 무너진다★ — 월중에 MS 점수가 매장 화면에 뜬다.
+     그 달이 열리기 전에는 빈칸으로 둔다(월말 반영이 그때 채운다).
+     ⚠통합시트는 그대로 쓴다 — 본사 것이고 매장은 못 본다. */
+  function msAfterForStore() { return monthClosed(date, tz) ? msAfter() : ''; }
 
   /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
   [round, detail, shop, shopMemo, na].forEach(function (t) {
@@ -6234,12 +6240,12 @@ function fnUndoSubmit(ctx, payload) {
       /* ★탭의 방문일이 다르면 지우지 않는다★ — 응답 시트에서는 안 보이는 회차가 그 탭에
          들어 있다는 뜻이다(담당자가 손으로 만든 탭 등). 지우면 되돌릴 수 없다. */
       if (doQsc) setByLabelAny(sh2, L_QSC, qscAfter());
-      if (doShop) setByLabelAny(sh2, L_MS, msAfter());
+      if (doShop) setByLabelAny(sh2, L_MS, msAfterForStore());
       done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 고쳤습니다');
     }
     else if (monthEmpty) { ss2.deleteSheet(sh2); done.push('매장 파일 ' + tab + ' 탭 삭제'); }
     else {
-      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfter() : '';
+      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfterForStore() : '';
       if (doQsc) setByLabelAny(sh2, L_QSC, qv);
       if (doShop) setByLabelAny(sh2, L_MS, mv);
       const parts = [(qv === '' && mv === '')
