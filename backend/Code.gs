@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v86', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v87', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3299,21 +3299,30 @@ function saveQsc(ss, p, ctx) {
 function saveShopper(ss, p, ctx, isSurvey) {
   // 익명 경로는 입력경로를 서버가 강제한다. 클라이언트가 보낸 p.source는 읽지 않는다.
   const route = isSurvey ? '고객 직접' : '관리자 입력';
-  const sh = sheet(ss, '쇼퍼_응답', ['제출시각', '방문날짜', '방문시간', '매장명', '응대직원설명', '주문내역', '작성자연령대성별', '입력경로', '점수', '응답수']
+  const sh = sheet(ss, '쇼퍼_응답', ['제출시각', '방문날짜', '방문시간', '매장명', '응대직원설명', '주문내역', '작성자연령대성별', '입력경로', '점수', '응답수', '총평']
     .concat(p.answers.map(function (a) { return 'Q' + a.no; })));
   const row = [p.submittedAt, p.date, p.time || '', p.store, p.staff, p.order, p.demographic,
     route, p.result.score == null ? '' : round1(p.result.score), p.result.answered]
     .concat(p.answers.map(function (a) { return a.answer || ''; }));
-  /* ★영수증 열은 2026-08-20에 없앴다 — 그런데 이미 만들어진 시트에는 그 열이 남아 있다★
-     sheet()는 시트가 없을 때만 머리글을 쓰므로, 옛 시트는 11번째 칸이 '영수증'인 채로 그대로다.
-     보정 없이 짧아진 행을 붙이면 Q1의 답이 그 칸으로 들어가 ★그 뒤가 통째로 한 칸씩 밀린다★.
-     그래서 머리글을 보고 그 자리에 빈칸을 하나 끼운다. 열을 아주 없애려면 편집기에서
-     dropReceiptColumn() 을 한 번 돌린다 — 돌리지 않아도 기록은 어긋나지 않는다. */
+  /* ★총평은 옛 '영수증' 열 자리를 물려받는다★ (2026-09-04 담당자 — "지금 영수증 안쓰고있잖아")
+
+     sheet()는 ★시트가 없을 때만★ 머리글을 쓴다. 그래서 이미 만들어진 시트에 열을 하나 더
+     보내면 열이 생기는 게 아니라 ★Q1부터 통째로 한 칸씩 밀린다★(2026-08-20 영수증을 없앴을 때
+     실제로 그래서 이 보정이 생겼다). 그런데 그 시트에는 안 쓰는 '영수증' 열이 11번째에 그대로
+     남아 있다 — 새 열을 넣는 대신 ★그 자리를 이름만 바꿔 쓴다★. 밀림이 원천적으로 없다.
+
+     찾는 차례: ①'총평' ②'영수증'(찾으면 머리글을 '총평'으로 바꿔 물려받는다)
+     ③둘 다 없으면(머리글을 못 읽었을 때) 우리가 선언한 자리인 11번째에 넣는다. */
+  let at = -1;
   try {
     const head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
-    const at = head.indexOf('영수증');
-    if (at >= 0) row.splice(at, 0, '');
-  } catch (e) { /* 머리글을 못 읽으면 보정 없이 그대로 붙인다 */ }
+    at = head.indexOf('총평');
+    if (at < 0) {
+      const old = head.indexOf('영수증');
+      if (old >= 0) { sh.getRange(1, old + 1).setValue('총평'); at = old; }
+    }
+  } catch (e) { /* 머리글을 못 읽으면 아래 기본 자리를 쓴다 */ }
+  row.splice(at >= 0 ? at : 10, 0, p.overall || '');
   sh.appendRow(safeRow(row));
 
   // 문항별 이유·비고 — 작성된 것만 1행씩 (추적용, 특히 '아니오'의 근거)
@@ -5172,7 +5181,10 @@ function savePhotos(p, ctx) {
    코드가 지우지 않는다(지운 뒤 필요해지면 되돌릴 방법이 없다).
 
    ※한 번만 돌리는 정리 함수. 옛 `쇼퍼_응답` 시트에 남은 '영수증' 열을 없앤다.
-     안 돌려도 기록은 어긋나지 않는다(saveShopper가 빈칸으로 맞춘다). */
+   ★★2026-09-04 — 이제 돌리지 말 것★★ 그 열은 담당자 지시로 ★'총평' 열로 물려받았다★
+     (saveShopper 참조). 머리글이 이미 '총평'으로 바뀌었으면 이 함수는 '없습니다'라며 그냥 끝난다.
+     혹시 '영수증'인 시트가 남아 있어도 ★지우면 안 된다★ — 지우는 순간 총평이 갈 자리가 없어지고,
+     그 뒤로 Q1부터 한 칸씩 밀린다. 이 함수는 기록으로만 남겨 둔다. */
 function dropReceiptColumn() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sh = ss.getSheetByName('쇼퍼_응답');

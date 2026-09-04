@@ -1,6 +1,6 @@
 {
  "version": "2026-09-04",
- "source_sha": "88fa7975836b",
+ "source_sha": "9a0baf1b7f84",
  "source": "QSC·MS 평가표.xlsx",
  "stores": [
   "금종제과",
@@ -340,7 +340,7 @@
      "no": 30,
      "code": "C-12",
      "row": 39,
-     "text": "작업장·실온 구역 온도 이탈 (주방 25℃ 이하 / 실온 1~35℃)",
+     "text": "작업장·실온 구역 온도 이탈 (글로우서울 기준: 주방 25℃ 이하 /법 권고: 실온 1~35℃)",
      "severity": "",
      "critical": false
     },
