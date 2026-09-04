@@ -113,6 +113,14 @@ input::placeholder, textarea::placeholder { color: #656565; font-weight: 400; }
 .photoBtn.need { border-color: var(--red); color: var(--red); }
 
 .meta-row { display: flex; gap: 8px; align-items: center; margin-top: 9px; }
+
+/* 건별 개선요청 칸 (2026-09-04) — 건수를 올리면 이 줄이 그만큼 늘어난다.
+   ★한 줄 = 매장 시트의 한 줄★ 이라 화면과 결과가 같은 모양이 된다. */
+.case-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 7px; }
+.case-row .case-no { flex: 0 0 auto; min-width: 34px; height: 34px; display: flex; align-items: center;
+  justify-content: center; font-size: 11.5px; font-weight: 700; color: var(--sub);
+  background: #242424; border-radius: 6px; font-variant-numeric: tabular-nums; }
+.case-row .thumbs { flex: 1 0 100%; }
 .score-chip { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; height: 34px; min-width: 68px; font-size: 11.5px; border-radius: 6px; padding: 0 8px; background: #242424; color: var(--sub); font-variant-numeric: tabular-nums; }
 .score-chip.s-o { background: #10332a; color: var(--ok); font-weight: 700; }
 .score-chip.s-d { background: #33270f; color: var(--amber); font-weight: 700; }
