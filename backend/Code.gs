@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v94', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v95', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3322,6 +3322,14 @@ function saveShopper(ss, p, ctx, isSurvey) {
     if (at < 0) {
       const old = head.indexOf('영수증');
       if (old >= 0) { sh.getRange(1, old + 1).setValue('총평'); at = old; }
+    }
+    /* ★둘 다 없으면 그 자리에 이름을 새로 적는다★ (2026-09-04)
+       머리글이 비어 있을 수 있다 — 2026-09-04 검수 때 사람이 그 칸을 만지다 지웠다.
+       값이 들어갈 자리(11번째)는 어차피 아래에서 정해지므로, 이름만 채워 두면
+       다음부터 위 indexOf 가 찾는다. ★이름이 없다고 자리를 옮기지 않는다★ — 옮기면 답이 밀린다. */
+    if (at < 0 && head.length > 10 && !String(head[10] || '').trim()) {
+      sh.getRange(1, 11).setValue('총평');
+      at = 10;
     }
   } catch (e) { /* 머리글을 못 읽으면 아래 기본 자리를 쓴다 */ }
   row.splice(at >= 0 ? at : 10, 0, p.overall || '');
