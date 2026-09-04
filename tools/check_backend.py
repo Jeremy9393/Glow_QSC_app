@@ -88,6 +88,31 @@ def check(printer=None):
     else:
         say('등록표가 가리키는 함수 %d개 — 전부 있습니다' % len(refs))
 
+    # ── ①-2 같은 이름의 함수를 두 번 선언하지 않았는가 ──────────
+    #  ★2026-09-04 에 실제로 났다★ — 월말 반영을 만들면서 fnMonthClose 를 새로 선언했는데
+    #  그 이름은 이미 「그 달 개선요청 확정」(month.close)이 쓰고 있었다. 자바스크립트는
+    #  ★뒤에 선언된 것이 이긴다★. 그래서 admin.monthClose 가 엉뚱한 함수를 불렀고,
+    #  새로 만든 기능은 한 번도 안 돌았다. 위 ①은 「가리키는 함수가 있는가」만 보므로 이걸 못 잡는다.
+    #  예외도 오류도 안 나고 ★조용히 다른 일을 한다★ — 이 저장소가 가장 싫어하는 종류다.
+    lines = src.split('\n')
+    seen, dups = {}, {}
+    for i, ln in enumerate(lines, 1):
+        m = re.match(r'function\s+([A-Za-z_$][\w$]*)\s*\(', ln)
+        if not m:
+            continue
+        name = m.group(1)
+        if name in seen:
+            dups.setdefault(name, [seen[name]]).append(i)
+        else:
+            seen[name] = i
+    if dups:
+        bad.append('★같은 이름의 함수를 두 번 선언했습니다★: '
+                   + ' · '.join('%s(%s행)' % (k, '·'.join(map(str, v))) for k, v in dups.items())
+                   + '\n     → 자바스크립트는 뒤엣것이 이깁니다. 앞엣것을 부르는 자리는 조용히'
+                     '\n       엉뚱한 일을 합니다(2026-09-04에 실제로 났습니다). 이름을 갈라 주세요.')
+    else:
+        say('함수 이름이 겹치지 않습니다 (%d개 선언)' % len(seen))
+
     # ── ② 실제로 doPost 를 한 번 돌려 본다 ────────────────────
     if not os.path.isfile(NODE):
         bad.append('node 를 못 찾아 실행 점검을 건너뛰었습니다: %s' % NODE)
