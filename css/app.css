@@ -221,6 +221,15 @@ input::placeholder, textarea::placeholder { color: #656565; font-weight: 400; }
 .guideList li b { color: #fff; font-weight: 700; }
 .guideList li .tip { color: var(--ink); font-weight: 800; letter-spacing: .02em; }
 
+/* ★해야 할 일 한 줄★ (2026-09-04) — 나머지는 '알아 두실 것'이라 같은 무게로 두면 묻힌다.
+   목록 점을 떼고 제목을 윗줄로 세운 뒤, 본문은 한 칸 들여 「–」로 잇는다. */
+.guideList li.lead { padding-left: 0; }
+.guideList li.lead::before { display: none; }
+.guideList li.lead .head { display: block; font-size: 15px; font-weight: 800; color: var(--ink);
+  letter-spacing: .02em; margin-bottom: 2px; }
+.guideList li.lead .body { display: block; padding-left: 12px; position: relative; }
+.guideList li.lead .body::before { content: '–'; position: absolute; left: 0; color: #6a6a6a; }
+
 /* ---------- 집계 ---------- */
 .sumTable { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
 .sumTable th, .sumTable td { padding: 8px 4px; border-bottom: 1px solid #262626; text-align: left; }
