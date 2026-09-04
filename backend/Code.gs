@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v99', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v100', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3773,7 +3773,49 @@ function fnStoreGet(ctx, payload, target) {
       「지금은 조회만 가능합니다」가 떴다. 2026-08-27에 그 조건을 걷어냈다.) */
   out.readOnly = !can(ctx.role, 'store', '쓰기').allow;
   markNewItems(out.items, store, ym, seenBaseline(ctx.id));
+  attachAdminLive(out, ctx, store, ym);
   return out;
+}
+
+/* ★관리자에게만 「이번 달 잠정 MS」를 얹는다★ (2026-09-04 담당자)
+
+   MS 점수는 매장 파일에 ★말일 23시에★ 들어간다 — 매장이 월중에 「이번 달 MS 끝났다」로 읽고
+   남은 날 응대가 느슨해지는 것을 막기 위해서다(MONTH_OPEN_HOUR·monthClosed). 그런데 본사는
+   월중에도 그 매장의 MS를 봐야 한다: *"난 매장의 MS점수를 보고싶거든?"*
+
+   값은 이미 `쇼퍼_응답`에 있다. 그러니 ★그 자리에서 계산해 얹기만★ 한다 — 어디에도 쓰지 않는다.
+   새 쓰기 경로가 안 생기므로 늦추는 규칙(매장 파일 한 곳)은 그대로 하나로 남는다.
+
+   ★매장 브라우저에는 값 자체가 가지 않는다★ — 화면에서 감추는 것이 아니라 서버가 안 보낸다.
+   화면에서만 감추면 개발자 도구로 그대로 보인다.
+
+   ★캐시 밖에서 붙인다★ — storeMonthBody 는 매장·달로만 키를 잡으므로, 캐시에 담으면
+   먼저 연 관리자의 값이 그다음에 연 매장에게 그대로 간다(readOnly 를 여기서 붙이는 것과 같은 이유).
+
+   못 구해도 조용히 지나간다 — 이건 덤이지 이 화면의 본체가 아니다. */
+function attachAdminLive(out, ctx, store, ym) {
+  if (!out || !out.summary) return;
+  const isAdmin = can(ctx.role, ADMIN_MENU, '읽기').allow;
+  out.summary.admin = !!isAdmin;      // 화면이 '잠정' 딱지를 이 값으로 가린다
+  if (!isAdmin) return;
+  try {
+    const dateStr = '20' + String(ym).slice(0, 2) + '-' + String(ym).slice(2, 4) + '-01';
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const tz = fileTz(ss);
+    if (monthClosed(dateStr, tz)) return;      // 이미 매장 파일에 들어간 달 — 덧붙일 것이 없다
+    const sh = ss.getSheetByName('쇼퍼_응답');
+    if (!sh) return;
+    const avg = shopperMonthAvg(sh, store, dateStr, tz);      // 0~100
+    if (!avg) return;
+    out.summary.msLive = round1(avg);
+    /* 종합도 같은 산식으로 미리 낸다 — 시트 수식과 같아야 한다(setTotalFormula).
+       개선율 칸이 비면 시트는 100%로 치므로 여기서도 1로 둔다. */
+    const q = out.summary.hygiene;
+    if (typeof q === 'number') {
+      const r = (typeof out.summary.rate === 'number') ? out.summary.rate : 1;
+      out.summary.totalLive = round1(q * 0.6 + avg * 0.3 + r * 100 * 0.1);
+    }
+  } catch (e) { }
 }
 
 /* 매장 월 탭 스냅샷 — store.get과 notify.badge가 ★같은 캐시를 공유한다★.

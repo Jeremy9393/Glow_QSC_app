@@ -529,10 +529,15 @@
       const t = str(v).replace(/점수$/, '').trim();
       return t || fallback;
     };
+    /* ★네 번째 칸은 관리자에게만 오는 「이번 달 잠정」이다★ (2026-09-04)
+       MS는 말일에 매장 파일로 들어가므로 월중에는 점수 칸이 '—'다. 본사는 그동안에도
+       봐야 하므로 서버가 관리자에게만 msLive/totalLive 를 얹어 준다(attachAdminLive).
+       ★매장에게는 서버가 아예 안 보낸다★ — 여기서 가리는 것이 아니다. */
+    const live = function (v) { return (sum.admin && typeof v === 'number') ? v : null; };
     const rows = [
-      [short(sum.hygieneLabel, '위생'), sum.hygiene, sum.hygieneGrade, false],
-      [short(sum.csLabel, 'CS'), sum.cs, sum.csGrade, false],
-      ['종합', sum.total, sum.totalGrade, true],
+      [short(sum.hygieneLabel, '위생'), sum.hygiene, sum.hygieneGrade, false, null],
+      [short(sum.csLabel, 'CS'), sum.cs, sum.csGrade, false, live(sum.msLive)],
+      ['종합', sum.total, sum.totalGrade, true, live(sum.totalLive)],
     ];
     const body = $('#sumBody');
     body.innerHTML = '';
@@ -541,8 +546,10 @@
       if (r[3]) tr.className = 'sum-crit';
       const td0 = document.createElement('td');
       td0.textContent = r[0];
-      // '잠정'은 개선율(익월 IMPROVE_DUE_DAY 이전)이 아직 확정 전이라는 뜻 — 숫자만 보면 낮게 보인다
-      if (r[3] && sum.provisional) {
+      /* '잠정'은 개선율(익월 IMPROVE_DUE_DAY 이전)이 아직 확정 전이라는 뜻 — 숫자만 보면 낮게 보인다.
+         ★매장에게는 안 보인다★ (2026-09-04 담당자) — 매장이 알아야 할 것은 '몇 점인가'이지
+         '이 숫자가 아직 굳지 않았다'는 본사의 사정이 아니다. 설명 없는 딱지는 불안만 만든다. */
+      if (r[3] && sum.provisional && sum.admin) {
         const tag = document.createElement('span');
         tag.className = 'provTag';
         tag.textContent = '잠정';
@@ -551,6 +558,15 @@
       }
       const td1 = document.createElement('td');
       td1.className = 'r'; td1.textContent = num1(r[1]);
+      /* 아직 안 들어온 점수를 관리자에게만 미리 보여준다. 점수 칸을 채우지 않고 옆에 붙인다 —
+         '확정된 값'과 '아직 아닌 값'이 같은 자리에 같은 모양으로 있으면 구별이 안 된다. */
+      if (r[4] != null && r[1] == null) {
+        const lv = document.createElement('span');
+        lv.className = 'liveTag';
+        lv.textContent = '잠정 ' + num1(r[4]);
+        td1.appendChild(document.createTextNode(' '));
+        td1.appendChild(lv);
+      }
       const td2 = document.createElement('td');
       td2.className = 'r'; td2.textContent = str(r[2]) || '—';
       tr.appendChild(td0); tr.appendChild(td1); tr.appendChild(td2);
@@ -569,11 +585,9 @@
     if (typeof sum.prog === 'number') seg.push('진행 ' + sum.prog);
     seg.push('완료 ' + done);
     if (typeof sum.todo === 'number') seg.push('시작 전 ' + sum.todo);
-    fin.appendChild(document.createTextNode('개선요청사항 ' + req + '건 (' + seg.join(' · ') + ') · '));
-    const b = document.createElement('b');
-    b.textContent = '개선율 ' + ratePct(sum.rate);
-    fin.appendChild(b);
-    $('#sumFill').style.width = Math.round((typeof sum.rate === 'number' ? sum.rate : 0) * 100) + '%';
+    /* ★요약에는 건수만 적는다★ (2026-09-04 담당자) — 개선율과 진행바는 화면 하단바에 늘 떠 있다.
+       같은 숫자를 한 화면에 두 번 적으면, 둘이 어긋나 보일 때 어느 쪽이 맞는지 아무도 모른다. */
+    fin.appendChild(document.createTextNode('개선요청사항 ' + req + '건 (' + seg.join(' · ') + ')'));
 
     $('#visitNote').textContent = sum.visitDate ? ('방문일 ' + str(sum.visitDate)) : '';
 
