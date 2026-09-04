@@ -1,6 +1,6 @@
 {
- "sha256": "a3bfcd4bbc24a16adc93cf56efc9d8e304c72b34a72b8cb31175626d3fd08ffa",
- "version": 85,
- "when": "2026-09-03 13:18:57",
- "description": "2026-09-03 차기 월 목표 걷어내기(admin.dropGoal) — 배포 확인 지연 재시도분"
+ "sha256": "385832e5edb6c35f36dd07d4994375070af066f5518ba20842acbd5e5a5742e2",
+ "version": 86,
+ "when": "2026-09-04 09:35:26",
+ "description": "2026-09-04 개선요청 — 지적 1건 = 한 줄 = 사진 한 장"
 }

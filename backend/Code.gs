@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v85', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v86', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -4887,11 +4887,38 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
 
   /* 표가 모자라면 예외로 죽는 대신 쓸 수 있는 만큼만 쓰고, ★몇 건을 못 썼는지 반드시 알린다★ —
      조용히 잘리면 점검자는 다 기록된 줄 안다. */
+  /* ★지적 1건 = 한 줄 = 사진 한 장★ (2026-09-04 담당자 결정)
+
+     종전에는 ★문항 하나가 한 줄★이었다. 그래서 한 문항에 2건이 걸리고 사진을 2장 올리면
+     한 줄에 몰려서, 표에 사진 칸이 D 하나뿐이라 첫 장만 칸에 들어가고 2장째부터는
+     본문 뒤에 「· 사진 2장: url url」로 붙었다. 2026-09-03 담당자 실제 시험에서 그렇게 나왔다.
+     담당자 기준은 ★지적 1건당 사진 1장★이라 이 모양이 맞지 않는다.
+
+     ★같이 고쳐지는 것★ — recountSummary 는 개선요청 「건수」를 ★행 수★로 센다(§req++).
+     문항 하나가 한 줄이면 2건이 1건으로 집계돼 개선율의 분모가 작아졌다. 건수만큼 줄을
+     만들면 집계가 실제 지적 건수와 맞는다.
+
+     사진 배분: 올린 순서대로 한 줄에 한 장. 건수보다 사진이 적으면 나머지 줄은 사진 없이 간다.
+     ★남는 사진은 버리지 않는다★ — 마지막 줄 본문 뒤에 링크로 붙인다.
+     문장은 줄마다 같은 것이 들어간다(사진으로 구분된다). */
+  const expanded = [];
+  found.forEach(function (it) {
+    const ph = photoMap[it.no] || [];
+    const cnt = Math.max(1, Math.round(Number(it.value) || 1));
+    for (let i = 0; i < cnt; i++) {
+      expanded.push({
+        src: it,
+        photo: ph[i] || null,
+        extra: (i === cnt - 1 && ph.length > cnt) ? ph.slice(cnt) : [],
+      });
+    }
+  });
+
   const room = lastRow - row + 1;
-  const list = found.slice(0, Math.max(0, room));
+  const list = expanded.slice(0, Math.max(0, room));
   if (!list.length) return { ok: false, error: '개선요청 표에 빈 행이 없음: ' + tab + ' (표 끝 ' + lastRow + '행)', warn: warn };
-  if (list.length < found.length) {
-    warn.push('개선요청 ' + found.length + '건 중 ' + list.length + '건만 기록했습니다 — 표(' +
+  if (list.length < expanded.length) {
+    warn.push('개선요청 ' + expanded.length + '건 중 ' + list.length + '건만 기록했습니다 — 표(' +
       (headRow + 1) + '~' + lastRow + '행)에 빈 행이 모자랍니다');
   }
 
@@ -4914,21 +4941,23 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   /* 새 서식의 B는 번호가 아니라 ★조치기한★이다 (§1-8). 번호는 시트 행이 알려 준다. */
   const dueVal = newFmt ? impDueOf(p.date, fileTz(ss)) : '';
   if (newFmt && !dueVal) warn.push('점검일에서 조치기한을 계산하지 못했습니다 — 기한 칸이 빈 채로 갑니다');
-  list.forEach(function (it) {
+  const noTextSeen = {};
+  list.forEach(function (e) {
     no += 1;
-    const photos = photoMap[it.no] || [];
-    /* 2번째 이후 사진은 갈 칸이 없다(표가 O열에서 끝남) → 본문 뒤에 붙인다 */
-    const tail = photos.length > 1
-      ? '\n· 사진 ' + photos.length + '장: ' + photos.map(function (x) { return x.url; }).join(' ')
+    const it = e.src;
+    /* 건수보다 사진이 많으면 남는 것을 마지막 줄 뒤에 붙인다 — 버리지 않는다 */
+    const tail = e.extra.length
+      ? '\n· 사진 ' + e.extra.length + '장 더: ' + e.extra.map(function (x) { return x.url; }).join(' ')
       : '';
     const body = String(it.memo == null ? '' : it.memo).trim();
-    if (!body) noText.push(it.code || ('문항 ' + it.no));
+    /* ★한 문항이 여러 줄이 되었으므로 같은 문항을 여러 번 세지 않는다★ */
+    if (!body && !noTextSeen[it.no]) { noTextSeen[it.no] = 1; noText.push(it.code || ('문항 ' + it.no)); }
     bc.push([newFmt ? dueVal : no, '']);   // ★구분(대분류)도 비운다★ — 평가체계의 구조를 드러내지 않는다
     /* ★사진 칸은 여기서 비워 두고 아래에서 따로 넣는다★ — 셀 내 이미지는 setValue로만
        넣는 것이 문서화된 경로다. setValues(2차원 배열)에 객체를 섞는 것은 보장되지 않는다.
        PHOTO_EMBED=false(링크만)이면 종전대로 여기서 문자열로 채운다. */
-    d.push([(photos.length && !PHOTO_EMBED) ? photos[0].url : '']);
-    imgCells.push(photos.length && PHOTO_EMBED ? photos[0].id : '');
+    d.push([(e.photo && !PHOTO_EMBED) ? e.photo.url : '']);
+    imgCells.push(e.photo && PHOTO_EMBED ? e.photo.id : '');
     j.push([safe((body || '(개선요청 내용이 비어 있습니다 — 점검자에게 확인해 주세요)') + tail)]);
   });
   if (noText.length) {
@@ -4972,7 +5001,7 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
     }
   }
   if (jR) jR.setValues(j); else warn.push('J(개선요청 내용) 칸이 없어 기록하지 못했습니다');
-  return { ok: !!jR, tickets: jR ? list.length : 0, tab: tab, skipped: found.length - list.length, warn: warn };
+  return { ok: !!jR, tickets: jR ? list.length : 0, tab: tab, skipped: expanded.length - list.length, warn: warn };
 }
 
 function writeStoreShopper(store, dateStr, frac) {
