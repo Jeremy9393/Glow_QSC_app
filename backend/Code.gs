@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v98', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v99', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3995,17 +3995,36 @@ function readStoreTab(ss, sh, store, ym) {
   /* ★'라벨을 못 찾았다'와 '라벨은 찾았는데 값 칸이 비었다'를 둘 다 알린다★
      종전에는 앞쪽만 경고했다. 그래서 값을 못 읽은 두 번째 경우가 화면에 '—' 로만 나타났고,
      매장은 그것을 "이 달은 점검을 안 했나 보다"로 읽었다. 조용히 비는 것이 가장 나쁘다. */
+  /* ★라벨이 없는 것과 값이 빈 것을 갈라 둔다★ (2026-09-04 담당자 지적)
+     종전에는 값이 비어도 곧장 경고를 밀어 넣었다. 그래서 ★아직 점검 전인 달★을 열면
+     방문일·QSC·MS·종합 네 줄이 한꺼번에 떠서, 매장 화면이 「수식이 잘못된 것처럼」 보였다.
+     라벨을 못 찾는 것은 진짜 이상이라 그대로 알리고, 값이 빈 것은 아래에서 가려 낸다. */
+  const blank = [];
   function pick(names, label) {
     const r = labelValue(lm, names);
     if (!label) return r;
     if (!r.found) warn.push("'" + label + "' 라벨을 찾지 못했습니다 — 값을 표시하지 않습니다");
-    else if (r.v == null || r.v === '') warn.push("'" + label + "' 옆 값 칸이 비어 있습니다 — 값을 표시하지 않습니다");
+    else if (r.v == null || r.v === '') blank.push(label);
     return r;
   }
   const vDate = pick(['방문일', '방문일자', '점검일', '점검일자'], '방문일');
   const vHyg = pick(L_QSC, 'QSC점수');
   const vCs = pick(L_MS, 'MS점수');
   const vTot = pick(L_TOT, '종합점수');
+  /* ★아직 점검 전이면 아무 말도 하지 않는다★ — 방문일이 비었다는 건 그 달에 들어온 것이
+       하나도 없다는 뜻이다. 그때 「값 칸이 비어 있습니다」는 알림이 아니라 소음이다.
+     ★MS·종합이 비는 것은 정상일 수 있다★ — 그 달이 안 끝났으면 MS 점수는 아직 안 들어간다
+       (월말 반영 규칙). 안 끝난 달에는 그 둘을 말하지 않는다.
+     ★그 밖에 비어 있는 것은 그대로 알린다★ — 그건 진짜 어긋남이고, 조용히 비면 아무도 모른다. */
+  if (blank.length) {
+    const dateBlank = blank.indexOf('방문일') >= 0;
+    const open = monthClosed('20' + String(ym).slice(0, 2) + '-' + String(ym).slice(2, 4) + '-01', tz);
+    blank.forEach(function (label) {
+      if (dateBlank) return;                                     // 그 달에 아무것도 안 들어왔다
+      if (!open && (label === 'MS점수' || label === '종합점수')) return;   // 월말에 열린다
+      warn.push("'" + label + "' 옆 값 칸이 비어 있습니다 — 값을 표시하지 않습니다");
+    });
+  }
   const vHygG = labelValue(lm, L_QSC_G);
   const vCsG = labelValue(lm, L_MS_G);
   const vTotG = labelValue(lm, ['종합등급', '등급']);
