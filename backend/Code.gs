@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v95', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v96', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -5691,10 +5691,59 @@ function monthCloseRun(ym, apply, stores) {
     failed: bad.length, left: left.length, lines: lines };
 }
 
+/* ★종합 수식만 고친다★ (2026-09-04 검수에서 찾은 구멍)
+   수식을 새 규칙(COUNT(QSC,MS)<2)으로 바꾸는 곳이 셋인데, ★이미 만들어진 탭은 아무도 안 고쳤다★:
+     10월 탭   makeMonthTabIn 이 만들 때 고친다        → 새로 태어나는 것만
+     월말 반영  monthCloseRun 이 고친다                → MS 점수가 있는 매장만
+     원본 탭·이미 만든 2610~ 탭                        → ★아무도★
+   원본이 옛 수식이면 손으로 만든 탭이 그것을 물려받고, 그 탭은 MS가 빌 때 틀린 종합을 띄운다
+   (QSC 90점에 종합 64점). 점수는 건드리지 않고 수식만 훑는 길을 둔다. */
+function fixTotalFormulaRun(stores, apply) {
+  const list = (stores && stores.length) ? stores.map(normStore) : displayStores();
+  const t0 = Date.now();
+  const lines = ['=== 종합 수식 고치기 ' + (apply ? '★적용★' : '미리보기') + ' · ' + list.length + '곳 ==='];
+  let done = 0, tabs = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (Date.now() - t0 > 4.5 * 60 * 1000) {
+      lines.push('★시간이 부족해 ' + i + '곳에서 멈췄습니다 — 다시 돌리십시오★');
+      break;
+    }
+    const store = list[i];
+    try {
+      const id = storeFileId(store);
+      if (!id) { lines.push('✗ ' + store + ' — 파일 ID 없음'); continue; }
+      const ss2 = SpreadsheetApp.openById(id);
+      /* ★대상은 원본 탭과 2610~ 월 탭뿐★ — 1~9월은 끝난 기록이고 본사 자물쇠라 손도 못 댄다 */
+      const names = ss2.getSheets().map(function (sh) { return sh.getName().trim(); })
+        .filter(function (n) { return n === TPL_NEW || (/^\d{4}$/.test(n) && n >= '2610'); });
+      if (!names.length) { lines.push('· ' + store + ' — 대상 탭 없음'); continue; }
+      const okd = [];
+      names.forEach(function (n) {
+        const sh2 = ss2.getSheetByName(n);
+        if (!sh2) return;
+        if (!apply) { okd.push(n); return; }
+        if (setTotalFormula(sh2)) { okd.push(n); tabs += 1; }
+        else okd.push(n + '✗');
+      });
+      lines.push((apply ? '✓ ' : '· ') + store + ' — ' + okd.join(', '));
+      done += 1;
+    } catch (e) { lines.push('✗ ' + store + ' — ' + String(e).slice(0, 70)); }
+  }
+  lines.push('매장 ' + done + '곳 · 고친 탭 ' + tabs + '개');
+  return { ok: true, apply: !!apply, stores: done, tabs: tabs, lines: lines };
+}
+
 function fnMonthClose(ctx, payload) {
   const p = payload || {};
   const apply = p.apply === true;
   const tz = ssTz();
+  /* 수식만 고치는 길 — 점수는 건드리지 않으므로 「달이 끝났는가」와 무관하다 */
+  if (p.formulaOnly === true) {
+    const out0 = fixTotalFormulaRun(p.store ? [String(p.store)] : null, apply);
+    if (apply) auditLog(ctx, 'admin.monthClose', p.store ? String(p.store) : '', '성공', '',
+      '종합 수식 ' + out0.tabs + '개 탭');
+    return out0;
+  }
   const target = p.ym || Utilities.formatDate(new Date(), tz, 'yyyy-MM');
   /* ★아직 안 끝난 달을 실수로 열지 않는다★ — 열면 이 장치의 목적이 통째로 사라진다.
      시험용으로 일부러 열고 싶으면 force 를 준다(그때는 결과에 크게 적어 남긴다). */
