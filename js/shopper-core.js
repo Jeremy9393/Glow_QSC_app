@@ -334,13 +334,17 @@ async function initShopperForm(opts) {
     card.className = 'item qcard';
     const likert = q.scale === 'likert';
     // 관찰 문항 NA는 관리자 전용 (엑셀 D11:D40 유효성과 동일) — 고객 화면에는 없음
-    /* ★만족도 척도는 5점이 왼쪽★ — 1~10번 관찰 문항은 「예」가 왼쪽이라 긍정이 왼쪽인데,
-       만족도만 1점(부정)이 왼쪽이면 손이 먼저 가는 자리의 뜻이 뒤집힌다. 값은 그대로 1~5. */
+    /* ★만족도 척도는 1점이 왼쪽, 5점이 오른쪽★ (2026-09-04 담당자 — 실제로 써 보고 되돌렸다:
+       *"습관상 5점이 제일 오른쪽이 맞네"*).
+       ⚠2026-09-03(앱 v92)에는 반대로 두었다 — 「1~10번 관찰 문항은 「예」가 왼쪽이라 긍정이
+       왼쪽인데 만족도만 1점이 왼쪽이면 손이 먼저 가는 자리의 뜻이 뒤집힌다」는 이유였다.
+       ★종이 설문·별점에 몸이 익은 순서가 그 일관성보다 세다★는 것이 실제 사용에서 드러났다.
+       값은 언제나 1~5 그대로다 — 자리만 바뀐다(채점은 영향 없음). */
     const optsHtml = likert
-      ? '<div class="opts likert">' + [5, 4, 3, 2, 1].map(function (n) {
+      ? '<div class="opts likert">' + [1, 2, 3, 4, 5].map(function (n) {
           return '<button data-v="' + n + '">' + n + '</button>';
         }).join('') + '</div>' +
-        '<div class="likert-cap">5 매우 그렇다 · 3 보통 · 1 매우 아니다</div>'
+        '<div class="likert-cap">1 매우 아니다 · 3 보통 · 5 매우 그렇다</div>'
       : '<div class="opts"><button data-v="예">예</button><button data-v="아니오">아니오</button>' +
         (ADMIN ? '<button data-v="NA">NA</button>' : '') + '</div>';
     card.innerHTML =
