@@ -350,8 +350,11 @@ function actionTable() {
     'admin.protect':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnProtect },
     /* 「차기 월 목표」 걷어내기 — 일회성. 기본이 미리보기다(apply를 안 주면 아무것도 안 지운다). */
     'admin.dropGoal':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnDropGoal },
-    /* 월말 반영 — 매장 파일 MS점수를 그 달 말일 23시에 연다. 트리거와 같은 함수를 부른다. */
-    'admin.monthClose':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMonthClose },
+    /* MS점수 월말 열기 — 매장 파일 MS점수를 그 달 말일 23시에 연다. 트리거와 같은 함수를 부른다.
+       ★이름을 month.close 와 헷갈리지 말 것★ — 그쪽은 「그 달 개선요청 확정」이고 아주 다른 일이다.
+       2026-09-04 에 실제로 헷갈려 fnMonthClose 를 두 번 선언했고, 뒤엣것이 이겨
+       이 액션이 엉뚱한 함수를 불렀다(그래서 msOpen 으로 갈랐다). */
+    'admin.msOpen':       { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMsMonthOpen },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -5557,8 +5560,8 @@ function fnMergeAuth(ctx, payload) {
    넣자"고 판단할 여지를 없애려고 시각을 못 박았다. 그래서 기본 입구는 ★시간 트리거★다.
 
      트리거   매달 말일 23시에 monthCloseTrigger() — 담당자가 편집기에서 한 번 만든다
-     버튼     Api.call('admin.monthClose', {})            ← 미리보기(무엇이 반영될지만)
-              Api.call('admin.monthClose', {apply:true})  ← 실제로 연다
+     버튼     Api.call('admin.msOpen', {})            ← 미리보기(무엇이 반영될지만)
+              Api.call('admin.msOpen', {apply:true})  ← 실제로 연다
               {ym:'2026-10'} 로 특정 달, {force:true} 로 아직 안 끝난 달도 (시험용)
 
    ★같은 함수를 두 입구가 부른다★ — 트리거가 안 돌았을 때 손으로 만회할 수 있고,
@@ -5733,14 +5736,18 @@ function fixTotalFormulaRun(stores, apply) {
   return { ok: true, apply: !!apply, stores: done, tabs: tabs, lines: lines };
 }
 
-function fnMonthClose(ctx, payload) {
+/* ★이름이 fnMonthClose 가 아니다★ (2026-09-04) — 그 이름은 이미 「그 달 개선요청 확정」
+   (액션 month.close)이 쓰고 있었다. 같은 이름을 또 선언해서 ★뒤엣것이 이겨★ 이 기능이
+   한 번도 안 돌았다. 등록표 검사는 「가리키는 함수가 있는가」만 보므로 이것을 못 잡았다
+   — check_backend.py 에 중복 선언 검사를 그때 추가했다. */
+function fnMsMonthOpen(ctx, payload) {
   const p = payload || {};
   const apply = p.apply === true;
   const tz = ssTz();
   /* 수식만 고치는 길 — 점수는 건드리지 않으므로 「달이 끝났는가」와 무관하다 */
   if (p.formulaOnly === true) {
     const out0 = fixTotalFormulaRun(p.store ? [String(p.store)] : null, apply);
-    if (apply) auditLog(ctx, 'admin.monthClose', p.store ? String(p.store) : '', '성공', '',
+    if (apply) auditLog(ctx, 'admin.msOpen', p.store ? String(p.store) : '', '성공', '',
       '종합 수식 ' + out0.tabs + '개 탭');
     return out0;
   }
@@ -5753,7 +5760,7 @@ function fnMonthClose(ctx, payload) {
   }
   const out = monthCloseRun(target, apply, p.store ? [String(p.store)] : null);
   if (apply) {
-    auditLog(ctx, 'admin.monthClose', p.store ? String(p.store) : '', '성공', '',
+    auditLog(ctx, 'admin.msOpen', p.store ? String(p.store) : '', '성공', '',
       target + ' 반영 ' + out.done + '곳' + (p.force === true ? ' ★force★' : ''));
   }
   return out;

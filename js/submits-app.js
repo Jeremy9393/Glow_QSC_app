@@ -172,7 +172,7 @@
 
   /* ---------- 월말 반영 (2026-09-04) ----------
      ★평소에는 시간 트리거가 돈다★ — 이 칸은 걸렀을 때 손으로 만회하는 예비 입구다.
-     서버의 admin.monthClose 는 트리거가 부르는 monthCloseRun 과 ★같은 함수★를 부른다.
+     서버의 admin.msOpen 은 트리거가 부르는 monthCloseRun 과 ★같은 함수★를 부른다.
      ★미리보기가 먼저다★ — 무엇이 반영될지 보고, 그 다음에만 실제로 연다. */
   const mcYm = $('#mcYm'), mcOut = $('#mcOut'), mcBtn = $('#mcPreview');
   if (mcYm && mcBtn) {
@@ -185,7 +185,7 @@
       mcBtn.disabled = true;
       const req = { ym: ym };
       if (apply) req.apply = true;
-      const r = await Api.call('admin.monthClose', req).catch(function () { return null; });
+      const r = await Api.call('admin.msOpen', req).catch(function () { return null; });
       mcBtn.disabled = false;
       setHtml(mcOut, '');
       if (!(r && r.ok)) {
