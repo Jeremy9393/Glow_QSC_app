@@ -63,6 +63,11 @@ async function initShopperForm(opts) {
     { id: 'staff', label: '응대 직원(닉네임, 성별 등) *', full: true, control: '<input type="text" id="staff" placeholder="못 보셨다면 홀 직원, 주방 직원 등 간단히 적어 주세요">' },
     { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
     { id: 'demo', label: '연령대·성별 (작성자 본인) *', full: true, control: '<input type="text" id="demo" placeholder="직원이 아닌 본인 기준 — 예: 30대 여성">' },
+    /* ★총평은 선택이다★ (2026-09-04 담당자) — 문항으로 못 담는 이야기를 받는 자리다.
+       필수로 만들지 않는다(REQUIRED_META 에 넣지 않았다) — 마지막 칸을 막으면 다 쓰고도 못 낸다. */
+    { id: 'overall', label: '추가로 하고 싶은 말 (선택)', full: true,
+      control: '<textarea id="overall" rows="3" maxlength="500" ' +
+        'placeholder="문항으로 담기 어려운 이야기가 있다면 자유롭게 적어 주세요"></textarea>' },
   ];
   if ($('#guideBox')) {
     $('#guideBox').innerHTML = '<h2>평가 전 안내</h2><ul class="guideList">' +
@@ -83,7 +88,7 @@ async function initShopperForm(opts) {
            손님이 첫 화면에서 넘어야 할 칸이 7개에서 3개(손님은 매장이 잠기니 2개)로 준다
      ★상자는 JS가 만들어 #cats 뒤에 끼운다★ — 화면 두 개(shopper.html·survey.html)를
      따로 고치면 어긋난다. 한 뿌리에서 나와야 한다는 원칙(파일 첫 주석)을 지킨다. */
-  const LATE_IDS = { staff: 1, order: 1, demo: 1 };
+  const LATE_IDS = { staff: 1, order: 1, demo: 1, overall: 1 };
   function metaHtml(list) {
     return '<div class="meta-grid">' + list.map(function (f) {
       return '<div' + (f.full ? ' class="full"' : '') + '><label class="f">' + f.label + '</label>' + f.control + '</div>';
@@ -314,6 +319,7 @@ async function initShopperForm(opts) {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
       store: $('#store').value, date: $('#date').value, time: TimePick.get('time'),
       staff: $('#staff').value, order: $('#order').value, demo: $('#demo').value,
+      overall: $('#overall') ? $('#overall').value : '',
       answers: state.answers, memos: state.memos, t: Date.now(),
     }));
     if (ADMIN && $('#saveNote')) $('#saveNote').textContent = '이 기기에 자동 임시저장됨 · ' + new Date().toLocaleTimeString('ko-KR');
@@ -498,6 +504,7 @@ async function initShopperForm(opts) {
       code: code,
       store: $('#store').value.trim(), date: $('#date').value, time: TimePick.get('time'),
       staff: $('#staff').value.trim(), order: $('#order').value.trim(), demographic: $('#demo').value.trim(),
+      overall: $('#overall') ? $('#overall').value.trim() : '',
       submittedAt: new Date().toISOString(),
       source: ADMIN ? 'admin' : 'customer',
       result: res,
@@ -573,7 +580,7 @@ async function initShopperForm(opts) {
     btn.disabled = false; btn.textContent = '제출';
   };
 
-  ['store', 'date', 'staff', 'order', 'demo'].forEach(function (id) {
+  ['store', 'date', 'staff', 'order', 'demo', 'overall'].forEach(function (id) {
     $('#' + id).addEventListener('input', saveDraft);
   });
   TimePick.onChange('time', saveDraft);
@@ -602,6 +609,7 @@ async function initShopperForm(opts) {
     $('#staff').value = draft.staff || '';
     $('#order').value = draft.order || '';
     $('#demo').value = draft.demo || '';
+    if ($('#overall')) $('#overall').value = draft.overall || '';
     Object.assign(state.answers, draft.answers || {});
     Object.assign(state.memos, draft.memos || {});
     allQs.forEach(function (q) { updaters[q.no](); });

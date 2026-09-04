@@ -231,7 +231,10 @@ input.why { border-color: #3a3a3a; font-size: 13px; }
    목록 점을 떼고 제목을 윗줄로 세운 뒤, 본문은 한 칸 들여 「–」로 잇는다. */
 .guideList li.lead { padding-left: 0; }
 .guideList li.lead::before { display: none; }
-.guideList li.lead .head { display: block; font-size: 15px; font-weight: 800; color: var(--ink);
+/* ★글자 크기로 차례를 만든다★ (2026-09-04 담당자) — 「평가 전 안내」16 > 「필수 요청사항」14.5 > 나머지 13.
+   종전에는 이 줄이 15px 라 상자 제목(14px)보다 커서 차례가 뒤집혀 있었다. */
+.guide h2 { font-size: 16px; }
+.guideList li.lead .head { display: block; font-size: 14.5px; font-weight: 800; color: var(--ink);
   letter-spacing: .02em; margin-bottom: 2px; }
 .guideList li.lead .body { display: block; padding-left: 12px; position: relative; }
 .guideList li.lead .body::before { content: '–'; position: absolute; left: 0; color: #6a6a6a; }
