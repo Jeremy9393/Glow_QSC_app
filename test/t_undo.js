@@ -229,12 +229,12 @@ function fnUndoSubmit(ctx, payload) {
     const avg = shopperMonthAvg(shop.sh, store, date, tz);
     return (typeof avg === 'number') ? avg / 100 : '';
   }
-  /* ★매장 파일에 쓸 때만 한 번 더 거른다★ (2026-09-04 검수에서 찾은 구멍)
+  /* ★MS 를 쓰는 곳은 전부 한 번 더 거른다★ (2026-09-04 검수에서 찾은 구멍)
      되돌리기는 남은 자료로 점수를 다시 계산해 쓴다. 그런데 그 달이 아직 안 끝났으면
-     ★매장 파일에 쓰는 순간 지연이 무너진다★ — 월중에 MS 점수가 매장 화면에 뜬다.
+     ★쓰는 순간 지연이 무너진다★ — 월중에 MS 점수가 매장 화면에 뜬다.
      그 달이 열리기 전에는 빈칸으로 둔다(월말 반영이 그때 채운다).
-     ⚠통합시트는 그대로 쓴다 — 본사 것이고 매장은 못 본다. */
-  function msAfterForStore() { return monthClosed(date, tz) ? msAfter() : ''; }
+     ★매장 파일과 통합시트에 똑같이 건다★ — 통합시트도 웹에 공개돼 매장이 본다. */
+  function msAfterVisible() { return monthClosed(date, tz) ? msAfter() : ''; }
 
   /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
   [round, detail, shop, shopMemo, na].forEach(function (t) {
@@ -257,12 +257,12 @@ function fnUndoSubmit(ctx, payload) {
       /* ★탭의 방문일이 다르면 지우지 않는다★ — 응답 시트에서는 안 보이는 회차가 그 탭에
          들어 있다는 뜻이다(담당자가 손으로 만든 탭 등). 지우면 되돌릴 수 없다. */
       if (doQsc) setByLabelAny(sh2, L_QSC, qscAfter());
-      if (doShop) setByLabelAny(sh2, L_MS, msAfterForStore());
+      if (doShop) setByLabelAny(sh2, L_MS, msAfterVisible());
       done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 고쳤습니다');
     }
     else if (monthEmpty) { ss2.deleteSheet(sh2); done.push('매장 파일 ' + tab + ' 탭 삭제'); }
     else {
-      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfterForStore() : '';
+      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfterVisible() : '';
       if (doQsc) setByLabelAny(sh2, L_QSC, qv);
       if (doShop) setByLabelAny(sh2, L_MS, mv);
       const parts = [(qv === '' && mv === '')
@@ -314,7 +314,7 @@ function fnUndoSubmit(ctx, payload) {
         ? (a.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (남은 자료로 다시 계산)'))) : a.error));
     }
     if (doShop) {
-      const v = msAfter();
+      const v = msAfterVisible();      // ★통합시트도 월중에는 빈칸으로 둔다★
       const b = writeDashboard(store, date, v, 2);
       done.push('통합시트 MS 칸: ' + (b.ok
         ? (b.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (그 달 남은 ' + shop.monthLeft + '건 평균)'))) : b.error));
@@ -402,7 +402,7 @@ var ms = wroteOf('통합시트:MS');
 ok('★통합시트 MS = 남은 3건 평균 0.90★', Math.abs(ms - 0.9) < 1e-9, '값=' + ms);
 ok('매장 파일 MS 도 같은 값', Math.abs(wroteOf('매장파일:MS점수') - 0.9) < 1e-9, '값=' + wroteOf('매장파일:MS점수'));
 
-console.log('\n[1-2] ★그 달이 아직 안 끝났으면 매장 파일에는 안 쓴다★ (2026-09-04 지연 규칙)');
+console.log('\n[1-2] ★그 달이 아직 안 끝났으면 두 곳 다 안 쓴다★ (2026-09-04 지연 규칙)');
 MONTH_OPEN = false;                       // 월중에 되돌린 경우
 reset([
   ['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60],
@@ -410,10 +410,16 @@ reset([
 ]);
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
 ok('되돌리기 성공', r.ok === true, JSON.stringify(r.error || ''));
-ok('★통합시트에는 그대로 쓴다★ (본사 것이라 매장이 못 본다)',
-   Math.abs(wroteOf('통합시트:MS') - 0.9) < 1e-9, '값=' + wroteOf('통합시트:MS'));
-ok('★매장 파일에는 빈칸★ — 월중에 점수가 보이면 지연이 무너진다',
+/* ★2026-09-04 규칙 변경★ — 종전에는 「통합시트에는 그대로 쓴다(본사 것이라 매장이 못 본다)」
+   였는데 ★그 전제가 틀렸다★: 통합시트는 「웹에 공개 · 링크가 있는 인터넷상의 모든 사용자」다.
+   매장 파일만 늦추면 매장이 통합시트에서 그대로 보므로 늦추는 장치가 무의미해진다.
+   그래서 되돌리기도 두 곳 모두 월중에는 빈칸으로 둔다. */
+ok('★통합시트도 빈칸★ — 매장이 이 시트를 본다',
+   wroteOf('통합시트:MS') === '', '값=' + JSON.stringify(wroteOf('통합시트:MS')));
+ok('★매장 파일도 빈칸★ — 월중에 점수가 보이면 지연이 무너진다',
    wroteOf('매장파일:MS점수') === '', '값=' + JSON.stringify(wroteOf('매장파일:MS점수')));
+ok('★MS 만 되돌렸으면 QSC 칸은 건드리지 않는다★ (지연은 MS 에만 건다)',
+   wroteOf('통합시트:QSC') === undefined, '값=' + JSON.stringify(wroteOf('통합시트:QSC')));
 MONTH_OPEN = true;                        // 나머지 시험은 열린 달 기준
 
 console.log('\n[2] 그 달에 아무것도 안 남으면 ★빈칸★ (0점이 아니다)');
