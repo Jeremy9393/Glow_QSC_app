@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v103', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v108', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -359,6 +359,10 @@ function actionTable() {
     'admin.shareProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnShareProbe },
     /* 앱 계정을 매장 파일 편집자로 못 박는다 — ★기본이 미리보기★ */
     'admin.shareFix':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnShareFix },
+    /* 개선율이 월 탭 → 요약 탭 → 통합시트 중 어디서 끊기는지 ★읽기만★ 한다 */
+    'admin.rateProbe':    { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnRateProbe },
+    /* 요약 탭에서 잠든 칸을 깨운다(같은 수식을 다시 쓴다) — ★기본이 미리보기★ */
+    'admin.wakeSummary':  { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnWakeSummary },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -5911,6 +5915,305 @@ function fnShareProbe(ctx, payload) {
 
    ⚠26곳을 한 번에 부르지 말 것 — 드라이브 호출이 파일마다 여러 번이라 45초 시한에 걸린다.
    ⚠주인 계정은 편집자로 넣을 수 없다(넣을 필요도 없다) — 그런 곳은 건너뛴다. */
+/* ---------- 개선율이 어디서 끊기는가 (2026-09-07) ----------
+
+   ★아무것도 바꾸지 않는다★ — 읽기만 한다.
+
+   2026-09-04 검수에서 찾은 것:
+     호우주의보 이태원 2612  매장 파일 종합 87.2  ↔  통합시트 종합 97.2  (10점 차)
+   월 탭에는 개선율 0 이 들어 있는데(종합 87.2 가 그 증거) 통합시트는 빈칸을 받고 있다.
+   통합시트 종합 수식이 =IF(COUNT(BV,BX)<2,"", … IF(BZ="",1,BZ)*0.1) 이라
+   ★개선율이 비면 100%로 쳐서 10점이 더 붙는다★.
+
+   값이 건너오는 길은 세 걸음이다. 그 세 걸음을 ★값과 수식을 나란히★ 찍어 어디서 끊기는지 본다.
+     ① 월 탭 '개선율' 칸
+     ② 요약 탭(월별 QSC현황표) 그 달 칸 — 월 탭을 VLOOKUP 으로 읽는다
+     ③ 통합시트 개선 칸 (MONTH_COL[m]+4) — 요약 탭을 IMPORTRANGE 로 읽는다
+
+   부르는 법
+     await Api.call('admin.rateProbe', {store:'호우주의보 이태원', ym:'2612'})
+     await Api.call('admin.rateProbe', {store:'호우주의보 이태원'})        ← 이번 달
+*/
+/* ---------- 요약 탭에서 잠든 칸을 깨운다 (2026-09-07) ----------
+
+   ★무엇이 잘못돼 있었나★
+   매장 파일 요약 탭(월별 QSC현황표)은 월 탭을 VLOOKUP 으로 읽는다.
+     N8: =IFERROR(VLOOKUP("개선율", '2612'!D2:I9, 5, FALSE), "")
+   그런데 ★그 수식은 월 탭이 태어나기 전부터 거기 있었다★. 없는 탭을 가리키던 동안 오류였고,
+   나중에 탭이 생겨도 구글 시트가 다시 계산하지 않아 그대로 빈칸으로 굳었다.
+
+   2026-09-07 확인 — 같은 매장 같은 수식인데 결과만 다르다:
+     2609  월 탭 H9=0 · 요약 K8 = 0      (탭이 먼저 있었다)
+     2612  월 탭 H9=0 · 요약 N8 = ""     (탭이 나중에 생겼다)
+   그래서 통합시트 개선율이 빈칸이 되고, 종합 수식이 IF(개선율="",1,…) 로 ★100%로 쳐서
+   종합이 10점 높게★ 나왔다(호우주의보 이태원 2612: 매장 파일 87.2 ↔ 통합시트 97.2).
+
+   ★10월에 26곳 전부에서 같은 일이 난다★ — 10월 탭도 첫 제출 때 태어나기 때문이다.
+
+   ★고치는 방법은 「같은 수식을 다시 쓰는 것」뿐이다★ — 내용은 한 글자도 바뀌지 않는다.
+   다시 쓰는 순간 구글 시트가 그 칸을 새로 계산한다. 그래서 되돌릴 것도 없다.
+
+   ⚠수식이 없는 칸은 건드리지 않는다 — 손으로 넣은 값을 수식으로 덮으면 그 값이 사라진다.
+   ⚠지난 달은 손대지 않는다(기본 2609~) — fixSummary 와 같은 기준이다.
+
+   부르는 법
+     await Api.call('admin.wakeSummary', {store:'호우주의보 이태원', ym:'2612'})   ← 미리보기
+     await Api.call('admin.wakeSummary', {store:'호우주의보 이태원', ym:'2612', apply:true})
+     await Api.call('admin.wakeSummary', {ym:'2612', page:0, apply:true})          ← 8곳씩
+*/
+/* 한 매장 파일의 요약 탭에서 ★그 달 칸의 수식을 같은 내용으로 다시 쓴다★.
+   ★알맹이는 여기 한 곳뿐이다★ — 월 탭을 만드는 자리와 관리자 버튼이 같은 함수를 쓴다.
+   두 벌로 만들면 확인한 쪽과 실제로 도는 쪽이 갈라진다(이 저장소에서 겪은 일이다).
+
+   apply=false 면 무엇을 할지만 돌려준다. 아무것도 바꾸지 않는다. */
+function wakeSummaryIn(ss, ym, apply) {
+  const mon = parseInt(String(ym).slice(2, 4), 10);
+  const sh = ss.getSheetByName(SUM_TAB);
+  if (!sh) return { ok: false, why: SUM_TAB + ' 탭이 없습니다' };
+  const nr = Math.min(sh.getLastRow(), 30), nc = Math.min(sh.getLastColumn(), 30);
+  if (!nr || !nc) return { ok: false, why: SUM_TAB + ' 탭이 비어 있습니다' };
+  const vals = sh.getRange(1, 1, nr, nc).getValues();
+  const fmls = sh.getRange(1, 1, nr, nc).getFormulas();
+
+  /* 그 달 열 — ★머리글(1월…12월)로 정한다★ (fixSummary 와 같은 기준.
+     수식이 가리키는 달로 정하면 붙여넣기 사고에 오염된 파일에서 엉뚱한 열을 짚는다) */
+  let cc = 0;
+  for (let r = 0; r < Math.min(nr, 8) && !cc; r++) {
+    for (let c = 0; c < nc; c++) {
+      const mm = sumNorm(vals[r][c]).match(/^(\d{1,2})월$/);
+      if (mm && Number(mm[1]) === mon) { cc = c + 1; break; }
+    }
+  }
+  if (!cc) return { ok: false, why: '머리글에서 ' + mon + '월 열을 못 찾았습니다' };
+
+  const todo = [];
+  for (let r = 0; r < nr; r++) {
+    const lab = sumNorm(vals[r][1]);
+    if (SUM_ROW_LABELS.indexOf(lab) < 0) continue;
+    const f = fmls[r][cc - 1];
+    if (!f) continue;                                  // ★수식이 없는 칸은 건드리지 않는다★
+    const v = vals[r][cc - 1];                         //   손으로 넣은 값을 덮으면 사라진다
+    if (v !== '' && v != null) continue;               // 이미 값이 나오면 깨울 것이 없다
+    todo.push({ row: r + 1, f: f, lab: lab });
+  }
+  if (!apply) return { ok: true, col: cc, todo: todo, woke: 0, got: [] };
+
+  todo.forEach(function (x) { sh.getRange(x.row, cc).setFormula(x.f); });
+  if (todo.length) SpreadsheetApp.flush();
+  const after = todo.length ? sh.getRange(1, cc, nr, 1).getValues() : [];
+  const got = todo.filter(function (x) {
+    const v = after[x.row - 1][0];
+    return v !== '' && v != null;
+  }).map(function (x) { return x.lab + '=' + after[x.row - 1][0]; });
+  return { ok: true, col: cc, todo: todo, woke: got.length, got: got };
+}
+
+function fnWakeSummary(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+  const ym = String(p.ym || '').trim() || curYymm();
+  if (!validYm(ym)) return err('BAD_REQUEST', 'ym 형식이 올바르지 않습니다 (예: 2610)');
+  if (ym < SUM_FROM) return err('BAD_REQUEST', SUM_FROM + ' 이전 달은 손대지 않습니다.');
+  const mon = parseInt(ym.slice(2, 4), 10);
+
+  const all = displayStores();
+  const size = 8;
+  const page = Math.max(0, parseInt(p.page || 0, 10) || 0);
+  const list = p.store ? [normStore(String(p.store))] : all.slice(page * size, (page + 1) * size);
+  if (!list.length) return { ok: true, 안내: '그 쪽에는 매장이 없습니다 (총 ' + all.length + '곳)' };
+
+  const rows = [];
+  let 깨울것 = 0, 깨웠다 = 0, 실패 = 0;
+  list.forEach(function (store) {
+    const id = storeFileId(store);
+    if (!id) { rows.push(store + ' — ★매장 파일 링크를 못 찾음★'); 실패++; return; }
+    try {
+      const ss = SpreadsheetApp.openById(id);
+      const w = wakeSummaryIn(ss, ym, apply);
+      if (!w.ok) { rows.push(store + ' — ★' + w.why + '★'); 실패++; return; }
+      if (!w.todo.length) { rows.push(store + ' — 깨울 칸이 없습니다 (이미 값이 나옵니다)'); return; }
+      깨울것 += w.todo.length;
+      if (!apply) {
+        rows.push(store + ' → ' + w.todo.length + '칸을 깨웁니다 (' +
+          w.todo.map(function (x) { return x.lab; }).join('·') + ')');
+        return;
+      }
+      깨웠다 += w.woke;
+      rows.push(store + ' ✓ ' + w.woke + '/' + w.todo.length + '칸이 값을 냈습니다' +
+        (w.woke ? (' — ' + w.got.join(' · ')) : ' ★여전히 빈칸 — 다른 원인입니다★'));
+    } catch (e) {
+      실패++;
+      rows.push(store + ' — ★실패: ' + String(e).slice(0, 70) + '★');
+    }
+  });
+
+  if (apply) {
+    auditLog(ctx, 'admin.wakeSummary', p.store ? String(p.store) : ('page' + page), '성공', '',
+      ym + ' 요약 탭 깨우기 · ' + 깨웠다 + '칸');
+  }
+  return {
+    ok: true, 달: ym, 적용: apply, 쪽: page, 전체매장: all.length,
+    남은쪽: p.store ? 0 : Math.max(0, Math.ceil(all.length / size) - 1 - page),
+    깨울것: 깨울것, 깨웠다: 깨웠다, 실패: 실패, 한일: rows,
+    안내: apply ? '' : '실제로 하려면 {apply:true} 를 붙여 다시 부르십시오 (지금은 아무것도 안 바꿨습니다)'
+  };
+}
+
+function fnRateProbe(ctx, payload) {
+  const p = payload || {};
+  const store = normStore(String(p.store || ''));
+  if (!store) return err('BAD_REQUEST', '매장을 지정해 주세요.');
+  const ym = String(p.ym || '').trim() || curYymm();
+  if (!validYm(ym)) return err('BAD_REQUEST', 'ym 형식이 올바르지 않습니다 (예: 2612)');
+  const mon = parseInt(ym.slice(2, 4), 10);
+
+  const out = { 매장: store, 달: ym, 걸음: {} };
+  const id = storeFileId(store);
+  if (!id) return err('BAD_REQUEST', '매장 파일 링크를 통합시트 D열에서 찾지 못했습니다.');
+  const ss = SpreadsheetApp.openById(id);
+
+  /* ── ① 월 탭 '개선율' 칸 ── */
+  try {
+    const sh = ss.getSheetByName(ym);
+    if (!sh) {
+      out.걸음['① 월 탭'] = { 있나: false, 말: ym + ' 탭이 없습니다' };
+    } else {
+      const lm = labelMap(sh);
+      const r = labelValue(lm, ['개선율']);
+      const one = { 있나: true, 라벨찾음: !!r.found, 값: r.v, 값종류: typeof r.v };
+      try {
+        const at = lm.at && lm.at['개선율'];
+        if (at) {
+          one.라벨자리 = sh.getRange(at.row, at.col).getA1Notation();
+          const c = sh.getRange(at.row, at.col + 1);
+          one.값자리 = c.getA1Notation();
+          one.값칸수식 = c.getFormula() || '(수식 아님)';
+        }
+      } catch (e) { }
+      /* ★요약 탭 VLOOKUP 이 보는 범위(D2:I9)를 통째로 찍는다★ — 어느 칸에 무엇이
+         들어 있는지 눈으로 봐야 '몇 번째 열'이 맞는지 판정할 수 있다. */
+      try {
+        const blk = sh.getRange(2, 4, 8, 6).getValues();      // D2:I9
+        one['범위 D2:I9'] = blk.map(function (row, i) {
+          return 'D' + (i + 2) + '~I' + (i + 2) + ' : ' + row.map(function (v) {
+            return (v === '' || v == null) ? '·' : String(v).slice(0, 18);
+          }).join(' | ');
+        });
+      } catch (e) { one['범위 D2:I9'] = '못 읽음: ' + String(e).slice(0, 50); }
+      /* ★VLOOKUP 이 하는 일을 그대로 흉내내 본다★ — 시트가 "" 를 주는데 손으로 하면
+         값이 나온다면, 못 찾는 게 아니라 ★시트가 계산을 안 한 것★이다(재계산 안 됨).
+         라벨 글자는 JSON 으로 찍는다 — 눈에 안 보이는 공백·줄바꿈이 원인인 적이 많다. */
+      try {
+        const blk = sh.getRange(2, 4, 8, 6).getValues();      // D2:I9
+        const 손수 = [];
+        SUM_ROW_LABELS.forEach(function (lab) {
+          let hit = null;
+          for (let i = 0; i < blk.length; i++) {
+            if (String(blk[i][0]) === lab) { hit = { 줄: i + 2, 다섯번째: blk[i][4] }; break; }
+          }
+          손수.push(lab + ' → ' + (hit ? ('D' + hit.줄 + ' 일치 · H' + hit.줄 + '=' + JSON.stringify(hit.다섯번째))
+                                        : '★D열에서 글자가 똑같은 칸을 못 찾음★'));
+        });
+        one['손수 VLOOKUP'] = 손수;
+        one['D열 글자 그대로'] = blk.map(function (row, i) {
+          return 'D' + (i + 2) + '=' + JSON.stringify(row[0]);
+        });
+      } catch (e) { one['손수 VLOOKUP'] = '못 함: ' + String(e).slice(0, 50); }
+      /* 병합이면 VLOOKUP 이 보는 칸이 달라질 수 있다 */
+      try {
+        const mg = sh.getRange(2, 4, 8, 6).getMergedRanges();
+        one['병합'] = mg.map(function (r) { return r.getA1Notation(); }).slice(0, 12);
+      } catch (e) { one['병합'] = '못 읽음'; }
+      out.걸음['① 월 탭'] = one;
+    }
+  } catch (e) { out.걸음['① 월 탭'] = { 오류: String(e).slice(0, 80) }; }
+
+  /* ── ② 요약 탭 그 달 칸 ── */
+  try {
+    const sh = ss.getSheetByName(SUM_TAB);
+    if (!sh) {
+      out.걸음['② 요약 탭'] = { 있나: false, 말: SUM_TAB + ' 탭이 없습니다' };
+    } else {
+      const rows = Math.min(sh.getLastRow(), 30);
+      const cols = Math.min(sh.getLastColumn(), 30);
+      const vals = sh.getRange(1, 1, rows, cols).getValues();
+      const fmls = sh.getRange(1, 1, rows, cols).getFormulas();
+      /* 개선율 줄 — B열 라벨로 */
+      let rr = 0;
+      for (let r = 0; r < rows; r++) {
+        if (sumNorm(vals[r][1]) === '개선율') { rr = r + 1; break; }
+      }
+      /* 그 달 열 — 머리글(1월…12월)로 */
+      let cc = 0, hrow = 0;
+      for (let r = 0; r < Math.min(rows, 8) && !cc; r++) {
+        for (let c = 0; c < cols; c++) {
+          const mm = sumNorm(vals[r][c]).match(/^(\d{1,2})월$/);
+          if (mm && Number(mm[1]) === mon) { cc = c + 1; hrow = r + 1; break; }
+        }
+      }
+      const one = { 있나: true, 개선율줄: rr || '★못 찾음★', 그달열: cc || '★못 찾음★', 머리글줄: hrow };
+      if (rr && cc) {
+        one.칸 = sh.getRange(rr, cc).getA1Notation();
+        one.값 = vals[rr - 1][cc - 1];
+        one.값종류 = typeof vals[rr - 1][cc - 1];
+        one.수식 = fmls[rr - 1][cc - 1] || '(수식 아님)';
+        /* 그 줄에 값이 있는 달을 전부 — 어느 달까지 채워져 있는지 한눈에 */
+        const 채움 = [];
+        for (let c = 1; c <= cols; c++) {
+          const v = vals[rr - 1][c - 1];
+          if (v !== '' && v != null) 채움.push(sh.getRange(rr, c).getA1Notation() + '=' + v);
+        }
+        one.그줄에값있는칸 = 채움.slice(0, 16);
+      }
+      /* ★다섯 줄이 같은 문제를 갖고 있는지★ — 개선율만 고치면 나머지가 남는다 */
+      try {
+        const 다섯 = [];
+        for (let r = 0; r < rows; r++) {
+          const lab = sumNorm(vals[r][1]);
+          if (SUM_ROW_LABELS.indexOf(lab) < 0) continue;
+          const row = { 줄: r + 1, 라벨: lab };
+          if (cc) {
+            row['그달값'] = vals[r][cc - 1];
+            row['그달수식'] = (fmls[r][cc - 1] || '(수식 아님)').replace(/\s+/g, ' ').slice(0, 78);
+          }
+          다섯.push(row);
+        }
+        one['다섯 줄'] = 다섯;
+      } catch (e) { one['다섯 줄'] = '못 읽음: ' + String(e).slice(0, 50); }
+      out.걸음['② 요약 탭'] = one;
+    }
+  } catch (e) { out.걸음['② 요약 탭'] = { 오류: String(e).slice(0, 80) }; }
+
+  /* ── ③ 통합시트 개선 칸 ── */
+  try {
+    if (!DASHBOARD_ID) {
+      out.걸음['③ 통합시트'] = { 말: '통합시트 ID 가 설정돼 있지 않습니다' };
+    } else {
+      const dsh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET);
+      const last = dsh.getLastRow();
+      const names = dsh.getRange(6, STORE_NAME_COL, Math.max(0, last - 5), 1).getValues();
+      let row = 0;
+      for (let i = 0; i < names.length; i++) {
+        if (normStore(names[i][0]) === store) { row = 6 + i; break; }
+      }
+      if (!row) {
+        out.걸음['③ 통합시트'] = { 말: '그 매장 행을 못 찾았습니다' };
+      } else {
+        const base = MONTH_COL[mon];
+        const one = { 행: row };
+        [['QSC', 0], ['MS', 2], ['개선', 4], ['종합', 5]].forEach(function (pair) {
+          const c = dsh.getRange(row, base + pair[1]);
+          one[pair[0]] = { 칸: c.getA1Notation(), 값: c.getValue(),
+                           값종류: typeof c.getValue(), 수식: c.getFormula() || '(수식 아님)' };
+        });
+        out.걸음['③ 통합시트'] = one;
+      }
+    }
+  } catch (e) { out.걸음['③ 통합시트'] = { 오류: String(e).slice(0, 80) }; }
+
+  return { ok: true, probe: true, 결과: out };
+}
+
 function fnShareFix(ctx, payload) {
   const p = payload || {};
   const apply = p.apply === true;
@@ -7374,6 +7677,21 @@ function makeMonthTabIn(ss, ym) {
        새 탭도 보호된 채 태어나고, store.saveImprove가 게이트·락·rev를 다 통과한 뒤
        setValues 한 줄에서 죽어 SERVER_ERROR로만 보인다. 만드는 김에 알려주는 편이
        26곳 전수 재감사보다 싸다. */
+    /* ★요약 탭의 그 달 칸을 깨운다★ (2026-09-07)
+       요약 탭 수식은 월 탭이 태어나기 ★전부터★ 그 탭을 가리키고 있다. 없는 탭을 가리키던
+       동안은 오류였고, 탭이 생겨도 구글 시트가 스스로 다시 계산하지 않아 ★빈칸으로 굳는다★.
+       그러면 통합시트 개선율이 비고, 종합 수식이 IF(개선율="",1,…) 로 100%로 쳐서
+       ★종합이 10점 높게★ 나온다(2026-09-04 검수에서 12월 시험 탭 두 곳에서 실제로 그랬다).
+       탭을 만든 자리에서 같은 수식을 다시 써 두면 26곳이 매달 저절로 맞는다.
+       ★실패해도 탭은 살린다★ — 탭이 없으면 제출 자체가 죽는다. */
+    try {
+      const wk = wakeSummaryIn(ss, ym, true);
+      if (!wk.ok) upNote += '  ★요약 탭을 못 깨웠습니다(' + wk.why + ')★';
+      else if (wk.todo.length) upNote += '  · 요약 탭 ' + wk.todo.length + '칸 다시 씀 ✓';
+    } catch (e) {
+      upNote += '  ★요약 탭 깨우기 실패(' + String(e).slice(0, 40) + ')★';
+    }
+
     let mark = '✓';
     let note = '';
     try {
