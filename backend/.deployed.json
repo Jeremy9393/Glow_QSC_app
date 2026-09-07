@@ -1,6 +1,6 @@
 {
- "sha256": "3c0654bd53f0edd86804f005cd882d28a9bec59106a42fdefc0dc10ec934b660",
- "version": 103,
- "when": "2026-09-04 16:29:30",
- "description": "2026-09-04 admin.shareFix — 앱 계정을 매장 파일 편집자로 (기본 미리보기)"
+ "sha256": "31fdf546f8c669c1835ef2940c60aae020c56e7d363a30388b4f3ae02a031e65",
+ "version": 108,
+ "when": "2026-09-07 09:11:16",
+ "description": "2026-09-07 월 탭 만들 때 요약 탭을 깨운다 (wakeSummaryIn 공용)"
 }
