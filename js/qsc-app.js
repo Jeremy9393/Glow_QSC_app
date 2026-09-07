@@ -806,6 +806,16 @@
           (star.length ? star : r.undone).forEach(function (t) { done += '\n   · ' + t; });
           if (star.length) done += '\n   ★ 표시가 있는 줄은 손으로 마무리해 주세요.';
         }
+        /* ★사진이 버려졌으면 반드시 말한다★ (2026-09-07)
+           서버는 photosSkipped 로 알려주고 있었는데 이 화면이 읽지 않았다. 그래서
+           담당자가 사진 4장을 붙였는데 1장만 저장되고도 「저장 완료」만 떴다.
+           이 화면이 가장 싫어하는 '조용한 실패'라, 무엇을 해야 하는지까지 적는다. */
+        if (r.photosSkipped) {
+          done += '\n\n★사진 ' + r.photosSkipped + '장이 저장되지 않았습니다★' +
+            (r.photosWhy ? ('\n   ' + r.photosWhy) : '') +
+            '\n   그 사진은 매장에 전달되지 않습니다.' +
+            '\n   [사진] 을 다시 눌러 올리거나, 담당자에게 알려 주세요.';
+        }
         const sf = r.storeFile;
         /* ★기록하지 못했으면 반드시 말한다★ — '조용한 실패'를 막는 자리다.
            (2026-08-27: 쓰기 밸브를 없앴으므로 skipped 는 이제 안 온다. ok:false 만 남는다.)
