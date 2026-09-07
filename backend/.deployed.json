@@ -1,6 +1,6 @@
 {
- "sha256": "31fdf546f8c669c1835ef2940c60aae020c56e7d363a30388b4f3ae02a031e65",
- "version": 108,
- "when": "2026-09-07 09:11:16",
- "description": "2026-09-07 월 탭 만들 때 요약 탭을 깨운다 (wakeSummaryIn 공용)"
+ "sha256": "bce5e62aeae2c83852b76fb55e4fedf0adbc44a4b585d5bfd71ab9c81ea024d8",
+ "version": 109,
+ "when": "2026-09-07 12:27:26",
+ "description": "2026-09-07 admin.photoProbe — 개선요청 사진이 어디서 빠지는지 (읽기만)"
 }
