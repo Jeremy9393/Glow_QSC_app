@@ -69,13 +69,20 @@ async function initShopperForm(opts) {
     { id: 'order', label: '주문내역 *', full: true, control: '<input type="text" id="order" placeholder="주문한 메뉴">' },
     /* ★총평은 선택이다★ (2026-09-04 담당자) — 문항으로 못 담는 이야기를 받는 자리다.
        필수로 만들지 않는다 — 마지막 칸을 막으면 다 쓰고도 못 낸다. */
-    { id: '__extra', head: '추가로 하고 싶은 말 (선택)' },
-    /* ★이름·얼굴·체형은 받지 않는다★ (2026-08-27) · ★명찰의 닉네임까지는 받는다★ (2026-09-01)
-       — 위 주석 참고. 자리만 옮겼고 받는 내용은 그대로다. */
-    { id: 'staff', label: '응대 직원(닉네임, 성별 등)', full: true, control: '<input type="text" id="staff" placeholder="못 보셨다면 홀 직원, 주방 직원 등 간단히 적어 주세요">' },
-    { id: 'overall', label: '내용', full: true,
-      control: '<textarea id="overall" rows="3" maxlength="500" ' +
-        'placeholder="문항으로 담기 어려운 이야기가 있다면 자유롭게 적어 주세요"></textarea>' },
+    /* ★응대 직원 칸을 따로 두지 않는다★ (2026-09-07 담당자 — 실제 시험 결과)
+         *"미스터리쇼퍼분들이 응대직원을 잘 기억 못하기도 하고 응대직원에 대한 불만이 있을
+           경우에나 응대직원을 기억하기때문에 사람들이 좀 의아해 하더라고"*
+
+       빈칸이 놓여 있으면 기억 안 나는 사람도 뭔가 써야 할 것 같아진다. 그리고 직원이
+       기억나는 때는 대개 ★불편했던 때★라, 그 칸이 사실상 불만 신고란으로 굳는다.
+       그래서 한 칸으로 합치고 ★칭찬을 예시 맨 앞에★ 둔다 — 먼저 오는 예시가 칸의 성격을 정한다.
+       ★「큰 도움이 됩니다」를 붙인다★ (담당자) — 선택 칸이라 쓸 이유를 주어야 쓴다.
+         「짧은 한마디도」를 앞에 둬서 길게 써야 한다는 부담을 없앤다.
+       ⚠시트의 「응대직원설명」 열은 ★그대로 두고 비운다★ — 지난 자료가 그 열에 들어 있다. */
+    { id: 'overall', label: '추가로 하고 싶은 말 (선택)', full: true,
+      control: '<textarea id="overall" rows="4" maxlength="500" ' +
+        'placeholder="응대 직원 칭찬, 개선했으면 하는 점, 문항으로 담기 어려운 이야기 등 ' +
+        '자유롭게 적어 주세요.&#10;짧은 한마디도 매장을 바꾸는 데 큰 도움이 됩니다."></textarea>' },
   ];
   if ($('#guideBox')) {
     $('#guideBox').innerHTML = '<h2>평가 전 안내</h2><ul class="guideList">' +
@@ -96,7 +103,7 @@ async function initShopperForm(opts) {
            손님이 첫 화면에서 넘어야 할 칸이 7개에서 3개(손님은 매장이 잠기니 2개)로 준다
      ★상자는 JS가 만들어 #cats 뒤에 끼운다★ — 화면 두 개(shopper.html·survey.html)를
      따로 고치면 어긋난다. 한 뿌리에서 나와야 한다는 원칙(파일 첫 주석)을 지킨다. */
-  const LATE_IDS = { demo: 1, order: 1, __extra: 1, staff: 1, overall: 1 };
+  const LATE_IDS = { demo: 1, order: 1, overall: 1 };
   function metaHtml(list) {
     return '<div class="meta-grid">' + list.map(function (f) {
       // head 만 있는 항목은 입력칸이 아니라 묶음의 머리다 (아래 칸들이 그 밑에 딸린다)
@@ -328,7 +335,7 @@ async function initShopperForm(opts) {
        다음에 설문지를 연 사람이 그 코드로 아무 매장에나 제출할 수 있게 된다. 칸을 늘릴 때 주의. */
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
       store: $('#store').value, date: $('#date').value, time: TimePick.get('time'),
-      staff: $('#staff').value, order: $('#order').value, demo: $('#demo').value,
+      staff: '', order: $('#order').value, demo: $('#demo').value,
       overall: $('#overall') ? $('#overall').value : '',
       answers: state.answers, memos: state.memos, t: Date.now(),
     }));
@@ -464,7 +471,7 @@ async function initShopperForm(opts) {
       const val = f.get ? f.get() : $('#' + f.id).value.trim();
       if (!val) {
         alert(withEulReul(f.label) + ' ' + (f.verb || (f.pick ? '선택해' : '입력해')) + ' 주세요.' +
-          (f.id === 'staff' ? '\n명찰의 닉네임을 적어 주세요. ★직원의 이름·얼굴·체형은 적지 않습니다.★\n못 보셨거나 명찰이 이름이면 홀 직원·주방 직원처럼 역할로 적어 주세요.\n무슨 일이 있었는지는 그 문항의 비고에 적으시면 됩니다.' : '') +
+
           (f.id === 'demo' ? '\n응대 직원이 아니라, 설문을 작성하시는 본인 기준으로 적어 주세요.' : ''));
         $('#' + (f.focus || f.id)).focus();
         return;
@@ -517,7 +524,8 @@ async function initShopperForm(opts) {
     const payload = {
       code: code,
       store: $('#store').value.trim(), date: $('#date').value, time: TimePick.get('time'),
-      staff: $('#staff').value.trim(), order: $('#order').value.trim(), demographic: $('#demo').value.trim(),
+      /* ★응대직원설명은 이제 받지 않는다★ (2026-09-07) — 빈 값을 보내 시트 열은 그대로 둔다 */
+      staff: '', order: $('#order').value.trim(), demographic: $('#demo').value.trim(),
       overall: $('#overall') ? $('#overall').value.trim() : '',
       submittedAt: new Date().toISOString(),
       source: ADMIN ? 'admin' : 'customer',
@@ -594,7 +602,7 @@ async function initShopperForm(opts) {
     btn.disabled = false; btn.textContent = '제출';
   };
 
-  ['store', 'date', 'staff', 'order', 'demo', 'overall'].forEach(function (id) {
+  ['store', 'date', 'order', 'demo', 'overall'].forEach(function (id) {
     $('#' + id).addEventListener('input', saveDraft);
   });
   TimePick.onChange('time', saveDraft);
@@ -620,7 +628,6 @@ async function initShopperForm(opts) {
     $('#date').value = draft.date || todayStr();
     // 방문 시간은 기본값을 두지 않는다 — 방문 시각과 작성 시각이 다를 수 있으므로 직접 고르게 함
     TimePick.set('time', draft.time || '');
-    $('#staff').value = draft.staff || '';
     $('#order').value = draft.order || '';
     $('#demo').value = draft.demo || '';
     if ($('#overall')) $('#overall').value = draft.overall || '';
