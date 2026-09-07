@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v109', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v111', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3304,6 +3304,7 @@ function saveQsc(ss, p, ctx) {
   const out = { ok: true, saved: rows.length, photos: photoN, dashboard: extra.dashboard, storeFile: extra.storeFile };
   if (photoMap.__skipped) {
     out.photosSkipped = photoMap.__skipped;
+    if (photoMap.__why) out.photosWhy = photoMap.__why;
     /* 조용히 사라지면 아무도 모른다 — 담당자가 볼 수 있는 곳에 남긴다 */
     auditLog(ctx || anonCtx(), 'qsc.submit', p.store, '경고', 'PHOTO_SKIPPED',
       '용량·형식이 맞지 않아 저장하지 않은 사진 ' + photoMap.__skipped + '장');
@@ -5165,7 +5166,11 @@ function writeStoreShopper(store, dateStr, frac) {
 function validPhoto(dataUrl) {
   const s = String(dataUrl || '');
   if (!/^data:image\/(jpeg|jpg|png);base64,/.test(s)) return '형식이 올바르지 않은 사진입니다.';
-  if (s.length > 400 * 1024) return '사진 한 장이 너무 큽니다.';
+  /* ★dataURL 기준이다★ — base64 라 실제 바이트의 약 1.33배다.
+     앱은 800px·품질 0.4 까지 낮춰 한 장 180KB(실바이트)를 목표로 하므로 보통 240KB 안이다.
+     그래도 사진에 따라 넘길 수 있어 여유를 둔다 — 제출 한도가 12MB 라 이 정도는 문제없다.
+     ★버릴 때는 반드시 사람에게 이유를 말한다★ (savePhotos 의 why). */
+  if (s.length > 700 * 1024) return '사진 한 장이 너무 큽니다(줄여도 700KB 초과).';
   return '';
 }
 
@@ -5217,6 +5222,8 @@ function photoQuotaOk(ctx, n, store) {
 function savePhotos(p, ctx) {
   const out = {};
   let skipped = 0;
+  /* ★왜 버렸는지도 함께 돌려준다★ (2026-09-07) — 개수만 알려주면 사람이 손쓸 수가 없다 */
+  const why = {};
   if (!PHOTO_FOLDER_ID) return out;
   let dayFolder = null;
   let folderShared = false;   // 그날 폴더에 공유를 이미 걸었는가 (한 번만 건다)
@@ -5236,8 +5243,9 @@ function savePhotos(p, ctx) {
     const slots = it.photoSlots || null;
     list.forEach(function (dataUrl, i) {
       if (!dataUrl) return;                      // 빈 자리는 조용히 건너뛴다 (경고 대상이 아니다)
-      if (used >= budget) { skipped++; return; }
-      if (validPhoto(dataUrl)) { skipped++; return; }
+      if (used >= budget) { skipped++; why['하루 상한을 넘었습니다'] = (why['하루 상한을 넘었습니다'] || 0) + 1; return; }
+      const bad = validPhoto(dataUrl);
+      if (bad) { skipped++; why[bad] = (why[bad] || 0) + 1; return; }
       used++;
       if (!dayFolder) {
         dayFolder = subFolder(subFolder(yearFolder(p.date, 'QSC점검'), safeName), fileSafe(p.date));
@@ -5271,7 +5279,10 @@ function savePhotos(p, ctx) {
       });
     });
   });
-  if (skipped) out.__skipped = skipped;
+  if (skipped) {
+    out.__skipped = skipped;
+    out.__why = Object.keys(why).map(function (k) { return k + ' ' + why[k] + '장'; }).join(' · ');
+  }
   return out;
 }
 

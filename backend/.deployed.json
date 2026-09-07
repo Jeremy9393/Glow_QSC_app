@@ -1,6 +1,6 @@
 {
- "sha256": "bce5e62aeae2c83852b76fb55e4fedf0adbc44a4b585d5bfd71ab9c81ea024d8",
- "version": 109,
- "when": "2026-09-07 12:27:26",
- "description": "2026-09-07 admin.photoProbe — 개선요청 사진이 어디서 빠지는지 (읽기만)"
+ "sha256": "442bcd435feeaddbe6d0153bece85886ddad3b3e9f7255e0f0af7149c082ba84",
+ "version": 111,
+ "when": "2026-09-07 12:47:37",
+ "description": "2026-09-07 사진이 조용히 사라지지 않게 — 버린 이유까지 알린다"
 }
