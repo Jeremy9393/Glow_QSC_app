@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v108', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v109', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -361,6 +361,8 @@ function actionTable() {
     'admin.shareFix':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnShareFix },
     /* 개선율이 월 탭 → 요약 탭 → 통합시트 중 어디서 끊기는지 ★읽기만★ 한다 */
     'admin.rateProbe':    { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnRateProbe },
+    /* 개선요청 사진이 응답 시트 → 매장 파일 중 어디서 빠지는지 ★읽기만★ 한다 */
+    'admin.photoProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnPhotoProbe },
     /* 요약 탭에서 잠든 칸을 깨운다(같은 수식을 다시 쓴다) — ★기본이 미리보기★ */
     'admin.wakeSummary':  { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnWakeSummary },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
@@ -6057,6 +6059,108 @@ function fnWakeSummary(ctx, payload) {
     깨울것: 깨울것, 깨웠다: 깨웠다, 실패: 실패, 한일: rows,
     안내: apply ? '' : '실제로 하려면 {apply:true} 를 붙여 다시 부르십시오 (지금은 아무것도 안 바꿨습니다)'
   };
+}
+
+/* ---------- 개선요청 사진이 어디서 빠지는가 (2026-09-07) ----------
+
+   ★아무것도 바꾸지 않는다★ — 읽기만 한다.
+
+   사진이 지나는 길은 세 걸음이다:
+     ① 앱이 보낸 것        — 몇 건에 사진 몇 장을 실었나 (photoSlots)
+     ② 응답 시트 QSC_상세  — savePhotos 가 적은 주소 (13번째 열)
+     ③ 매장 파일 월 탭      — writeStoreQscInto 가 =IMAGE() 로 넣은 것
+
+   ①은 지나간 요청이라 볼 수 없다. 그래서 ②와 ③을 나란히 세어 ★어느 구간에서 줄었는지★를 본다.
+     ②가 0 이면 → 앱이 안 보냈거나 올리다 실패했다
+     ②는 있는데 ③이 적으면 → 건별로 나누는 자리(photoSlots·expanded)에서 빠진 것이다
+
+   부르는 법
+     await Api.call('admin.photoProbe', {store:'이티에프 베이커리 더현대', date:'2026-12-01'})
+*/
+function fnPhotoProbe(ctx, payload) {
+  const p = payload || {};
+  const store = normStore(String(p.store || ''));
+  const date = String(p.date || '').trim();
+  if (!store) return err('BAD_REQUEST', '매장을 지정해 주세요.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('BAD_REQUEST', '날짜를 YYYY-MM-DD 로 주세요.');
+
+  const out = { 매장: store, 날짜: date };
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  /* ── ② 응답 시트 QSC_상세 ── */
+  try {
+    const sh = ss.getSheetByName('QSC_상세');
+    if (!sh) {
+      out['② 응답 시트'] = { 말: 'QSC_상세 시트가 없습니다' };
+    } else {
+      const last = sh.getLastRow();
+      const wide = Math.max(14, sh.getLastColumn());
+      const rng = grid(sh, 2, 1, Math.max(0, last - 1), wide);
+      const vals = rng ? rng.getValues() : [];
+      const head = grid(sh, 1, 1, 1, wide);
+      const hv = head ? head.getValues()[0].map(String) : [];
+      /* 매장·날짜가 맞는 줄만 */
+      const rows = [];
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i];
+        let hitStore = false, hitDate = false;
+        for (let c = 0; c < Math.min(6, v.length); c++) {
+          if (normStore(v[c]) === store) hitStore = true;
+          const s = (v[c] instanceof Date)
+            ? Utilities.formatDate(v[c], ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd')
+            : String(v[c] == null ? '' : v[c]).slice(0, 10);
+          if (s === date) hitDate = true;
+        }
+        if (!hitStore || !hitDate) continue;
+        const photoCell = String(v[12] == null ? '' : v[12]);      // 13번째 열
+        const urls = photoCell.split(/\s+/).filter(function (x) { return /https?:\/\//.test(x); });
+        rows.push({ 줄: i + 2, 문항: String(v[4] == null ? '' : v[4]).slice(0, 24),
+                    건수: v[5], 사진칸글자수: photoCell.length, 사진주소: urls.length });
+      }
+      out['② 응답 시트'] = {
+        머리글13번째: hv[12] || '(없음)',
+        찾은줄: rows.length,
+        사진주소합계: rows.reduce(function (a, b) { return a + b.사진주소; }, 0),
+        줄: rows.slice(0, 12)
+      };
+    }
+  } catch (e) { out['② 응답 시트'] = { 오류: String(e).slice(0, 90) }; }
+
+  /* ── ③ 매장 파일 월 탭 ── */
+  try {
+    const id = storeFileId(store);
+    const ym = yymm(date);
+    const fss = id ? SpreadsheetApp.openById(id) : null;
+    const sh = fss ? fss.getSheetByName(ym) : null;
+    if (!sh) {
+      out['③ 매장 파일'] = { 말: (id ? (ym + ' 탭이 없습니다') : '매장 파일 링크를 못 찾았습니다') };
+    } else {
+      const g = impGeo(sh);
+      const endRow = g.endRow || (g.row0 + 200);
+      const rng = grid(sh, g.row0, 2, Math.max(0, endRow - g.row0 + 1), Math.max(14, g.last - 1));
+      const vals = rng ? rng.getValues() : [];
+      const fmls = rng ? rng.getFormulas() : [];
+      const at = function (row, col) { return row[col - 2]; };
+      const rows = [];
+      for (let i = 0; i < vals.length; i++) {
+        const body = String(at(vals[i], g.body) == null ? '' : at(vals[i], g.body)).trim();
+        if (!body) continue;
+        const pf = String(at(fmls[i], g.photo) || '');
+        const pv = String(at(vals[i], g.photo) == null ? '' : at(vals[i], g.photo));
+        rows.push({ 줄: g.row0 + i, 내용: body.slice(0, 24),
+                    사진수식: pf ? (pf.slice(0, 44) + (pf.length > 44 ? '…' : '')) : '(없음)',
+                    사진값글자: pv.length });
+      }
+      out['③ 매장 파일'] = {
+        탭: ym, 사진열: g.photo,
+        개선요청줄: rows.length,
+        사진있는줄: rows.filter(function (r) { return r.사진수식 !== '(없음)'; }).length,
+        줄: rows.slice(0, 12)
+      };
+    }
+  } catch (e) { out['③ 매장 파일'] = { 오류: String(e).slice(0, 90) }; }
+
+  return { ok: true, probe: true, 결과: out };
 }
 
 function fnRateProbe(ctx, payload) {
