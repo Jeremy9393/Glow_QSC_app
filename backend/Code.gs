@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v121', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v122', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3729,14 +3729,29 @@ function buildDash(key) {
     delete r._prevTotal;
     delete r._prevRank;
   }
-  const unscored = rows.filter(function (r) { return r.rank === null; });
-  const ordered = scored.concat(unscored);
+  /* ★2026-09-08 담당자 — 시트 순서 그대로 보낸다★
+       *"매장들 정렬을 점수대로하지말고 실제 시트에있는 순서대로(이름순일꺼야) 해줘..
+         1등부터 꼴등까지 매기는건 별로 좋지 않아서"*
+     종전에는 점수 높은 순(scored)에 미점검을 뒤에 붙여 보냈다. 화면에 등수를 안 찍어도
+     ★줄 자체가 순위표★였다 — 위에서 몇 번째인지 세면 그만이다.
+     rows 는 통합시트를 위에서부터 읽은 순서다. rank 는 필드로 계속 담아 보낸다
+     (전월 대비 delta 를 내는 데 쓰인다) — 화면은 그것을 정렬에도 쓰지 않는다. */
+  const ordered = rows;
 
   const totals = scored.map(function (r) { return r.total; });
+  /* ★평균을 셋으로 나눈다★ (2026-09-08 담당자 — *"위생평균, CS평균, 종합평균으로 바꿔줘"*)
+     각각 ★그 점수가 있는 매장만★으로 나눈다. MS 가 아직 안 열린 달에는 QSC 평균만 나오는데,
+     그것이 맞다 — 없는 값을 0으로 치면 평균이 통째로 주저앉는다. */
+  function avgOf(pick) {
+    const v = rows.map(pick).filter(function (x) { return typeof x === 'number'; });
+    return v.length ? round1(v.reduce(function (a, b) { return a + b; }, 0) / v.length) : null;
+  }
   const stats = {
     n: rows.length,
     scored: scored.length,
     avgTotal: totals.length ? round1(totals.reduce(function (a, b) { return a + b; }, 0) / totals.length) : null,
+    avgQsc: avgOf(function (r) { return r.qsc; }),
+    avgCs: avgOf(function (r) { return r.cs; }),
     top: totals.length ? totals[0] : null,
     bottom: totals.length ? totals[totals.length - 1] : null
   };

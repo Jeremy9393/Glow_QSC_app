@@ -1,6 +1,6 @@
 {
- "sha256": "8208ffd46ee07098e400f78249827fd5a0c1f17bd6e5e1229bf75676c42f5a9e",
- "version": 121,
- "when": "2026-09-08 12:02:38",
- "description": "2026-09-08 status.month MS 집계 열 밀림 수정 — 그 달 MS 제출이 늘 0곳이던 것"
+ "sha256": "cc92f109d9a6d7010433eadc03effaff2168fb860f3bbe4883533106bbed121f",
+ "version": 122,
+ "when": "2026-09-08 12:32:15",
+ "description": "2026-09-08 통합시트 — 시트 순서 그대로 보내기 + 위생·CS 평균 추가"
 }

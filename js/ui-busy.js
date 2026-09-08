@@ -72,6 +72,34 @@ const Busy = (function () {
     if (why) console.warn('[Busy] ' + why);
   }
 
+  // ── 작은 표시 (화면 오른쪽 위) ────────────────────────────
+  let tinyBox = null;
+  let tinyTimer = null;
+
+  function tinyOn() {
+    if (!tinyBox) {
+      tinyBox = document.createElement('div');
+      tinyBox.className = 'busyTiny';
+      tinyBox.id = 'busyTiny';
+      /* aria-hidden — 배경 갱신은 사람이 시킨 일이 아니라서, 읽어 주면 오히려 방해가 된다.
+         「지금 갱신 중」이라는 사실은 각 화면의 안내 줄(#stateNote 등)이 이미 글로 말한다. */
+      tinyBox.setAttribute('aria-hidden', 'true');
+      tinyBox.innerHTML = '<span class="busyTinySpin"></span><span>갱신 중</span>';
+      document.body.appendChild(tinyBox);
+    }
+    tinyBox.classList.add('on');
+    if (tinyTimer) clearTimeout(tinyTimer);
+    /* 30초 안전장치 — 배경 갱신은 실패해도 조용히 끝나는 길이 있어서(설계상 그렇다)
+       tiny(false) 를 못 부르는 경우가 생길 수 있다. 구석의 작은 표시라 덮개만큼
+       급하지는 않지만, 영영 도는 동그라미는 「멈춘 앱」으로 읽힌다. */
+    tinyTimer = setTimeout(function () { tinyOff(); }, 30000);
+  }
+
+  function tinyOff() {
+    if (tinyTimer) { clearTimeout(tinyTimer); tinyTimer = null; }
+    if (tinyBox) tinyBox.classList.remove('on');
+  }
+
   return {
     /* msg 를 안 주면 「처리 중입니다…」 — 무엇을 기다리는지 적어 주는 편이 늘 낫다
        autoOff(ms) 를 주면 그만큼 뒤에 스스로 걷힌다 — 화면 이동처럼 ★off 를 부를 사람이
@@ -123,7 +151,27 @@ const Busy = (function () {
     },
 
     /* 무슨 일이 있어도 끄고 싶을 때 (화면 전환 직전 등) */
-    reset: function () { hideNow(''); },
+    reset: function () { hideNow(''); tinyOff(); },
+
+    /* ★작은 표시★ — 화면 오른쪽 위 구석에 도는 동그라미 하나 (2026-09-08 담당자 결정)
+         *"로딩중인 모든 순간에는 다 들어갔으면 좋겠어서"* + *"그랬을경우 문제가 있어?"*
+
+       문제가 있어서 둘로 갈랐다. 이 앱은 ★캐시를 0초에 그리고 배경에서 갱신하는★ 구조다
+       (v62~v80). 그 목적이 「기다리지 않게 하는 것」인데, 배경 갱신까지 가운데 덮개를 씌우면
+       ★이미 볼 수 있는 화면을 가린다★ — 대시보드는 300초 캐시라 읽는 중에 덮이고,
+       매장 목록처럼 조용히 도는 것까지 덮이면 화면이 자꾸 깜빡인다.
+
+         보여 줄 것이 없다 (첫 진입·캐시 없음)  →  Busy.on()   가운데 덮개
+         이미 보이는 중 (배경 갱신)             →  Busy.tiny() 구석 작은 표시
+
+       ★겹쳐 세지 않는다★ — 배경 갱신은 여러 개가 동시에 돌 수 있고 어느 하나가 실패해도
+       조용히 끝난다(그렇게 설계돼 있다). 세다가 하나를 놓치면 표시가 영영 남는다.
+       그래서 마지막 tiny(false) 하나로 걷히고, 30초가 지나면 스스로 걷힌다. */
+    tiny: function (on) {
+      try {
+        if (on) tinyOn(); else tinyOff();
+      } catch (e) { console.warn('[Busy] tiny 실패', e); }
+    },
 
     /* 가장 안전한 쓰는 법 — 예외가 나도 반드시 꺼진다 */
     wrap: async function (fn, msg) {
