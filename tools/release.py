@@ -28,6 +28,16 @@ import time
 import urllib.request
 from pathlib import Path
 
+def vlabel(n):
+    """사람이 읽는 버전 이름 — 113 → 1.13 (2026-09-08 담당자 요청).
+       ★내부 숫자는 그대로다★ — sw.js 의 VER, 화면의 ?v=, ping 의 v123 은 기계가 대조하는
+       값이라 형식을 바꾸면 이 도구가 스스로 꼬인다. 보여 줄 때만 100 으로 나눈다."""
+    try:
+        return '%.2f' % (int(str(n).lstrip('v')) / 100.0)
+    except Exception:
+        return str(n)
+
+
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -156,7 +166,7 @@ if not m:
     VER = None
 else:
     VER = int(m.group(1))
-    ok('sw.js 버전 = v%d' % VER)
+    ok('sw.js 버전 = %s' % vlabel(VER))
 
     seen = {}
     for f in sorted(list(ROOT.glob('*.html')) + list(ROOT.glob('js/*.js')) + list(ROOT.glob('css/*.css'))):
@@ -322,9 +332,11 @@ else:
     if VER is None:
         pass
     elif VER > remote_ver:
-        ok('버전이 이미 올라가 있습니다 (실서버 v%d → 올릴 것 v%d)' % (remote_ver, VER))
+        ok('버전이 이미 올라가 있습니다 (실서버 %s → 올릴 것 %s)'
+           % (vlabel(remote_ver), vlabel(VER)))
     elif CHECK_ONLY:
-        fail('파일은 바뀌었는데 캐시 버전이 그대로입니다 (v%d) — 매장 폰이 옛 화면을 붙듭니다' % VER)
+        fail('파일은 바뀌었는데 캐시 버전이 그대로입니다 (%s) — 매장 폰이 옛 화면을 붙듭니다'
+             % vlabel(VER))
     else:
         new = VER + 1
         n = 0
@@ -351,7 +363,7 @@ else:
         _auth.write_text(_new, encoding='utf-8', newline='')
         ok('배포 날짜를 %s 로 적었습니다 (화면 맨 아래 표시)' % _today)
         VER = new
-        ok('캐시 버전을 v%d 로 올렸습니다 (%d개 파일 + sw.js)' % (new, n))
+        ok('캐시 버전을 %s 로 올렸습니다 (%d개 파일 + sw.js)' % (vlabel(new), n))
 
         # ★올린 뒤 스스로 다시 센다★ — 바꿔 놓고 "바꿨다"고 믿는 것이 오늘 사고의 형태다.
         left = {}
@@ -363,7 +375,7 @@ else:
             for x, fs in sorted(left.items()):
                 fail('버전을 올렸는데 ?v=%d 가 남았습니다 — %s' % (x, ', '.join(sorted(set(fs)))))
         else:
-            ok('올린 뒤 다시 세어 보니 전부 v%d 입니다' % new)
+            ok('올린 뒤 다시 세어 보니 전부 %s 입니다' % vlabel(new))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -390,7 +402,7 @@ if git('status', '--porcelain'):
     print('   커밋할 변경이 있습니다:')
     for line in git('status', '--short').split('\n'):
         print('     ' + line)
-    msg = os.environ.get('QSC_MSG') or ('앱 v%d — 배포 도구로 올림' % VER)
+    msg = os.environ.get('QSC_MSG') or ('앱 %s — 배포 도구로 올림' % vlabel(VER))
     git('add', '-A')
     git('commit', '-m', msg)
     ok('커밋했습니다: %s' % msg)
@@ -438,13 +450,13 @@ for attempt in range(1, 13):
                 and live_master.get('source_sha') == want_master.get('source_sha')
                 and live_shopper == want_shopper and live_qsc == want_qsc
                 and live_qs == [VER])
-        print('   [%2d] 실서버 v%s · 평가표 %s(%s) · 쇼퍼 %d · QSC %d'
+        print('   [%2d] 실서버 %s · 평가표 %s(%s) · 쇼퍼 %d · QSC %d'
               % (attempt, live_ver, live_master.get('version'),
                  str(live_master.get('source_sha'))[:6], live_shopper, live_qsc))
         if same:
             print('\n' + '═' * 60)
             print('배포 완료 — 실서버가 새 버전을 주고 있습니다')
-            print('  캐시 버전   v%d' % VER)
+            print('  캐시 버전   %s' % vlabel(VER))
             print('  평가표      %s (%s)' % (want_master.get('version'), want_master.get('source_sha')))
             print('  문항        QSC %d · 미스터리쇼퍼 %d' % (want_qsc, want_shopper))
             print('  매장        %d곳' % len(want_master.get('stores') or []))
