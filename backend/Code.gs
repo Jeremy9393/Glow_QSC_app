@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v117', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v118', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3794,14 +3794,26 @@ function fillPeriod(row, v, cols, key, isYear) {
      종합 열이 =IFERROR(…,0)이면 그 매장이 점수 순 정렬의 맨 아래에 섞여 들어간다. */
   const hasQ = (typeof q === 'number');
   const hasC = (typeof c === 'number');
+  /* ★종합이 비었다고 QSC 까지 숨기지 않는다★ (2026-09-08)
+     종전에는 「종합이 숫자가 아니면 미점검」이라 값을 전부 지웠다. QSC 와 MS 가 늘 같이
+     들어오던 시절에는 맞는 규칙이었다. 그런데 2026-09-04 부터 ★MS 는 말일에 열린다★.
+     그래서 월중에는 QSC 96 · MS 빈칸 → 종합 빈칸 → 미점검 판정 → ★QSC 96 이 사라졌다★.
+     10월이면 26곳 전부가 월중 내내 「점검 안 한 매장」으로 보였을 것이다.
+       none    QSC 도 MS 도 없다 — 정말 아직 아무것도 안 왔다
+       partial 하나라도 있는데 종합이 아직 없다 — ★값을 지우지 않는다★
+       done    둘 다 있고 종합도 나왔다 */
   if (!hasQ && !hasC) row.status = 'none';
-  else if (typeof t !== 'number') row.status = 'none';
+  else if (typeof t !== 'number') row.status = 'partial';
   else row.status = 'done';
-  /* 미점검이면 숫자를 아예 내리지 않는다. 0을 내려보내면 화면이 그것을 점수로 그리고
-     그 매장은 26위가 된다 — 설계가 피하려던 "우리가 꼴찌" 신호가 정확히 발생한다. */
+  /* 아무것도 안 온 매장만 숫자를 내리지 않는다. 0을 내려보내면 화면이 그것을 점수로 그리고
+     그 매장은 26위가 된다 — 설계가 피하려던 "우리가 꼴찌" 신호가 정확히 발생한다.
+     ★partial 은 지우지 않는다★ — 점검을 한 매장이고, 실제로 받은 점수는 보여야 한다.
+     다만 ★종합·등급은 아직 없는 것이 맞다★(MS 가 안 열렸으므로) — 그 둘만 비운다. */
   if (row.status === 'none') {
     row.qsc = null; row.qscGrade = null; row.cs = null; row.csGrade = null;
     row.improve = null; row.total = null; row.grade = null;
+  } else if (row.status === 'partial') {
+    row.total = null; row.grade = null;
   }
 }
 
