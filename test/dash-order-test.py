@@ -139,5 +139,16 @@ ok('[7-2] 옛 표기(v112)가 남아 있지 않다', "ver = 'v' + m[1];" in AUTH
 ok('[7-3] ★내부 숫자는 그대로★ — ?v= 는 캐시 열쇠이고 배포 도구가 센다',
    "match(/[?&]v=(\\d+)/)" in AUTH, True)
 
+# ★배포 도구가 찍는 버전도 1.xx 다★ (2026-09-08 담당자 — *"버전이름들 1.xx 이런식으로 다 바꿔줘"*)
+REL = (ROOT / 'tools' / 'release.py').read_text(encoding='utf-8')
+DEP = (ROOT / 'tools' / 'deploy_backend.py').read_text(encoding='utf-8')
+ok('[7-4] release.py 에 vlabel 이 있다', 'def vlabel(n):' in REL, True)
+ok('[7-5] deploy_backend.py 에도 있다', 'def vlabel(n):' in DEP, True)
+ok('[7-6] 커밋 메시지도 1.xx', "'앱 %s — 배포 도구로 올림' % vlabel(VER)" in REL, True)
+ok('[7-7] 배포 요약도 1.xx', "print('  캐시 버전   %s' % vlabel(VER))" in REL, True)
+# ★기계가 대조하는 값은 손대지 않았다★ — 건드리면 배포 도구가 스스로 꼬인다
+ok('[7-8] sw.js 의 VER 형식은 그대로', """const VER\\s*=\\s*'v(\\d+)'""" in REL, True)
+ok('[7-9] ?v= 를 세는 자리도 그대로', '?v=%d' in REL, True)
+
 print('\n' + ('★%d개 실패★' % _f if _f else '전부 통과') + '  (통과 %d)' % _p)
 sys.exit(1 if _f else 0)

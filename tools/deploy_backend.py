@@ -44,6 +44,16 @@ import sys
 import time
 import urllib.request
 
+def vlabel(n):
+    """사람이 읽는 버전 이름 — 113 → 1.13 (2026-09-08 담당자 요청).
+       ★내부 숫자는 그대로다★ — sw.js 의 VER, 화면의 ?v=, ping 의 v123 은 기계가 대조하는
+       값이라 형식을 바꾸면 이 도구가 스스로 꼬인다. 보여 줄 때만 100 으로 나눈다."""
+    try:
+        return '%.2f' % (int(str(n).lstrip('v')) / 100.0)
+    except Exception:
+        return str(n)
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND = os.path.join(ROOT, 'backend')
 STAMP = os.path.join(BACKEND, '.deployed.json')   # 지난 배포의 파일 지문
@@ -106,7 +116,8 @@ if IF_CHANGED:
     except Exception:
         old = {}
     if old.get('sha256') == gs_sha():
-        ok('Code.gs 가 지난 배포(버전 %s) 때와 같습니다 — 백엔드는 넘어갑니다' % old.get('version', '?'))
+        ok('Code.gs 가 지난 배포(%s) 때와 같습니다 — 백엔드는 넘어갑니다'
+           % vlabel(old.get('version', '?')))
         sys.exit(0)
     print('   Code.gs 가 바뀌었습니다 — 배포합니다'
           + ('' if old else ' (지난 배포 기록이 없어 처음으로 봅니다)'))
@@ -172,11 +183,11 @@ if NEXT is None:
 elif not cur:
     warn("Code.gs 에서 v: 'vNN' 라벨을 못 찾아 그대로 둡니다")
 elif cur.group(1) == str(NEXT):
-    ok('라벨이 이미 v%d 입니다' % NEXT)
+    ok('라벨이 이미 %s 입니다' % vlabel(NEXT))
 else:
     open(GS, 'w', encoding='utf-8', newline='').write(
         src[:cur.start()] + ("v: 'v%d'" % NEXT) + src[cur.end():])
-    ok('라벨 v%s \u2192 v%d' % (cur.group(1), NEXT))
+    ok('라벨 %s \u2192 %s' % (vlabel(cur.group(1)), vlabel(NEXT)))
 
 
 # ── 2-5. ★올리기 전에 한 번 돌려 본다★ ─────────────────────────
@@ -225,7 +236,7 @@ LIVE = int(mv.group(1)) if mv else None
 if LIVE is None:
     warn('배포는 됐는데 버전 번호를 못 읽었습니다')
 else:
-    ok('배포했습니다 \u2014 버전 %d' % LIVE)
+    ok('배포했습니다 \u2014 버전 %s' % vlabel(LIVE))
     if NEXT is not None and LIVE != NEXT:
         fail('\u2605버전 라벨이 어긋났습니다\u2605 \u2014 코드에는 v%d 라고 새겼는데 실제 버전은 %d 입니다. '
              '이 스크립트를 한 번 더 돌리면 맞춰집니다' % (NEXT, LIVE))
@@ -269,7 +280,7 @@ if FAILED:
 else:
     print('배포 완료 \u2014 주소는 그대로입니다')
     print('  배포 ID  ...%s' % DEPLOY_ID[-16:])
-    print('  버전     %s' % (LIVE if LIVE is not None else '?'))
+    print('  버전     %s' % (vlabel(LIVE) if LIVE is not None else '?'))
     print('  설명     %s' % desc)
 print('\u2550' * 60)
 sys.exit(1 if FAILED else 0)
