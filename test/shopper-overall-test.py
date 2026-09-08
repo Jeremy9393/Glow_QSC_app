@@ -1,20 +1,27 @@
 # -*- coding: utf-8 -*-
-"""쇼퍼 총평 — 옛 '영수증' 열 자리를 물려받는지 (2026-09-04)
+"""saveShopper 가 MS_상세에 제대로 쓰는가 (2026-09-08 통합 뒤 다시 씀)
 
 ★Code.gs 의 진짜 saveShopper 를 잘라내서 돌린다★ (사본 아님).
 
-★왜 이 시험이 필요한가★ — `sheet()` 는 시트가 없을 때만 머리글을 쓴다. 이미 만들어진
-`쇼퍼_응답` 시트에 열을 하나 더 보내면 열이 생기는 게 아니라 ★Q1부터 통째로 한 칸씩 밀린다★.
-2026-08-20 영수증 열을 없앴을 때 실제로 그랬다. 그래서 총평은 새 열을 만들지 않고
-남아 있는 '영수증' 열 자리를 이름만 바꿔 쓴다. 그 물려받기가 정말 되는지, 그리고
-어떤 경우에도 답이 밀리지 않는지를 본다.
+★이 시험의 목적이 바뀌었다★
+  종전에는 「쇼퍼_응답의 옛 '영수증' 열을 총평이 물려받는가」를 봤다. 2026-09-08 에
+  쇼퍼_응답 + 쇼퍼_비고 가 MS_상세 한 시트로 합쳐지면서 그 구조 자체가 없어졌다.
+  그래서 새 구조가 지켜야 할 것을 본다.
+
+보는 것:
+  · 한 제출이 ★문항 수만큼 줄★이 되는가 (비고 없는 문항도 남긴다)
+  · 앞 14열이 ★QSC_상세와 같은 자리★인가 · 총평·연령대·주문내역이 15~21열인가
+  · 제출 단위 값(총평·점수·경로)이 ★모든 줄에 같이★ 들어가는가 — MS 점수 계산이 그것을 쓴다
+  · ★최신이 맨 위★로 들어가는가 (insertRowsBefore(2))
+  · 문항 환산 점수·코드·유형이 바르게 채워지는가
+  · 총평이 비어도 줄은 그대로 남는가
 """
-import io, re, subprocess, sys
+import io, subprocess, sys
 from pathlib import Path
 
 SRC = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\qsc-app\backend\Code.gs')
 NODE = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\_도구\node\node.exe')
-OUT = Path(__file__).parent / 't_overall.js'
+OUT = Path(__file__).parent / 't_shopover.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 lines = io.open(SRC, 'r', encoding='utf-8', newline='').read().split('\n')
@@ -28,133 +35,159 @@ def cut(name):
     raise SystemExit('%s 끝 못 찾음' % name)
 
 
-body = cut('saveShopper')
+def cutconst(name):
+    st = next(i for i, l in enumerate(lines) if l.startswith('const %s ' % name))
+    buf = []
+    for j in range(st, len(lines)):
+        buf.append(lines[j])
+        if lines[j].rstrip().endswith(';'):
+            break
+    return '\n'.join(buf)
+
+
+body = '\n'.join([cutconst('MS_DETAIL'), cutconst('MS_HEADER'), cutconst('MS_COL'),
+                  cut('msCodeOf'), cut('msConvert'), cut('msKindOf'),
+                  cut('msPrepend'), cut('saveShopper')])
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
 // ══ 가짜 세계 ═══════════════════════════════════════════════
-var SHEETS = {};           // 이름 -> {head:[], rows:[[]]}
-var DASHBOARD_ID = '';     // 통합시트·매장 파일 경로는 이 시험 밖이다
-
+var ROWS = [];            // MS_상세 본문 (머리글 제외)
+var HEADER = null;
+var DASHBOARD_ID = '';    // 통합시트는 이 시험에서 다루지 않는다
 function safeRow(r) { return r; }
 function round1(n) { return Math.round(n * 10) / 10; }
-function appendRows(sh, rows) { rows.forEach(function (r) { sh.appendRow(r); }); }
-function dropStoreCache() {}
-function dropDashCache() {}
-function shopperMonthAvg() { return null; }
-function writeStoreShopper() { return { ok: true }; }
-function dashRowFor() { return null; }
-function nowIso() { return '2026-09-04T00:00:00Z'; }
-function ssTz() { return 'Asia/Seoul'; }
-function yymm(d) { return d.slice(2, 4) + d.slice(5, 7); }
-var Utilities = { formatDate: function () { return '2026-09-04'; } };
-var Logger = { log: function () {} };
-
-function mkSheet(name, head) {
-  var s = {
-    _name: name, _head: head.slice(), _rows: [],
-    getLastColumn: function () { return s._head.length; },
-    getLastRow: function () { return s._rows.length + 1; },
-    setFrozenRows: function () {},
-    appendRow: function (r) { s._rows.push(r.slice()); },
+function normStore(s) { return String(s == null ? '' : s).trim(); }
+function sheet(ss, name, header) {
+  HEADER = header;
+  return {
+    _name: name,
+    getLastRow: function () { return ROWS.length + 1; },
+    insertRowsBefore: function (at, n) {
+      var blank = [];
+      for (var i = 0; i < n; i++) blank.push(new Array(HEADER.length).fill(''));
+      ROWS = blank.concat(ROWS);          // 2행 앞에 끼우면 본문 맨 앞이다
+    },
     getRange: function (r, c, nr, nc) {
-      return {
-        getValues: function () {
-          if (r === 1) return [s._head.slice(c - 1, c - 1 + (nc || s._head.length))];
-          return [[]];
-        },
-        setValue: function (v) { if (r === 1) s._head[c - 1] = v; },
-      };
+      return { setValues: function (vals) {
+        for (var i = 0; i < vals.length; i++) ROWS[r - 2 + i] = vals[i];
+      } };
     },
   };
-  SHEETS[name] = s;
-  return s;
 }
-function sheet(ss, name, headers) {          // ★진짜와 같은 규칙: 없을 때만 머리글을 쓴다★
-  if (!SHEETS[name]) mkSheet(name, headers);
-  return SHEETS[name];
-}
-var FAKE_SS = { getSheetByName: function (n) { return SHEETS[n] || null; } };
+function monthClosed() { return false; }          // 월중 — 매장 파일·통합시트는 미룬다
+function writeStoreShopper() { return { ok: true }; }
+function writeDashboard() { return { ok: true }; }
+function shopperMonthAvg() { return 0; }
+function dropDashCache() {} function dropStoreCache() {}
+function yymm(d) { return d.slice(2, 4) + d.slice(5, 7); }
+function opErr(a, e) { return String(e); }
 
-var OLD_HEAD = ['제출시각','방문날짜','방문시간','매장명','응대직원설명','주문내역',
-                '작성자연령대성별','입력경로','점수','응답수','영수증'];
-function qcols(n) { var a = []; for (var i = 1; i <= n; i++) a.push('Q' + i); return a; }
-function mkPayload(overall, nQ) {
-  var ans = [];
-  for (var i = 1; i <= (nQ || 3); i++) ans.push({ no: i, text: i + '-1. 문항', answer: '예', memo: '' });
-  return { submittedAt: 'T', date: '2026-09-03', time: '13:00', store: '금종제과',
-           staff: '홀 직원', order: '아메리카노', demographic: '30대 여성',
-           overall: overall, answers: ans, result: { score: 88, answered: ans.length } };
+function mkPayload(o) {
+  o = o || {};
+  var qs = o.answers || [
+    { no: 1, text: '1-1. 인사를 건넸나요?', scale: 'yn', cat: '1. 입·퇴점 응대', answer: '예', memo: '' },
+    { no: 2, text: '1-2. 눈을 맞췄나요?', scale: 'yn', cat: '1. 입·퇴점 응대', answer: '아니오', memo: '다른 곳을 봤어요' },
+    { no: 3, text: '3-1. 설명이 충분했나요?', scale: '1-5', cat: '3. 메뉴 안내', answer: 4, memo: '' },
+  ];
+  return {
+    submittedAt: o.at || '2026-10-05T10:00:00Z',
+    date: o.date || '2026-10-05', time: o.time || '11:00', store: o.store || '금종제과',
+    staff: '', order: o.order || '아메리카노', demographic: o.demo || '30대 여성',
+    overall: o.overall === undefined ? '친절했습니다' : o.overall,
+    result: { score: o.score === undefined ? 83.3 : o.score, answered: qs.length },
+    answers: qs,
+  };
+}
+function run(o, isSurvey) {
+  ROWS = [];
+  saveShopper({ getSpreadsheetTimeZone: function () { return 'Asia/Seoul'; } },
+              mkPayload(o), {}, !!isSurvey);
+  return ROWS;
 }
 
-// ══ 시험틀 ═══════════════════════════════════════════════════
 var pass = 0, fail = 0;
 function ok(name, got, want) {
   var g = JSON.stringify(got), w = JSON.stringify(want);
-  if (g === w) { pass++; console.log('  ✓ ' + name); }
-  else { fail++; console.log('  ✗ ' + name + '\n      나온 것: ' + g + '\n      바란 것: ' + w); }
+  if (g === w) pass++;
+  else { fail++; console.log('  ✗ ' + name + '\n      나온 값 ' + g + '\n      바란 값 ' + w); }
 }
-function run(sheetHead, overall, nQ) {
-  SHEETS = {};
-  if (sheetHead) mkSheet('쇼퍼_응답', sheetHead);
-  saveShopper(FAKE_SS, mkPayload(overall, nQ), { id: 'u1' }, false);
-  return SHEETS['쇼퍼_응답'];
-}
-function at(sh, col) { return sh._rows[0][sh._head.indexOf(col)]; }
 
-// ── ① 옛 시트: '영수증' 자리를 물려받는다 ────────────────────
-console.log('\n① 이미 있는 시트 — 영수증 열이 남아 있다');
-var sh = run(OLD_HEAD.concat(qcols(3)), '전반적으로 친절했습니다', 3);
-ok('머리글이 총평으로 바뀐다', sh._head[10], '총평');
-ok('영수증이라는 이름은 사라진다', sh._head.indexOf('영수증'), -1);
-ok('총평이 그 칸에 들어간다', at(sh, '총평'), '전반적으로 친절했습니다');
-ok('★답이 밀리지 않는다★', [at(sh, 'Q1'), at(sh, 'Q2'), at(sh, 'Q3')], ['예', '예', '예']);
-ok('앞쪽 칸도 그대로', [at(sh, '매장명'), at(sh, '점수')], ['금종제과', 88]);
-ok('열 수와 값 수가 같다', sh._rows[0].length, sh._head.length);
+console.log('── 한 제출 = 문항 수만큼 줄 ──');
+var r = run({});
+ok('[1-1] 문항 3개 → 3줄', r.length, 3);
+ok('[1-2] 비고 없는 문항도 남는다', r.filter(function (x) { return !x[MS_COL.memo - 1]; }).length, 2);
+ok('[1-3] 머리글은 21열', HEADER.length, 21);
 
-// ── ② 두 번째 제출도 같은 자리 ──────────────────────────────
-saveShopper(FAKE_SS, mkPayload('두 번째', 3), { id: 'u1' }, false);
-ok('두 번째도 총평 칸에', SHEETS['쇼퍼_응답']._rows[1][10], '두 번째');
-ok('두 번째도 안 밀린다', SHEETS['쇼퍼_응답']._rows[1].slice(11), ['예', '예', '예']);
+console.log('── 앞 14열이 QSC_상세와 같은 자리 ──');
+ok('[2-1] 방문날짜', r[0][MS_COL.date - 1], '2026-10-05');
+ok('[2-2] 방문시간', r[0][MS_COL.time - 1], '11:00');
+ok('[2-3] 매장명', r[0][MS_COL.store - 1], '금종제과');
+ok('[2-4] 코드', r[0][MS_COL.code - 1], '1-1');
+ok('[2-5] 문항번호', r[0][MS_COL.no - 1], 1);
+ok('[2-6] 구분(카테고리)', r[0][MS_COL.cat - 1], '1. 입·퇴점 응대');
+ok('[2-7] 문항', r[0][MS_COL.text - 1], '1-1. 인사를 건넸나요?');
+ok('[2-8] 유형', r[0][MS_COL.kind - 1], '예/아니오');
+ok('[2-9] 응답', r[0][MS_COL.answer - 1], '예');
+ok('[2-10] 상태는 빈칸 (MS 에 없다)', r[0][MS_COL.state - 1], '');
+ok('[2-11] 사진·NA사유도 빈칸', [r[0][MS_COL.photo - 1], r[0][MS_COL.naWhy - 1]], ['', '']);
 
-// ── ③ 새로 만들어지는 시트 ──────────────────────────────────
-console.log('\n② 시트가 아예 없을 때 — 새로 만든다');
-sh = run(null, '새 시트 총평', 3);
-ok('머리글에 총평이 있다', sh._head.indexOf('총평') >= 0, true);
-ok('총평이 제자리에', at(sh, '총평'), '새 시트 총평');
-ok('★답이 밀리지 않는다★', [at(sh, 'Q1'), at(sh, 'Q3')], ['예', '예']);
+console.log('── 문항 환산 점수 ──');
+ok('[3-1] 예 → 1', r[0][MS_COL.score - 1], 1);
+ok('[3-2] 아니오 → 0', r[1][MS_COL.score - 1], 0);
+ok('[3-3] 4점 → 0.75', r[2][MS_COL.score - 1], 0.75);
+ok('[3-4] 척도 문항의 유형', r[2][MS_COL.kind - 1], '5점 척도');
+ok('[3-5] 비고가 들어간다', r[1][MS_COL.memo - 1], '다른 곳을 봤어요');
 
-// ── ④ 이미 총평 열이 있는 시트 (두 번째 배포 이후) ───────────
-console.log('\n③ 이미 총평 열이 있는 시트');
-var NEW_HEAD = OLD_HEAD.slice(0, 10).concat(['총평']).concat(qcols(3));
-sh = run(NEW_HEAD, '또 냈다', 3);
-ok('이름을 다시 바꾸지 않는다', sh._head[10], '총평');
-ok('총평이 그 칸에', at(sh, '총평'), '또 냈다');
-ok('답 그대로', [at(sh, 'Q1'), at(sh, 'Q2')], ['예', '예']);
+console.log('── 제출 단위 값은 모든 줄에 같이 ──');
+ok('[4-1] 제출시각', r.map(function (x) { return x[MS_COL.at - 1]; }),
+   ['2026-10-05T10:00:00Z', '2026-10-05T10:00:00Z', '2026-10-05T10:00:00Z']);
+ok('[4-2] ★제출점수★ — MS 점수 계산이 이 열을 쓴다',
+   r.map(function (x) { return x[MS_COL.total - 1]; }), [83.3, 83.3, 83.3]);
+ok('[4-3] 응답수', r[0][MS_COL.answered - 1], 3);
+ok('[4-4] 총평', r[0][MS_COL.overall - 1], '친절했습니다');
+ok('[4-5] 연령대·성별', r[0][MS_COL.demo - 1], '30대 여성');
+ok('[4-6] 주문내역', r[0][MS_COL.order - 1], '아메리카노');
+ok('[4-7] 입력경로 — 관리자', r[0][MS_COL.route - 1], '관리자 입력');
 
-// ── ④-2 머리글이 비어 있을 때 (사람이 지운 경우) ─────────────
-console.log('\n③-2 11번째 머리글이 비어 있을 때 — 이름을 스스로 채운다');
-var BLANK_HEAD = OLD_HEAD.slice(0, 10).concat(['']).concat(qcols(3));
-sh = run(BLANK_HEAD, '이름이 없어도', 3);
-ok('★비어 있던 머리글에 총평을 적는다★', sh._head[10], '총평');
-ok('총평이 그 칸에', at(sh, '총평'), '이름이 없어도');
-ok('★답이 밀리지 않는다★', [at(sh, 'Q1'), at(sh, 'Q2'), at(sh, 'Q3')], ['예', '예', '예']);
+console.log('── 익명 설문은 입력경로를 서버가 정한다 ──');
+var s = run({}, true);
+ok('[5-1] 고객 직접', s[0][MS_COL.route - 1], '고객 직접');
 
-// ── ⑤ 총평을 안 적었을 때 ───────────────────────────────────
-console.log('\n④ 총평이 비었을 때 (선택 칸이라 흔하다)');
-sh = run(OLD_HEAD.concat(qcols(3)), '', 3);
-ok('빈칸이 들어간다', at(sh, '총평'), '');
-ok('★그래도 안 밀린다★', [at(sh, 'Q1'), at(sh, 'Q2'), at(sh, 'Q3')], ['예', '예', '예']);
+console.log('── 총평이 비어도 줄은 남는다 ──');
+var e = run({ overall: '' });
+ok('[6-1] 3줄 그대로', e.length, 3);
+ok('[6-2] 총평만 빈칸', e[0][MS_COL.overall - 1], '');
 
-console.log('\n' + (fail ? '✗ ' + fail + '개 실패 · ' : '✓ 전부 통과 · ') + pass + '개 통과');
+console.log('── 최신이 맨 위 ──');
+/* 같은 시트에 두 번 저장하면 나중 것이 앞에 와야 한다 */
+ROWS = [];
+saveShopper({ getSpreadsheetTimeZone: function () { return 'Asia/Seoul'; } },
+            mkPayload({ at: 'FIRST', score: 60 }), {}, false);
+saveShopper({ getSpreadsheetTimeZone: function () { return 'Asia/Seoul'; } },
+            mkPayload({ at: 'SECOND', score: 90 }), {}, false);
+ok('[7-1] 6줄', ROWS.length, 6);
+ok('[7-2] ★나중 제출이 맨 위★', ROWS[0][MS_COL.at - 1], 'SECOND');
+ok('[7-3] 옛 제출은 아래에', ROWS[3][MS_COL.at - 1], 'FIRST');
+ok('[7-4] 묶음 안에서는 문항 순서 그대로',
+   [ROWS[0][MS_COL.no - 1], ROWS[1][MS_COL.no - 1], ROWS[2][MS_COL.no - 1]], [1, 2, 3]);
+
+console.log('── 점수가 없어도(무응답) 죽지 않는다 ──');
+var n = run({ score: null, answers: [
+  { no: 1, text: '1-1. 인사', scale: 'yn', cat: 'A', answer: null, memo: '' }] });
+ok('[8-1] 한 줄', n.length, 1);
+ok('[8-2] 응답 빈칸', n[0][MS_COL.answer - 1], '');
+ok('[8-3] 점수 빈칸', n[0][MS_COL.score - 1], '');
+ok('[8-4] 제출점수도 빈칸', n[0][MS_COL.total - 1], '');
+
+console.log('\n' + (fail ? '★' + fail + '개 실패★' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);
 '''
 
-OUT.write_text(body + '\n' + HARNESS, encoding='utf-8')
+io.open(OUT, 'w', encoding='utf-8', newline='\n').write(body + '\n' + HARNESS)
 r = subprocess.run([str(NODE), str(OUT)], capture_output=True, text=True, encoding='utf-8')
-print(r.stdout)
+print(r.stdout or '', end='')
 if r.stderr:
-    print('--- stderr ---')
-    print(r.stderr[:2500])
+    print(r.stderr)
 OUT.unlink(missing_ok=True)
 sys.exit(r.returncode)
