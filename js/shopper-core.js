@@ -691,6 +691,10 @@ async function initShopperForm(opts) {
     const btn = $('#submitBtn');
     const btnLabel = btn.textContent;   // 되묻기에서 취소했을 때 되돌려 놓을 원래 글자
     btn.disabled = true; btn.textContent = ADMIN ? '저장 중…' : '전송 중…';
+    /* ★화면 가운데에도 띄운다★ (2026-09-08 담당자 — *"제출중인지 멈춘건지 잘 구분이 안가서"*)
+       버튼은 화면 아래에 있어 위쪽을 보고 있으면 글자가 바뀐 것을 못 본다.
+       왕복이 2초, 서버가 잠들어 있었으면 11초다 — 그동안 사람은 다시 누른다. */
+    Busy.on(ADMIN ? '저장 중입니다…' : '전송 중입니다…');
     try {
       /* ★관리자와 고객이 서로 다른 액션으로 보낸다★
          고객 설문(survey.html)은 주소만 알면 누구나 열 수 있으므로 서버에서 '익명 허용' 액션으로
@@ -748,6 +752,10 @@ async function initShopperForm(opts) {
           '\n\n작성하신 내용은 그대로 있습니다. [제출]을 다시 눌러 주세요.');
     } catch (e) {
       alert(ADMIN ? '저장되지 않았습니다: ' + e.message : '전송되지 않았습니다. 네트워크 연결을 확인해 주세요.');
+    } finally {
+      /* ★finally 로 끈다★ — try 안에 중간 return 이 있다(되묻기에서 취소했을 때).
+         그 길로 빠지면 덮개가 남아 화면이 잠긴 것처럼 보인다. */
+      Busy.off();
     }
     btn.disabled = false; btn.textContent = '제출';
   };

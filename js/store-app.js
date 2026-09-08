@@ -1042,7 +1042,16 @@
       if (pics.length) body.photo = { name: 'after.jpg', dataUrl: pics[0] };
 
       let res = null;
-      try { res = await Api.call('store.saveImprove', body); } catch (e) { res = null; }
+      /* ★화면 가운데에도 띄운다★ (2026-09-08 담당자) — 개선 보고는 사진이 붙으면 오래 걸린다.
+         이 화면은 저장 버튼이 항목마다 따로 있어서, 어느 것을 눌렀는지도 헷갈리기 쉽다. */
+      Busy.on('저장 중입니다…');
+      try {
+        res = await Api.call('store.saveImprove', body);
+      } catch (e) {
+        res = null;
+      } finally {
+        Busy.off();
+      }
 
       saveBtn.textContent = label;
       saveBtn.disabled = false;
