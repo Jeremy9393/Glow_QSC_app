@@ -1,4 +1,17 @@
 
+// ★MS_상세 상수★ (2026-09-08 통합) — 진짜 Code.gs 의 값과 같아야 한다.
+//   시험틀은 함수만 잘라오므로 상수는 여기서 세워 준다.
+var MS_DETAIL = 'MS_상세';
+var MS_COL = {
+  date: 1, time: 2, store: 3, code: 4, no: 5, cat: 6, text: 7,
+  kind: 8, answer: 9, state: 10, score: 11, memo: 12, photo: 13, naWhy: 14,
+  at: 15, route: 16, total: 17, answered: 18, overall: 19, demo: 20, order: 21,
+};
+var MS_HEADER = [
+  '방문날짜', '방문시간', '매장명', '코드', '문항번호', '구분', '문항',
+  '유형', '응답', '상태', '점수', '비고', '사진', 'NA사유',
+  '제출시각', '입력경로', '제출점수', '응답수', '총평', '작성자연령대성별', '주문내역',
+];
 // ══ 가짜 세계 ═══════════════════════════════════════════════
 var SHEETS = {};          // 이름 -> 2차원 배열 (1행 = 머리글)
 var WROTE = [];           // 매장 파일/통합시트에 쓴 값 기록
@@ -100,7 +113,10 @@ function fnUndoSubmit(ctx, payload) {
        함께 지워졌다 — 시트 줄 삭제는 휴지통이 없어 되찾을 수 없다.
        시트에 '입력경로'('고객 직접'/'관리자 입력') 칸이 원래부터 있는데 안 보고 있었다.
      leftRows: 지우지 않고 그 달에 ★남는★ 줄의 값. 지운 뒤 점수를 다시 계산할 때 쓴다. */
-  function pick(shName, dateCol, storeCol, timeCol, routeCol, routeWant) {
+  /* atCol 을 주면 ★남은 것을 제출시각으로 묶어★ 한 번 더 센다 (monthLeftSubmits).
+     MS_상세는 한 제출이 38줄이라, 줄 수를 그대로 「남은 건수」로 적으면 38배로 보인다.
+     ★지울 줄(rows)은 그대로 줄 단위★다 — 38줄을 다 지워야 하기 때문이다. */
+  function pick(shName, dateCol, storeCol, timeCol, routeCol, routeWant, atCol) {
     const sh = ss.getSheetByName(shName);
     if (!sh) return { sh: null, rows: [], monthLeft: 0, leftRows: [] };
     const last = sh.getLastRow();
@@ -119,7 +135,18 @@ function fnUndoSubmit(ctx, payload) {
       if (sameDay && sameTime && routeOk) rows.push(i + 2);
       else if (d.slice(0, 7) === ym) { monthLeft++; leftRows.push(vals[i]); }   // 같은 달에 남을 자료
     }
-    return { sh: sh, rows: rows, monthLeft: monthLeft, leftRows: leftRows };
+    /* 남은 것을 제출 단위로도 세어 둔다 — 화면 문구가 이것을 쓴다 */
+    let monthLeftSubmits = monthLeft;
+    if (atCol) {
+      const seen = {};
+      leftRows.forEach(function (v) {
+        const k = String(v[atCol - 1] == null ? '' : v[atCol - 1]);
+        seen[k || ('#' + Object.keys(seen).length)] = 1;
+      });
+      monthLeftSubmits = Object.keys(seen).length;
+    }
+    return { sh: sh, rows: rows, monthLeft: monthLeft,
+             monthLeftSubmits: monthLeftSubmits, leftRows: leftRows };
   }
 
   /* ★route★ — 없으면 그 날짜 쇼퍼 줄을 전부 지운다(관리자 도구의 '통째로 되돌리기').
@@ -127,16 +154,17 @@ function fnUndoSubmit(ctx, payload) {
   const route = (p.route === '관리자 입력' || p.route === '고객 직접') ? p.route : '';
   const round = doQsc ? pick('QSC_회차', 2, 4, 3) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
   const detail = doQsc ? pick('QSC_상세', 1, 3, 2) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
-  const shop = doShop ? pick('쇼퍼_응답', 2, 4, 0, 8, route) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
-  /* ★쇼퍼_비고도 그 제출이 쓴 것이다★ (2026-08-26) — 종전에는 빼먹어서, 되돌린 뒤에도
-     문항별 이유·비고가 시트에 남았다. 점수는 쇼퍼_응답에서만 계산하므로 점수는 안 틀렸지만,
-     '되돌렸다'고 해 놓고 기록이 남아 있는 것은 그 자체로 틀린 상태다. */
-  const shopMemo = doShop ? pick('쇼퍼_비고', 2, 4, 0, 5, route) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
+  /* ★쇼퍼 자료는 이제 MS_상세 한 곳뿐이다★ (2026-09-08) — 종전에는 쇼퍼_응답·쇼퍼_비고
+     두 시트를 따로 지워야 했고, 한쪽을 빼먹어 되돌린 뒤에도 기록이 남은 적이 있다(2026-08-26).
+     한 시트가 되면서 그 실수가 원천적으로 없어졌다. */
+  const shop = doShop ? pick(MS_DETAIL, MS_COL.date, MS_COL.store, 0, MS_COL.route, route, MS_COL.at)
+    : { sh: null, rows: [], monthLeft: 0, monthLeftSubmits: 0, leftRows: [] };
+  const shopMemo = { sh: null, rows: [], monthLeft: 0, leftRows: [] };   // 합쳐졌다 — 자리만 남긴다
   const na = (doQsc && time === '') ? pick('NA프리셋', 3, 1, 0) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
 
   const hit = round.rows.length + detail.rows.length + shop.rows.length + shopMemo.rows.length + na.rows.length;
   log.push('QSC_회차 ' + round.rows.length + '건 · QSC_상세 ' + detail.rows.length +
-    '건 · 쇼퍼_응답 ' + shop.rows.length + '건 · 쇼퍼_비고 ' + shopMemo.rows.length +
+    '건 · ' + MS_DETAIL + ' ' + shop.rows.length + '줄' +
     '건 · NA프리셋 ' + na.rows.length + '건');
 
   /* ★찾은 것이 하나도 없으면 여기서 끝낸다★ — 아래로 내려가면 안 된다.
@@ -317,7 +345,8 @@ function fnUndoSubmit(ctx, payload) {
       const v = msAfterVisible();      // ★통합시트도 월중에는 빈칸으로 둔다★
       const b = writeDashboard(store, date, v, 2);
       done.push('통합시트 MS 칸: ' + (b.ok
-        ? (b.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (그 달 남은 ' + shop.monthLeft + '건 평균)'))) : b.error));
+        ? (b.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (그 달 남은 ' +
+           (shop.monthLeftSubmits == null ? shop.monthLeft : shop.monthLeftSubmits) + '건 평균)'))) : b.error));
     }
   }
   /* ★지우지 않고 휴지통으로 보낸다★ — 되돌리기를 잘못 눌렀을 때 되찾을 수 있어야 한다
@@ -340,12 +369,13 @@ function fnUndoSubmit(ctx, payload) {
 
 function shopperMonthAvg(sh, store, dateStr, tz) {
   const ym = dateStr.slice(0, 7); // 'YYYY-MM'
-  /* ★끝에서부터 읽는다★ — 이 시트는 익명 고객 설문이 함께 쌓이는 공개 시트라
-     getDataRange()면 제출 1건마다 수천 행을 읽게 된다 (submittedStores와 같은 이유). */
+  /* ★앞에서부터 읽는다★ (2026-09-08) — MS_상세는 ★최신이 맨 위★로 쌓이므로
+     최근 자료는 시트 앞쪽에 있다. 종전 쇼퍼_응답은 끝에 쌓여서 끝에서 읽었다.
+     여기를 안 뒤집으면 옛 자료만 보고 평균을 내게 된다 — 오류 없이 숫자만 틀린다. */
   const last = sh.getLastRow();
   if (last < 2) return 0;
-  const n = Math.min(3000, last - 1);
-  const rng = grid(sh, last - n + 1, 1, n, 9);
+  const n = Math.min(6000, last - 1);
+  const rng = grid(sh, 2, 1, n, MS_COL.order);
   const vals = rng ? rng.getValues() : [];
   const scores = [];
   const key = normStore(store);
@@ -358,12 +388,21 @@ function shopperMonthAvg(sh, store, dateStr, tz) {
        CS는 10월부터 종합점수의 30%다. ★그 방어는 제출 코드(매장 1곳 = 코드 1개 = 월 1회)가 맡는다★ —
        설계는 `_보관/설계/쇼퍼_제출코드_설계.md`에 있고 아직 만들지 않았다.
        그때까지는 담당자가 `쇼퍼_응답` 시트를 보고 이상한 건을 지우거나 고친다(그 편집이 곧 반영된다). */
+  /* ★한 제출이 38줄이다★ (2026-09-08 MS_상세) — 줄마다 세면 한 제출이 38번 들어가
+     평균이 왜곡되지는 않지만(같은 값이라) 응답 수가 38배로 보인다. 무엇보다 제출이 둘
+     이상일 때 문항 수가 다르면 가중이 어긋난다. 그래서 ★제출시각으로 묶어 한 번씩만★ 센다. */
+  const seen = {};
   for (let i = 0; i < vals.length; i++) {
-    const dYm = ymOfCell(vals[i][1], tz);
-    // 열 순서: 0 제출시각 · 1 방문날짜 · 2 방문시간 · 3 매장명 … 7 입력경로 · 8 점수
-    if (normStore(vals[i][3]) === key && dYm === ym && typeof vals[i][8] === 'number') {
-      scores.push(vals[i][8]);
-    }
+    const v = vals[i];
+    const dYm = ymOfCell(v[MS_COL.date - 1], tz);
+    if (normStore(v[MS_COL.store - 1]) !== key || dYm !== ym) continue;
+    const sc = v[MS_COL.total - 1];
+    if (typeof sc !== 'number') continue;
+    const at = String(v[MS_COL.at - 1] == null ? '' : v[MS_COL.at - 1]);
+    const k = at || (dYm + '|' + String(v[MS_COL.time - 1]) + '|' + sc);   // 제출시각이 비면 날짜·시간·점수로
+    if (seen[k]) continue;
+    seen[k] = 1;
+    scores.push(sc);
   }
   if (!scores.length) return 0;
   return scores.reduce(function (a, b) { return a + b; }, 0) / scores.length;
@@ -376,9 +415,21 @@ function wroteOf(k) { for (var i = WROTE.length - 1; i >= 0; i--) if (WROTE[i][0
 
 function reset(shopRows, roundRows, visit) {
   SHEETS = {}; WROTE = []; DELETED = []; VISIT_DATE = visit || '';
-  // 쇼퍼_응답: 1제출시각 2방문날짜 3방문시간 4매장명 5~7 8입력경로 9점수
-  mkSheet('쇼퍼_응답', [['제출시각','방문날짜','방문시간','매장명','a','b','c','입력경로','점수']].concat(shopRows));
-  mkSheet('쇼퍼_비고', [['제출시각','방문날짜','방문시간','매장명','입력경로']]);
+  /* ★MS_상세★ (2026-09-08 통합) — 한 줄 = 한 문항.
+     시험은 문항 하나짜리 제출로 줄인다(회차 판정과 점수 계산만 보므로 38줄일 필요가 없다).
+     shopRows 는 [제출시각, 날짜, 시간, 매장, x, x, x, 경로, 점수] 형태로 들어온다 —
+     옛 시험 자료를 그대로 쓰려고 여기서 MS_상세 자리로 옮겨 준다. */
+  mkSheet(MS_DETAIL, [MS_HEADER.slice(0)].concat(shopRows.map(function (o) {
+    var a = new Array(MS_COL.order).fill('');
+    a[MS_COL.date - 1] = o[1];
+    a[MS_COL.time - 1] = o[2];
+    a[MS_COL.store - 1] = o[3];
+    a[MS_COL.no - 1] = 1;
+    a[MS_COL.at - 1] = o[0];
+    a[MS_COL.route - 1] = o[7];
+    a[MS_COL.total - 1] = o[8];
+    return a;
+  })));
   // QSC_회차: 1제출시각 2점검일자 3방문시간 4매장명 5점검자 6QSC점수
   mkSheet('QSC_회차', [['제출시각','점검일자','방문시간','매장명','점검자','QSC점수']].concat(roundRows || []));
   mkSheet('QSC_상세', [['점검일자','방문시간','매장명']]);
@@ -396,8 +447,8 @@ reset([
 ]);
 var r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
 ok('되돌리기 성공', r.ok === true, JSON.stringify(r.error || ''));
-ok('★손님 3건이 살아 있다★', SHEETS['쇼퍼_응답'].length === 4, '남은 줄(머리글 포함)=' + SHEETS['쇼퍼_응답'].length);
-ok('담당자 것만 지워졌다', !SHEETS['쇼퍼_응답'].some(function (x) { return x[7] === '관리자 입력'; }));
+ok('★손님 3건이 살아 있다★', SHEETS[MS_DETAIL].length === 4, '남은 줄(머리글 포함)=' + SHEETS[MS_DETAIL].length);
+ok('담당자 것만 지워졌다', !SHEETS[MS_DETAIL].some(function (x) { return x[MS_COL.route-1] === '관리자 입력'; }));
 var ms = wroteOf('통합시트:MS');
 ok('★통합시트 MS = 남은 3건 평균 0.90★', Math.abs(ms - 0.9) < 1e-9, '값=' + ms);
 ok('매장 파일 MS 도 같은 값', Math.abs(wroteOf('매장파일:MS점수') - 0.9) < 1e-9, '값=' + wroteOf('매장파일:MS점수'));
@@ -444,7 +495,7 @@ reset([
   ['2026-10-05T10:00','2026-10-05','','금종제과','','','','고객 직접',90],
 ]);
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true });
-ok('그날 2건 다 지웠다', SHEETS['쇼퍼_응답'].length === 2, '남은 줄=' + SHEETS['쇼퍼_응답'].length);
+ok('그날 2건 다 지웠다', SHEETS[MS_DETAIL].length === 2, '남은 줄=' + SHEETS[MS_DETAIL].length);
 ok('다른 날 1건으로 다시 계산 = 0.90', Math.abs(wroteOf('통합시트:MS') - 0.9) < 1e-9, '값=' + wroteOf('통합시트:MS'));
 
 console.log('\n[5] QSC — 그 달에 남은 회차가 있으면 ★마지막 것★으로');
@@ -466,7 +517,7 @@ reset([['2026-10-05T10:00','2026-10-05','','금종제과','','','','고객 직�
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
 ok('nothing=true', r.nothing === true, JSON.stringify(r));
 ok('아무것도 안 썼다', WROTE.length === 0, JSON.stringify(WROTE));
-ok('손님 것 그대로', SHEETS['쇼퍼_응답'].length === 2);
+ok('손님 것 그대로', SHEETS[MS_DETAIL].length === 2);
 
 /* ★쓰기 밸브는 2026-08-27에 통째로 지웠다★ (담당자 결정)
    종전 [8]은 「밸브가 잠기면 안 건드린다」를 쟀는데, 그 기능이 이제 없다.
@@ -474,7 +525,7 @@ ok('손님 것 그대로', SHEETS['쇼퍼_응답'].length === 2);
 console.log('\n[8] ★밸브 없이도 매장 파일·통합시트에 늘 쓴다★');
 reset([['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60]]);
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
-ok('응답 시트 줄을 지운다', SHEETS['쇼퍼_응답'].length === 1, '남은 줄=' + SHEETS['쇼퍼_응답'].length);
+ok('응답 시트 줄을 지운다', SHEETS[MS_DETAIL].length === 1, '남은 줄=' + SHEETS[MS_DETAIL].length);
 ok('★매장 파일에 썼다★', wroteOf('매장파일:MS점수') !== undefined, JSON.stringify(WROTE));
 ok('★통합시트에 썼다★', wroteOf('통합시트:MS') !== undefined, JSON.stringify(WROTE));
 ok('「밸브」라는 말이 결과에 없다', r.done.join(' ').indexOf('밸브') < 0, JSON.stringify(r.done));

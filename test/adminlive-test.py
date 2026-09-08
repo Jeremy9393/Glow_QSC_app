@@ -44,6 +44,19 @@ body = '\n'.join([cut('daysInMonth'), cutconst('MONTH_OPEN_HOUR'), cutconst('MS_
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
+// ★MS_상세 상수★ (2026-09-08 통합) — 진짜 Code.gs 의 값과 같아야 한다.
+//   시험틀은 함수만 잘라오므로 상수는 여기서 세워 준다.
+var MS_DETAIL = 'MS_상세';
+var MS_COL = {
+  date: 1, time: 2, store: 3, code: 4, no: 5, cat: 6, text: 7,
+  kind: 8, answer: 9, state: 10, score: 11, memo: 12, photo: 13, naWhy: 14,
+  at: 15, route: 16, total: 17, answered: 18, overall: 19, demo: 20, order: 21,
+};
+var MS_HEADER = [
+  '방문날짜', '방문시간', '매장명', '코드', '문항번호', '구분', '문항',
+  '유형', '응답', '상태', '점수', '비고', '사진', 'NA사유',
+  '제출시각', '입력경로', '제출점수', '응답수', '총평', '작성자연령대성별', '주문내역',
+];
 // ══ 가짜 세계 ═══════════════════════════════════════════════
 var NOW = '2026-10-15 10';        // 시트 타임존 기준 '지금'
 var Utilities = { formatDate: function (d, tz, fmt) {

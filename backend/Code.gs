@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v111', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v114', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -363,6 +363,12 @@ function actionTable() {
     'admin.rateProbe':    { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnRateProbe },
     /* 개선요청 사진이 응답 시트 → 매장 파일 중 어디서 빠지는지 ★읽기만★ 한다 */
     'admin.photoProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnPhotoProbe },
+    /* 개선요청 표가 몇 줄까지 준비돼 있는지 ★읽기만★ 한다 */
+    'admin.impProbe':     { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnImpProbe },
+    /* 관리자 시트 탭별 행 수·머리글 — ★읽기만★ (MS 통합 설계용) */
+    'admin.sheetProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnSheetProbe },
+    /* 쇼퍼_응답 + 쇼퍼_비고 → MS_상세 이관 — ★기본이 미리보기★ */
+    'admin.msMigrate':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMsMigrate },
     /* 요약 탭에서 잠든 칸을 깨운다(같은 수식을 다시 쓴다) — ★기본이 미리보기★ */
     'admin.wakeSummary':  { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnWakeSummary },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
@@ -2523,7 +2529,11 @@ function fnStatusMonth(ctx, payload) {
        ★본사가 냈든 고객이 냈든 그 달은 제출된 것으로 본다★ (2026-08-20 사용자 결정) —
        점수에서 두 경로를 구별하지 않기로 했으므로 '아직 안 받은 달'의 기준도 같아야 한다.
        마지막 인자 -1 = 입력경로를 보지 않는다. */
-    shopperSet = submittedStores(ss.getSheetByName('쇼퍼_응답'), tz, wantYm, 8, 1, 3, -1);
+    /* ★MS_상세는 문항마다 한 줄★ (2026-09-08) — 같은 매장·같은 달을 여러 번 만나지만
+       submittedStores 는 '그 달에 냈는가'만 보므로 중복이 답을 바꾸지 않는다.
+       열 자리는 MS_COL 을 따른다: 1 방문날짜 · 3 매장명 · 16 입력경로. */
+    shopperSet = submittedStores(ss.getSheetByName(MS_DETAIL), tz, wantYm,
+      MS_COL.route, MS_COL.date, MS_COL.store, -1);
   } catch (e) {
     return err('SERVER_ERROR', '제출 현황을 불러오지 못했습니다.');
   }
@@ -2832,7 +2842,9 @@ function prevSubmitsOf(ss, kind, store, dateStr) {
      QSC_상세가 아니라 QSC_회차를 본다 — 상세는 문항마다 한 줄이라 회차를 셀 수 없다. */
   const conf = (kind === 'qsc')
     ? { name: 'QSC_회차', cols: 7, date: 2, time: 3, store: 4, who: 5, score: 6, route: 0 }
-    : { name: '쇼퍼_응답', cols: 9, date: 2, time: 3, store: 4, who: 0, score: 9, route: 8 };
+    : { name: MS_DETAIL, cols: MS_COL.order, date: MS_COL.date, time: MS_COL.time,
+        store: MS_COL.store, who: 0, score: MS_COL.total, route: MS_COL.route,
+        at: MS_COL.at };   // ★at 가 있으면 제출시각으로 묶는다★ (문항마다 한 줄이라)
   const sh = ss.getSheetByName(conf.name);
   if (!sh) return [];
   const last = sh.getLastRow();
@@ -3312,52 +3324,93 @@ function saveQsc(ss, p, ctx) {
   return out;
 }
 
+/* ---------- MS_상세 (2026-09-08 담당자 결정) ----------
+
+   담당자: *"관리자시트의 QSC_상세처럼 미스터리 쇼퍼도 MS_상세로 바꿔놔줘
+             (쇼퍼_비고랑 쇼퍼_응답을 합쳐서 구조도 QSC_상세처럼 바꾸라는 소리)"*
+           *"매장명, 코드, 문항번호 등등 이런것들도 최대한 똑같이 완전히 맞춰줘"*
+
+   ★앞 14열은 QSC_상세와 자리를 그대로 맞춘다★ — 두 시트를 나란히 놓고 볼 수 있게.
+   MS 에 없는 것(상태·사진·NA사유)은 ★빈 칸으로 자리만★ 둔다.
+   15열부터는 제출 단위 정보다 — 한 제출이 38줄이 되므로 ★모든 줄에 같은 값이 반복★된다.
+   그중 「제출점수」는 MS 점수 계산(shopperMonthAvg)이 쓰는 열이라 반드시 채운다.
+
+   ⚠한 줄 = 한 문항이므로 ★회차를 세는 곳은 제출시각으로 묶어야 한다★ —
+     prevSubmitsOf·submittedStores·fnUndoSubmit 이 그렇게 고쳐져 있다. */
+const MS_DETAIL = 'MS_상세';
+const MS_HEADER = [
+  /* 1~14 : QSC_상세와 같은 자리 */
+  '방문날짜', '방문시간', '매장명', '코드', '문항번호', '구분', '문항',
+  '유형', '응답', '상태', '점수', '비고', '사진', 'NA사유',
+  /* 15~21 : 제출 단위 (문항마다 반복) */
+  '제출시각', '입력경로', '제출점수', '응답수', '총평', '작성자연령대성별', '주문내역',
+];
+/* 열 자리 (1부터) — 읽는 쪽이 이 표를 본다. 숫자를 코드에 흩뿌리지 않는다. */
+const MS_COL = {
+  date: 1, time: 2, store: 3, code: 4, no: 5, cat: 6, text: 7,
+  kind: 8, answer: 9, state: 10, score: 11, memo: 12, photo: 13, naWhy: 14,
+  at: 15, route: 16, total: 17, answered: 18, overall: 19, demo: 20, order: 21,
+};
+
+/* 문항 텍스트 앞의 「1-1.」 을 코드로 쓴다 — QSC 의 A-01 자리에 대응한다.
+   못 찾으면 빈 칸으로 둔다(짐작해서 만들지 않는다). */
+function msCodeOf(text) {
+  const m = String(text || '').match(/^\s*(\d+\s*-\s*\d+)/);
+  return m ? m[1].replace(/\s+/g, '') : '';
+}
+
+/* 한 문항의 환산 점수 — ★앱의 Scoring.shopperConvert 와 같은 규칙★이다
+   (js/scoring.js). 예=1 · 아니오=0 · 1~5 → (n-1)/4 · 무응답은 null(분모에서 빠진다).
+   ⚠규칙을 고칠 때는 반드시 양쪽을 함께 고칠 것. */
+function msConvert(a) {
+  if (a === '예') return 1;
+  if (a === '아니오') return 0;
+  const n = Number(a);
+  if (!isNaN(n) && n >= 1 && n <= 5) return (n - 1) / 4;
+  return null;
+}
+
+/* 사람이 읽을 유형 이름 */
+function msKindOf(scale) {
+  const s = String(scale || '').toLowerCase();
+  if (s === 'yn') return '예/아니오';
+  if (s) return '5점 척도';
+  return '';
+}
+
+/* ★MS_상세는 최신이 맨 위로 온다★ (2026-09-08 담당자) —
+   새로 만드는 시트라 읽는 쪽도 함께 쓰므로 안전하다(옛 시트들은 그대로 둔다).
+   한 제출의 38줄은 ★문항 순서대로★ 넣는다 — 묶음 안에서까지 뒤집으면 읽기 나쁘다. */
+function msPrepend(sh, rows) {
+  if (!rows.length) return;
+  sh.insertRowsBefore(2, rows.length);
+  sh.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+}
+
 function saveShopper(ss, p, ctx, isSurvey) {
   // 익명 경로는 입력경로를 서버가 강제한다. 클라이언트가 보낸 p.source는 읽지 않는다.
   const route = isSurvey ? '고객 직접' : '관리자 입력';
-  const sh = sheet(ss, '쇼퍼_응답', ['제출시각', '방문날짜', '방문시간', '매장명', '응대직원설명', '주문내역', '작성자연령대성별', '입력경로', '점수', '응답수', '총평']
-    .concat(p.answers.map(function (a) { return 'Q' + a.no; })));
-  const row = [p.submittedAt, p.date, p.time || '', p.store, p.staff, p.order, p.demographic,
-    route, p.result.score == null ? '' : round1(p.result.score), p.result.answered]
-    .concat(p.answers.map(function (a) { return a.answer || ''; }));
-  /* ★총평은 옛 '영수증' 열 자리를 물려받는다★ (2026-09-04 담당자 — "지금 영수증 안쓰고있잖아")
-
-     sheet()는 ★시트가 없을 때만★ 머리글을 쓴다. 그래서 이미 만들어진 시트에 열을 하나 더
-     보내면 열이 생기는 게 아니라 ★Q1부터 통째로 한 칸씩 밀린다★(2026-08-20 영수증을 없앴을 때
-     실제로 그래서 이 보정이 생겼다). 그런데 그 시트에는 안 쓰는 '영수증' 열이 11번째에 그대로
-     남아 있다 — 새 열을 넣는 대신 ★그 자리를 이름만 바꿔 쓴다★. 밀림이 원천적으로 없다.
-
-     찾는 차례: ①'총평' ②'영수증'(찾으면 머리글을 '총평'으로 바꿔 물려받는다)
-     ③둘 다 없으면(머리글을 못 읽었을 때) 우리가 선언한 자리인 11번째에 넣는다. */
-  let at = -1;
-  try {
-    const head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
-    at = head.indexOf('총평');
-    if (at < 0) {
-      const old = head.indexOf('영수증');
-      if (old >= 0) { sh.getRange(1, old + 1).setValue('총평'); at = old; }
-    }
-    /* ★둘 다 없으면 그 자리에 이름을 새로 적는다★ (2026-09-04)
-       머리글이 비어 있을 수 있다 — 2026-09-04 검수 때 사람이 그 칸을 만지다 지웠다.
-       값이 들어갈 자리(11번째)는 어차피 아래에서 정해지므로, 이름만 채워 두면
-       다음부터 위 indexOf 가 찾는다. ★이름이 없다고 자리를 옮기지 않는다★ — 옮기면 답이 밀린다. */
-    if (at < 0 && head.length > 10 && !String(head[10] || '').trim()) {
-      sh.getRange(1, 11).setValue('총평');
-      at = 10;
-    }
-  } catch (e) { /* 머리글을 못 읽으면 아래 기본 자리를 쓴다 */ }
-  row.splice(at >= 0 ? at : 10, 0, p.overall || '');
-  sh.appendRow(safeRow(row));
-
-  // 문항별 이유·비고 — 작성된 것만 1행씩 (추적용, 특히 '아니오'의 근거)
-  const memoRows = p.answers.filter(function (a) { return a.memo; }).map(function (a) {
-    return safeRow([p.submittedAt, p.date, p.time || '', p.store, route,
-      a.no, a.text, a.answer || '', a.memo]);
+  /* ★MS_상세 한 시트에 문항마다 한 줄★ (2026-09-08 담당자 결정)
+     종전에는 쇼퍼_응답(제출 1줄 + 문항 38열)과 쇼퍼_비고(비고 있는 문항만)로 나뉘어 있었다.
+     QSC 와 같은 짜임으로 맞추면서 ★한 시트★로 합쳤다 — 앞 14열은 QSC_상세와 자리가 같다.
+     비고가 없는 문항도 한 줄씩 남긴다(QSC_상세가 74문항을 다 남기는 것과 같다) —
+     '답을 안 한 것'과 '기록이 없는 것'을 구별할 수 있어야 한다. */
+  const sh = sheet(ss, MS_DETAIL, MS_HEADER.slice(0));
+  const total = p.result.score == null ? '' : round1(p.result.score);
+  const rows = p.answers.map(function (a) {
+    const conv = msConvert(a.answer);
+    return safeRow([
+      p.date, p.time || '', p.store, msCodeOf(a.text), a.no, a.cat || '', a.text,
+      msKindOf(a.scale), a.answer == null ? '' : a.answer,
+      '',                                   // 상태 — MS 에는 없다(자리만 맞춘다)
+      conv == null ? '' : conv,             // 점수 — 문항 환산값
+      a.memo || '',
+      '', '',                               // 사진 · NA사유 — MS 에는 없다
+      p.submittedAt, route, total, p.result.answered,
+      p.overall || '', p.demographic || '', p.order || '',
+    ]);
   });
-  if (memoRows.length) {
-    const ms = sheet(ss, '쇼퍼_비고', ['제출시각', '방문날짜', '방문시간', '매장명', '입력경로', '문항번호', '문항', '응답', '비고']);
-    appendRows(ms, memoRows);
-  }
+  msPrepend(sh, rows);
 
   /* ★제출이 들어올 때마다 그 달 평균을 다시 계산해 덮어쓴다★ (2026-08-20 사용자 제안)
 
@@ -3421,12 +3474,13 @@ function saveShopper(ss, p, ctx, isSurvey) {
    ymOfCell() 하나로 통일한다 — status.month가 이미 쓰고 있는 그 함수다. */
 function shopperMonthAvg(sh, store, dateStr, tz) {
   const ym = dateStr.slice(0, 7); // 'YYYY-MM'
-  /* ★끝에서부터 읽는다★ — 이 시트는 익명 고객 설문이 함께 쌓이는 공개 시트라
-     getDataRange()면 제출 1건마다 수천 행을 읽게 된다 (submittedStores와 같은 이유). */
+  /* ★앞에서부터 읽는다★ (2026-09-08) — MS_상세는 ★최신이 맨 위★로 쌓이므로
+     최근 자료는 시트 앞쪽에 있다. 종전 쇼퍼_응답은 끝에 쌓여서 끝에서 읽었다.
+     여기를 안 뒤집으면 옛 자료만 보고 평균을 내게 된다 — 오류 없이 숫자만 틀린다. */
   const last = sh.getLastRow();
   if (last < 2) return 0;
-  const n = Math.min(3000, last - 1);
-  const rng = grid(sh, last - n + 1, 1, n, 9);
+  const n = Math.min(6000, last - 1);
+  const rng = grid(sh, 2, 1, n, MS_COL.order);
   const vals = rng ? rng.getValues() : [];
   const scores = [];
   const key = normStore(store);
@@ -3439,12 +3493,21 @@ function shopperMonthAvg(sh, store, dateStr, tz) {
        CS는 10월부터 종합점수의 30%다. ★그 방어는 제출 코드(매장 1곳 = 코드 1개 = 월 1회)가 맡는다★ —
        설계는 `_보관/설계/쇼퍼_제출코드_설계.md`에 있고 아직 만들지 않았다.
        그때까지는 담당자가 `쇼퍼_응답` 시트를 보고 이상한 건을 지우거나 고친다(그 편집이 곧 반영된다). */
+  /* ★한 제출이 38줄이다★ (2026-09-08 MS_상세) — 줄마다 세면 한 제출이 38번 들어가
+     평균이 왜곡되지는 않지만(같은 값이라) 응답 수가 38배로 보인다. 무엇보다 제출이 둘
+     이상일 때 문항 수가 다르면 가중이 어긋난다. 그래서 ★제출시각으로 묶어 한 번씩만★ 센다. */
+  const seen = {};
   for (let i = 0; i < vals.length; i++) {
-    const dYm = ymOfCell(vals[i][1], tz);
-    // 열 순서: 0 제출시각 · 1 방문날짜 · 2 방문시간 · 3 매장명 … 7 입력경로 · 8 점수
-    if (normStore(vals[i][3]) === key && dYm === ym && typeof vals[i][8] === 'number') {
-      scores.push(vals[i][8]);
-    }
+    const v = vals[i];
+    const dYm = ymOfCell(v[MS_COL.date - 1], tz);
+    if (normStore(v[MS_COL.store - 1]) !== key || dYm !== ym) continue;
+    const sc = v[MS_COL.total - 1];
+    if (typeof sc !== 'number') continue;
+    const at = String(v[MS_COL.at - 1] == null ? '' : v[MS_COL.at - 1]);
+    const k = at || (dYm + '|' + String(v[MS_COL.time - 1]) + '|' + sc);   // 제출시각이 비면 날짜·시간·점수로
+    if (seen[k]) continue;
+    seen[k] = 1;
+    scores.push(sc);
   }
   if (!scores.length) return 0;
   return scores.reduce(function (a, b) { return a + b; }, 0) / scores.length;
@@ -3822,7 +3885,7 @@ function attachAdminLive(out, ctx, store, ym) {
     const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     const tz = fileTz(ss);
     if (monthClosed(dateStr, tz)) return;      // 이미 매장 파일에 들어간 달 — 덧붙일 것이 없다
-    const sh = ss.getSheetByName('쇼퍼_응답');
+    const sh = ss.getSheetByName(MS_DETAIL);
     if (!sh) return;
     const avg = shopperMonthAvg(sh, store, dateStr, tz);      // 0~100
     if (!avg) return;
@@ -5742,8 +5805,8 @@ function monthCloseRun(ym, apply, stores) {
   const target = ym || Utilities.formatDate(new Date(), tz, 'yyyy-MM');
   const t0 = Date.now();
   const lines = ['=== 월말 반영 ' + target + (apply ? ' ★적용★' : ' 미리보기') + ' ==='];
-  const resp = ss.getSheetByName('쇼퍼_응답');
-  if (!resp) return { ok: false, error: '쇼퍼_응답 시트가 없습니다', lines: lines };
+  const resp = ss.getSheetByName(MS_DETAIL);
+  if (!resp) return { ok: false, error: MS_DETAIL + ' 시트가 없습니다', lines: lines };
 
   const list = (stores && stores.length) ? stores.map(normStore) : displayStores();
   const done = [], skip = [], bad = [], left = [];
@@ -6088,6 +6151,229 @@ function fnWakeSummary(ctx, payload) {
    부르는 법
      await Api.call('admin.photoProbe', {store:'이티에프 베이커리 더현대', date:'2026-12-01'})
 */
+/* ---------- 개선요청 표가 몇 줄까지 준비돼 있는가 (2026-09-07) ----------
+
+   ★아무것도 바꾸지 않는다★ — 읽기만 한다.
+
+   담당자 지적: *"현재 서식이 원본을 기준으로 4개만 있는데 … 5번째껀 서식이 망가져있어"*
+   개선요청이 표에 준비된 줄 수보다 많아지면 그 아래는 서식(테두리·드롭다운·정렬)이 없다.
+
+   표의 끝은 ★개선요청사항 칸의 COUNTA 수식 범위★가 정한다(tableEndRow).
+   그래서 ①수식이 말하는 끝 ②실제 글이 있는 마지막 줄 ③서식이 살아 있는 마지막 줄
+   셋을 나란히 본다 — 어디까지가 '준비된 표'인지 가려야 몇 줄을 더 만들지 정할 수 있다.
+
+   부르는 법
+     await Api.call('admin.impProbe', {store:'이티에프 베이커리 더현대', ym:'2612'})
+     await Api.call('admin.impProbe', {store:'이티에프 베이커리 더현대', tpl:true})   ← 원본 탭
+*/
+/* ---------- 관리자 시트 탭별 현황 (2026-09-07) ----------
+   ★아무것도 바꾸지 않는다★ — 탭 이름·행 수·열 수·머리글만 읽는다.
+   쇼퍼_응답 + 쇼퍼_비고 를 MS_상세 하나로 합치기 전에 ★규모와 열 구성★을 알아야 한다. */
+/* ---------- 옛 쇼퍼 두 시트 → MS_상세 이관 (2026-09-08) ----------
+
+   ★기본이 미리보기다.★ {apply:true} 를 줘야 실제로 옮긴다.
+
+   옛 구조
+     쇼퍼_응답  한 줄 = 한 제출 (문항 38개가 12~49열에 Q1…Q38 로 가로로)
+     쇼퍼_비고  한 줄 = 비고가 있는 문항만
+   새 구조
+     MS_상세    한 줄 = 한 문항 (비고 없는 문항도 남긴다)
+
+   ★옛 시트는 지우지 않는다★ — 이름만 바꿔 보관한다(쇼퍼_응답_구·쇼퍼_비고_구).
+   되돌려야 할 일이 생기면 그 시트가 있어야 한다.
+
+   ⚠문항 텍스트는 옛 쇼퍼_응답에 없다(머리글이 'Q1'뿐이다). 쇼퍼_비고에 있는 것만 채우고,
+     없으면 빈 칸으로 둔다 — ★짐작해서 지어내지 않는다★.
+     카테고리도 같은 이유로 비고에 있는 줄만 채운다.
+
+   부르는 법
+     await Api.call('admin.msMigrate', {})              ← 무엇이 옮겨질지만
+     await Api.call('admin.msMigrate', {apply:true})    ← 실제로 옮긴다
+*/
+function fnMsMigrate(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const src = ss.getSheetByName('쇼퍼_응답');
+  const memoSh = ss.getSheetByName('쇼퍼_비고');
+  const out = { 적용: apply, 한일: [] };
+
+  if (!src) return { ok: true, 안내: '쇼퍼_응답 시트가 없습니다 — 옮길 것이 없습니다.' };
+  const last = src.getLastRow();
+  if (last < 2) return { ok: true, 안내: '쇼퍼_응답에 자료가 없습니다 — 옮길 것이 없습니다.' };
+
+  const wide = src.getLastColumn();
+  const head = src.getRange(1, 1, 1, wide).getValues()[0].map(function (x) { return String(x == null ? '' : x); });
+  const vals = src.getRange(2, 1, last - 1, wide).getValues();
+
+  /* 옛 머리글에서 자리를 찾는다 — 손으로 고친 시트라 자리를 박아 두면 어긋난다 */
+  const at = {};
+  ['제출시각', '방문날짜', '방문시간', '매장명', '응대직원설명', '주문내역',
+   '작성자연령대성별', '입력경로', '점수', '응답수', '총평'].forEach(function (nm) {
+    at[nm] = head.indexOf(nm);
+  });
+  const qAt = [];   // [{no, col}]
+  head.forEach(function (h, i) {
+    const m = h.match(/^Q(\d+)$/);
+    if (m) qAt.push({ no: Number(m[1]), col: i });
+  });
+  out.찾은열 = { 머리글: head.length, 문항열: qAt.length };
+
+  /* 비고 시트에서 (제출시각|문항번호) → {문항, 비고, 응답} 를 모은다 */
+  const memoBy = {};
+  if (memoSh && memoSh.getLastRow() > 1) {
+    const mw = memoSh.getLastColumn();
+    const mh = memoSh.getRange(1, 1, 1, mw).getValues()[0].map(String);
+    const mAt = {};
+    ['제출시각', '방문날짜', '방문시간', '매장명', '입력경로', '문항번호', '문항', '응답', '비고']
+      .forEach(function (nm) { mAt[nm] = mh.indexOf(nm); });
+    const mv = memoSh.getRange(2, 1, memoSh.getLastRow() - 1, mw).getValues();
+    mv.forEach(function (v) {
+      const k = String(v[mAt['제출시각']]) + '|' + String(v[mAt['문항번호']]);
+      memoBy[k] = { text: v[mAt['문항']], memo: v[mAt['비고']], answer: v[mAt['응답']] };
+    });
+    out.찾은열.비고줄 = mv.length;
+  }
+
+  const rows = [];
+  vals.forEach(function (v) {
+    const at2 = function (nm) { return at[nm] >= 0 ? v[at[nm]] : ''; };
+    const submittedAt = at2('제출시각');
+    const total = at2('점수');
+    qAt.forEach(function (q) {
+      const ans = v[q.col];
+      const m = memoBy[String(submittedAt) + '|' + String(q.no)] || {};
+      const conv = msConvert(ans);
+      rows.push(safeRow([
+        at2('방문날짜'), at2('방문시간'), at2('매장명'),
+        msCodeOf(m.text || ''), q.no, '', m.text || '',
+        '', ans == null ? '' : ans,
+        '',                                  // 상태
+        conv == null ? '' : conv,
+        m.memo || '',
+        '', '',                              // 사진 · NA사유
+        submittedAt, at2('입력경로'), total, at2('응답수'),
+        at2('총평'), at2('작성자연령대성별'), at2('주문내역'),
+      ]));
+    });
+  });
+
+  out.옮길줄 = rows.length;
+  out.제출건수 = vals.length;
+  if (!apply) {
+    out.안내 = '실제로 옮기려면 {apply:true} 를 붙여 다시 부르십시오 (지금은 아무것도 안 바꿨습니다)';
+    out.맛보기 = rows.slice(0, 3);
+    return { ok: true, 결과: out };
+  }
+
+  const dst = sheet(ss, MS_DETAIL, MS_HEADER.slice(0));
+  if (dst.getLastRow() > 1) {
+    out.한일.push('★' + MS_DETAIL + '에 이미 ' + (dst.getLastRow() - 1) + '줄이 있습니다 — 그 위에 옛 자료를 얹습니다★');
+  }
+  /* 옛 자료는 ★아래쪽★에 붙인다 — 새 제출이 위로 오는 시트라 옛 것이 아래가 맞다 */
+  if (rows.length) {
+    dst.getRange(dst.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+    out.한일.push(MS_DETAIL + ' 에 ' + rows.length + '줄을 넣었습니다 (제출 ' + vals.length + '건)');
+  }
+
+  /* 옛 시트는 지우지 않고 이름만 바꾼다 */
+  [['쇼퍼_응답', '쇼퍼_응답_구'], ['쇼퍼_비고', '쇼퍼_비고_구']].forEach(function (pair) {
+    const s = ss.getSheetByName(pair[0]);
+    if (!s) return;
+    if (ss.getSheetByName(pair[1])) { out.한일.push(pair[1] + ' 이 이미 있어 이름을 안 바꿨습니다'); return; }
+    try { s.setName(pair[1]); out.한일.push(pair[0] + ' → ' + pair[1] + ' 로 이름만 바꿨습니다 (지우지 않음)'); }
+    catch (e) { out.한일.push('★' + pair[0] + ' 이름 변경 실패: ' + String(e).slice(0, 50) + '★'); }
+  });
+
+  auditLog(ctx, 'admin.msMigrate', '', '성공', '', 'MS_상세 이관 ' + rows.length + '줄');
+  return { ok: true, 결과: out };
+}
+
+function fnSheetProbe(ctx, payload) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const out = [];
+  ss.getSheets().forEach(function (sh) {
+    const one = { 탭: sh.getName(), 행: sh.getLastRow(), 열: sh.getLastColumn() };
+    try {
+      if (one.행 >= 1 && one.열 >= 1) {
+        const hv = sh.getRange(1, 1, 1, Math.min(one.열, 60)).getValues()[0];
+        one.머리글 = hv.map(function (x) { return String(x == null ? '' : x); })
+          .filter(function (x) { return x !== ''; });
+        one.머리글수 = one.머리글.length;
+        if (one.머리글.length > 18) {
+          one.머리글 = one.머리글.slice(0, 14).concat(['…(' + (one.머리글수 - 14) + '개 더)']);
+        }
+      }
+    } catch (e) { one.오류 = String(e).slice(0, 60); }
+    out.push(one);
+  });
+  return { ok: true, probe: true, 파일: ss.getName(), 탭수: out.length, 탭: out };
+}
+
+function fnImpProbe(ctx, payload) {
+  const p = payload || {};
+  const store = normStore(String(p.store || ''));
+  if (!store) return err('BAD_REQUEST', '매장을 지정해 주세요.');
+  const id = storeFileId(store);
+  if (!id) return err('BAD_REQUEST', '매장 파일 링크를 못 찾았습니다.');
+  const ss = SpreadsheetApp.openById(id);
+
+  const names = [];
+  if (p.tpl === true) {
+    ss.getSheets().forEach(function (s) { if (TPL_TAB_RE.test(s.getName().trim())) names.push(s.getName()); });
+  } else {
+    names.push(String(p.ym || '').trim() || curYymm());
+  }
+
+  const out = { 매장: store, 살펴본탭: names };
+  const list = [];
+  names.forEach(function (nm) {
+    const sh = ss.getSheetByName(nm);
+    if (!sh) { list.push({ 탭: nm, 말: '탭이 없습니다' }); return; }
+    const one = { 탭: nm };
+    try {
+      const g = impGeo(sh);
+      one['새 서식인가'] = g.isNew;
+      one['표 첫 줄'] = g.row0;
+      one['수식이 말하는 끝 줄'] = g.endRow || '(못 읽음)';
+      one['본문 열'] = g.body;
+      one['준비된 줄 수'] = g.endRow ? (g.endRow - g.row0 + 1) : null;
+
+      /* 실제로 글이 있는 마지막 줄 · 서식(테두리)이 살아 있는 마지막 줄 */
+      const scanTo = Math.min(sh.getMaxRows(), (g.endRow || g.row0) + 40);
+      const n = Math.max(0, scanTo - g.row0 + 1);
+      const rng = grid(sh, g.row0, 2, n, Math.max(14, g.last - 1));
+      const vals = rng ? rng.getValues() : [];
+      let lastText = 0;
+      for (let i = 0; i < vals.length; i++) {
+        const b = String(vals[i][g.body - 2] == null ? '' : vals[i][g.body - 2]).trim();
+        if (b) lastText = g.row0 + i;
+      }
+      one['글이 있는 마지막 줄'] = lastText || '(없음)';
+      one['글이 있는 줄 수'] = lastText ? (lastText - g.row0 + 1) : 0;
+
+      /* 테두리로 '서식이 준비된 줄'을 가늠한다 — 아래 테두리가 있으면 표의 일부로 본다 */
+      let lastBorder = 0;
+      try {
+        const br = grid(sh, g.row0, g.body, n, 1);
+        const bs = br ? br.getBorder() : null;   // 범위 전체 기준이라 참고용
+        for (let i = 0; i < n; i++) {
+          const one2 = grid(sh, g.row0 + i, g.body, 1, 1);
+          const bb = one2 ? one2.getBorder() : null;
+          if (bb && bb.getBottom() && bb.getBottom().getColor()) lastBorder = g.row0 + i;
+        }
+      } catch (e) { one['테두리 확인'] = '못 읽음: ' + String(e).slice(0, 40); }
+      if (lastBorder) {
+        one['테두리가 있는 마지막 줄'] = lastBorder;
+        one['서식이 준비된 줄 수'] = lastBorder - g.row0 + 1;
+      }
+    } catch (e) { one.오류 = String(e).slice(0, 90); }
+    list.push(one);
+  });
+  out.결과 = list;
+  return { ok: true, probe: true, 결과: out };
+}
+
 function fnPhotoProbe(ctx, payload) {
   const p = payload || {};
   const store = normStore(String(p.store || ''));
@@ -6702,7 +6988,8 @@ function undoList(store) {
     }
   }
   scan('QSC_회차', 2, 4, 3, 'qsc');
-  scan('쇼퍼_응답', 2, 4, 0, 'shopper');
+  /* MS_상세는 한 제출이 38줄이지만 scan 이 kind|날짜|시간 으로 묶어 한 건으로 센다 */
+  scan(MS_DETAIL, MS_COL.date, MS_COL.store, 0, 'shopper');
   out.sort(function (a, b) { return a.date < b.date ? 1 : (a.date > b.date ? -1 : 0); });
   return { ok: true, preview: true, list: true, store: store, items: out.slice(0, 60) };
 }
@@ -6740,7 +7027,10 @@ function fnUndoSubmit(ctx, payload) {
        함께 지워졌다 — 시트 줄 삭제는 휴지통이 없어 되찾을 수 없다.
        시트에 '입력경로'('고객 직접'/'관리자 입력') 칸이 원래부터 있는데 안 보고 있었다.
      leftRows: 지우지 않고 그 달에 ★남는★ 줄의 값. 지운 뒤 점수를 다시 계산할 때 쓴다. */
-  function pick(shName, dateCol, storeCol, timeCol, routeCol, routeWant) {
+  /* atCol 을 주면 ★남은 것을 제출시각으로 묶어★ 한 번 더 센다 (monthLeftSubmits).
+     MS_상세는 한 제출이 38줄이라, 줄 수를 그대로 「남은 건수」로 적으면 38배로 보인다.
+     ★지울 줄(rows)은 그대로 줄 단위★다 — 38줄을 다 지워야 하기 때문이다. */
+  function pick(shName, dateCol, storeCol, timeCol, routeCol, routeWant, atCol) {
     const sh = ss.getSheetByName(shName);
     if (!sh) return { sh: null, rows: [], monthLeft: 0, leftRows: [] };
     const last = sh.getLastRow();
@@ -6759,7 +7049,18 @@ function fnUndoSubmit(ctx, payload) {
       if (sameDay && sameTime && routeOk) rows.push(i + 2);
       else if (d.slice(0, 7) === ym) { monthLeft++; leftRows.push(vals[i]); }   // 같은 달에 남을 자료
     }
-    return { sh: sh, rows: rows, monthLeft: monthLeft, leftRows: leftRows };
+    /* 남은 것을 제출 단위로도 세어 둔다 — 화면 문구가 이것을 쓴다 */
+    let monthLeftSubmits = monthLeft;
+    if (atCol) {
+      const seen = {};
+      leftRows.forEach(function (v) {
+        const k = String(v[atCol - 1] == null ? '' : v[atCol - 1]);
+        seen[k || ('#' + Object.keys(seen).length)] = 1;
+      });
+      monthLeftSubmits = Object.keys(seen).length;
+    }
+    return { sh: sh, rows: rows, monthLeft: monthLeft,
+             monthLeftSubmits: monthLeftSubmits, leftRows: leftRows };
   }
 
   /* ★route★ — 없으면 그 날짜 쇼퍼 줄을 전부 지운다(관리자 도구의 '통째로 되돌리기').
@@ -6767,16 +7068,17 @@ function fnUndoSubmit(ctx, payload) {
   const route = (p.route === '관리자 입력' || p.route === '고객 직접') ? p.route : '';
   const round = doQsc ? pick('QSC_회차', 2, 4, 3) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
   const detail = doQsc ? pick('QSC_상세', 1, 3, 2) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
-  const shop = doShop ? pick('쇼퍼_응답', 2, 4, 0, 8, route) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
-  /* ★쇼퍼_비고도 그 제출이 쓴 것이다★ (2026-08-26) — 종전에는 빼먹어서, 되돌린 뒤에도
-     문항별 이유·비고가 시트에 남았다. 점수는 쇼퍼_응답에서만 계산하므로 점수는 안 틀렸지만,
-     '되돌렸다'고 해 놓고 기록이 남아 있는 것은 그 자체로 틀린 상태다. */
-  const shopMemo = doShop ? pick('쇼퍼_비고', 2, 4, 0, 5, route) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
+  /* ★쇼퍼 자료는 이제 MS_상세 한 곳뿐이다★ (2026-09-08) — 종전에는 쇼퍼_응답·쇼퍼_비고
+     두 시트를 따로 지워야 했고, 한쪽을 빼먹어 되돌린 뒤에도 기록이 남은 적이 있다(2026-08-26).
+     한 시트가 되면서 그 실수가 원천적으로 없어졌다. */
+  const shop = doShop ? pick(MS_DETAIL, MS_COL.date, MS_COL.store, 0, MS_COL.route, route, MS_COL.at)
+    : { sh: null, rows: [], monthLeft: 0, monthLeftSubmits: 0, leftRows: [] };
+  const shopMemo = { sh: null, rows: [], monthLeft: 0, leftRows: [] };   // 합쳐졌다 — 자리만 남긴다
   const na = (doQsc && time === '') ? pick('NA프리셋', 3, 1, 0) : { sh: null, rows: [], monthLeft: 0, leftRows: [] };
 
   const hit = round.rows.length + detail.rows.length + shop.rows.length + shopMemo.rows.length + na.rows.length;
   log.push('QSC_회차 ' + round.rows.length + '건 · QSC_상세 ' + detail.rows.length +
-    '건 · 쇼퍼_응답 ' + shop.rows.length + '건 · 쇼퍼_비고 ' + shopMemo.rows.length +
+    '건 · ' + MS_DETAIL + ' ' + shop.rows.length + '줄' +
     '건 · NA프리셋 ' + na.rows.length + '건');
 
   /* ★찾은 것이 하나도 없으면 여기서 끝낸다★ — 아래로 내려가면 안 된다.
@@ -6957,7 +7259,8 @@ function fnUndoSubmit(ctx, payload) {
       const v = msAfterVisible();      // ★통합시트도 월중에는 빈칸으로 둔다★
       const b = writeDashboard(store, date, v, 2);
       done.push('통합시트 MS 칸: ' + (b.ok
-        ? (b.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (그 달 남은 ' + shop.monthLeft + '건 평균)'))) : b.error));
+        ? (b.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (그 달 남은 ' +
+           (shop.monthLeftSubmits == null ? shop.monthLeft : shop.monthLeftSubmits) + '건 평균)'))) : b.error));
     }
   }
   /* ★지우지 않고 휴지통으로 보낸다★ — 되돌리기를 잘못 눌렀을 때 되찾을 수 있어야 한다

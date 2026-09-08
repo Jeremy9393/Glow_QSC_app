@@ -27,6 +27,19 @@ body = cut('fnUndoSubmit') + '\n\n' + cut('shopperMonthAvg')
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
+// ★MS_상세 상수★ (2026-09-08 통합) — 진짜 Code.gs 의 값과 같아야 한다.
+//   시험틀은 함수만 잘라오므로 상수는 여기서 세워 준다.
+var MS_DETAIL = 'MS_상세';
+var MS_COL = {
+  date: 1, time: 2, store: 3, code: 4, no: 5, cat: 6, text: 7,
+  kind: 8, answer: 9, state: 10, score: 11, memo: 12, photo: 13, naWhy: 14,
+  at: 15, route: 16, total: 17, answered: 18, overall: 19, demo: 20, order: 21,
+};
+var MS_HEADER = [
+  '방문날짜', '방문시간', '매장명', '코드', '문항번호', '구분', '문항',
+  '유형', '응답', '상태', '점수', '비고', '사진', 'NA사유',
+  '제출시각', '입력경로', '제출점수', '응답수', '총평', '작성자연령대성별', '주문내역',
+];
 // ══ 가짜 세계 ═══════════════════════════════════════════════
 var SHEETS = {};          // 이름 -> 2차원 배열 (1행 = 머리글)
 var WROTE = [];           // 매장 파일/통합시트에 쓴 값 기록
@@ -104,9 +117,21 @@ function wroteOf(k) { for (var i = WROTE.length - 1; i >= 0; i--) if (WROTE[i][0
 
 function reset(shopRows, roundRows, visit) {
   SHEETS = {}; WROTE = []; DELETED = []; VISIT_DATE = visit || '';
-  // 쇼퍼_응답: 1제출시각 2방문날짜 3방문시간 4매장명 5~7 8입력경로 9점수
-  mkSheet('쇼퍼_응답', [['제출시각','방문날짜','방문시간','매장명','a','b','c','입력경로','점수']].concat(shopRows));
-  mkSheet('쇼퍼_비고', [['제출시각','방문날짜','방문시간','매장명','입력경로']]);
+  /* ★MS_상세★ (2026-09-08 통합) — 한 줄 = 한 문항.
+     시험은 문항 하나짜리 제출로 줄인다(회차 판정과 점수 계산만 보므로 38줄일 필요가 없다).
+     shopRows 는 [제출시각, 날짜, 시간, 매장, x, x, x, 경로, 점수] 형태로 들어온다 —
+     옛 시험 자료를 그대로 쓰려고 여기서 MS_상세 자리로 옮겨 준다. */
+  mkSheet(MS_DETAIL, [MS_HEADER.slice(0)].concat(shopRows.map(function (o) {
+    var a = new Array(MS_COL.order).fill('');
+    a[MS_COL.date - 1] = o[1];
+    a[MS_COL.time - 1] = o[2];
+    a[MS_COL.store - 1] = o[3];
+    a[MS_COL.no - 1] = 1;
+    a[MS_COL.at - 1] = o[0];
+    a[MS_COL.route - 1] = o[7];
+    a[MS_COL.total - 1] = o[8];
+    return a;
+  })));
   // QSC_회차: 1제출시각 2점검일자 3방문시간 4매장명 5점검자 6QSC점수
   mkSheet('QSC_회차', [['제출시각','점검일자','방문시간','매장명','점검자','QSC점수']].concat(roundRows || []));
   mkSheet('QSC_상세', [['점검일자','방문시간','매장명']]);
@@ -124,8 +149,8 @@ reset([
 ]);
 var r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
 ok('되돌리기 성공', r.ok === true, JSON.stringify(r.error || ''));
-ok('★손님 3건이 살아 있다★', SHEETS['쇼퍼_응답'].length === 4, '남은 줄(머리글 포함)=' + SHEETS['쇼퍼_응답'].length);
-ok('담당자 것만 지워졌다', !SHEETS['쇼퍼_응답'].some(function (x) { return x[7] === '관리자 입력'; }));
+ok('★손님 3건이 살아 있다★', SHEETS[MS_DETAIL].length === 4, '남은 줄(머리글 포함)=' + SHEETS[MS_DETAIL].length);
+ok('담당자 것만 지워졌다', !SHEETS[MS_DETAIL].some(function (x) { return x[MS_COL.route-1] === '관리자 입력'; }));
 var ms = wroteOf('통합시트:MS');
 ok('★통합시트 MS = 남은 3건 평균 0.90★', Math.abs(ms - 0.9) < 1e-9, '값=' + ms);
 ok('매장 파일 MS 도 같은 값', Math.abs(wroteOf('매장파일:MS점수') - 0.9) < 1e-9, '값=' + wroteOf('매장파일:MS점수'));
@@ -172,7 +197,7 @@ reset([
   ['2026-10-05T10:00','2026-10-05','','금종제과','','','','고객 직접',90],
 ]);
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true });
-ok('그날 2건 다 지웠다', SHEETS['쇼퍼_응답'].length === 2, '남은 줄=' + SHEETS['쇼퍼_응답'].length);
+ok('그날 2건 다 지웠다', SHEETS[MS_DETAIL].length === 2, '남은 줄=' + SHEETS[MS_DETAIL].length);
 ok('다른 날 1건으로 다시 계산 = 0.90', Math.abs(wroteOf('통합시트:MS') - 0.9) < 1e-9, '값=' + wroteOf('통합시트:MS'));
 
 console.log('\n[5] QSC — 그 달에 남은 회차가 있으면 ★마지막 것★으로');
@@ -194,7 +219,7 @@ reset([['2026-10-05T10:00','2026-10-05','','금종제과','','','','고객 직�
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
 ok('nothing=true', r.nothing === true, JSON.stringify(r));
 ok('아무것도 안 썼다', WROTE.length === 0, JSON.stringify(WROTE));
-ok('손님 것 그대로', SHEETS['쇼퍼_응답'].length === 2);
+ok('손님 것 그대로', SHEETS[MS_DETAIL].length === 2);
 
 /* ★쓰기 밸브는 2026-08-27에 통째로 지웠다★ (담당자 결정)
    종전 [8]은 「밸브가 잠기면 안 건드린다」를 쟀는데, 그 기능이 이제 없다.
@@ -202,7 +227,7 @@ ok('손님 것 그대로', SHEETS['쇼퍼_응답'].length === 2);
 console.log('\n[8] ★밸브 없이도 매장 파일·통합시트에 늘 쓴다★');
 reset([['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60]]);
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
-ok('응답 시트 줄을 지운다', SHEETS['쇼퍼_응답'].length === 1, '남은 줄=' + SHEETS['쇼퍼_응답'].length);
+ok('응답 시트 줄을 지운다', SHEETS[MS_DETAIL].length === 1, '남은 줄=' + SHEETS[MS_DETAIL].length);
 ok('★매장 파일에 썼다★', wroteOf('매장파일:MS점수') !== undefined, JSON.stringify(WROTE));
 ok('★통합시트에 썼다★', wroteOf('통합시트:MS') !== undefined, JSON.stringify(WROTE));
 ok('「밸브」라는 말이 결과에 없다', r.done.join(' ').indexOf('밸브') < 0, JSON.stringify(r.done));

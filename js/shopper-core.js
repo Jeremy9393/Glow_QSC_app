@@ -129,7 +129,11 @@ async function initShopperForm(opts) {
   const DRAFT_KEY = ADMIN ? 'shopper-admin-v4' : 'shopper-guest-v4';
   const state = { answers: {}, memos: {} };
   const allQs = [];
-  master.shopper_categories.forEach(function (c) { c.questions.forEach(function (q) { allQs.push(q); }); });
+  /* ★카테고리 이름을 문항에 붙여 둔다★ (2026-09-08) — MS_상세 시트의 「구분」 열이 이것이다.
+     서버는 평가표를 갖고 있지 않아 카테고리를 알 수 없다. 그래서 앱이 실어 보낸다. */
+  master.shopper_categories.forEach(function (c) {
+    c.questions.forEach(function (q) { q.cat = c.name; allQs.push(q); });
+  });
   // 문항 번호로 바로 찾는 표 — isFilled 가 만족도(likert) 여부를 알아야 한다
   const QBY = {};
   allQs.forEach(function (q) { QBY[q.no] = q; });
@@ -532,7 +536,7 @@ async function initShopperForm(opts) {
       result: res,
       answers: allQs.map(function (q) {
         return {
-          no: q.no, row: q.row, text: q.text, scale: q.scale,
+          no: q.no, row: q.row, text: q.text, scale: q.scale, cat: q.cat || '',
           answer: state.answers[q.no] == null ? null : state.answers[q.no],
           memo: (state.memos[q.no] || '').trim(),
         };
