@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v123', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v124', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -365,6 +365,7 @@ function actionTable() {
     'admin.photoProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnPhotoProbe },
     /* 개선요청 표가 몇 줄까지 준비돼 있는지 ★읽기만★ 한다 */
     'admin.impProbe':     { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnImpProbe },
+    'admin.renameStore':  { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnRenameStore },
     /* 관리자 시트 탭별 행 수·머리글 — ★읽기만★ (MS 통합 설계용) */
     'admin.sheetProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnSheetProbe },
     /* 쇼퍼_응답 + 쇼퍼_비고 → MS_상세 이관 — ★기본이 미리보기★ */
@@ -6401,6 +6402,140 @@ function fnSheetProbe(ctx, payload) {
     out.push(one);
   });
   return { ok: true, probe: true, 파일: ss.getName(), 탭수: out.length, 탭: out };
+}
+
+/* ---------- 매장 이름 갈아 끼우기 (2026-09-08) ----------
+   담당자가 통합시트에서 매장 이름을 바꾸면 ★거기만 바뀌고 나머지는 옛 이름 그대로★ 남는다.
+   실제로 그런 일이 있었다: 「이티에프 투고」 → 「이티에프 베이커리 투고」.
+   그러면 이런 일이 생긴다 —
+     · 계정의 매장범위가 옛 이름 → 로그인은 되는데 ★담당 매장을 못 찾아 빈 화면★
+     · QSC_상세·MS_상세의 지난 기록이 옛 이름 → 그 매장 화면에서 안 보인다
+     · 살아 있는 제출 코드가 옛 이름 → 그 링크로 낸 설문이 매장 대조에서 걸린다
+
+   ★통합시트는 건드리지 않는다★ — 거기가 정본이고 이미 새 이름이다.
+   ★감사로그도 건드리지 않는다★ — 그때 그렇게 적혔다는 것이 로그의 값어치다.
+   ★매장 파일 이름도 안 건드린다★ — 드라이브 파일 이름은 사람이 본다(연결은 링크로 한다).
+
+   ★비밀번호는 안 깨진다★ — pwHash(salt, plain, iter) 가 아이디를 쓰지 않는다.
+     다만 아이디를 바꾸면 그 계정의 ★세션은 끊긴다★(토큰 안 u 가 옛 아이디다) — 다시 로그인하면 된다.
+
+   부르는 법
+     await Api.call('admin.renameStore', {from:'이티에프 투고', to:'이티에프 베이커리 투고'})
+     await Api.call('admin.renameStore', {from:'…', to:'…', apply:true})     ← 실제로 바꾼다 */
+const RENAME_SPOTS = [
+  { where: 'main', tab: 'QSC_회차', col: 4, what: '매장명' },
+  { where: 'main', tab: 'QSC_상세', col: 3, what: '매장명' },
+  { where: 'main', tab: MS_DETAIL, col: MS_COL.store, what: '매장명' },
+  { where: 'main', tab: CODE_SHEET, col: 2, what: '매장 (제출 코드)' },
+  { where: 'main', tab: 'NA프리셋', col: 1, what: '매장명' },
+  { where: 'auth', tab: AUTH_ACCOUNT_SHEET, col: ACCT_COL.id, what: '아이디 (로그인 이름)' },
+  /* 매장범위는 쉼표로 이은 목록이다 — 통째로 비교하면 「A, 이티에프 투고」 같은 줄을 놓친다 */
+  { where: 'auth', tab: AUTH_ACCOUNT_SHEET, col: ACCT_COL.scope, what: '매장범위', csv: true },
+  { where: 'auth', tab: STORE_MAP_SHEET, col: 1, what: '매장명 (매장파일맵)' },
+];
+
+/* 한 칸의 값을 새 이름으로 바꾼 결과를 돌려준다. 바꿀 것이 없으면 null. */
+function renameCell(v, from, to, csv) {
+  const raw = String(v == null ? '' : v);
+  if (!raw.trim()) return null;
+  if (!csv) return (normStore(raw) === from) ? to : null;
+  /* 쉼표 목록 — 항목마다 본다. '*' 은 전 매장이라 손대지 않는다 */
+  if (raw.trim() === '*') return null;
+  const parts = raw.split(',');
+  let hit = false;
+  const out = parts.map(function (s) {
+    if (normStore(s) === from) { hit = true; return to; }
+    return String(s).trim();
+  });
+  return hit ? out.join(', ') : null;
+}
+
+function fnRenameStore(ctx, payload) {
+  const p = payload || {};
+  const from = normStore(p.from || '');
+  const to = normStore(p.to || '');
+  const apply = (p.apply === true);
+  if (!from || !to) return err('BAD_REQUEST', 'from 과 to 를 둘 다 적어 주세요.');
+  if (from === to) return err('BAD_REQUEST', '두 이름이 같습니다.');
+
+  /* ★안전 검사★ — 새 이름이 통합시트에 있어야 하고, 옛 이름은 없어야 한다.
+     둘 다 살아 있으면 서로 다른 두 매장이라는 뜻이라 합치면 안 된다. */
+  let live = [];
+  try { live = displayStores() || []; } catch (e) { }
+  const hasTo = live.indexOf(to) >= 0;
+  const hasFrom = live.indexOf(from) >= 0;
+  if (!hasTo) {
+    return err('BAD_REQUEST', '새 이름이 통합시트에 없습니다: ' + to +
+      ' — 통합시트를 먼저 고치고 다시 부르십시오.');
+  }
+  if (hasFrom) {
+    return err('CONFLICT', '옛 이름도 통합시트에 살아 있습니다: ' + from +
+      ' — 서로 다른 두 매장이면 합치면 안 됩니다.');
+  }
+
+  const main = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const auth = authSS();
+  const rows = [];
+  let total = 0;
+
+  RENAME_SPOTS.forEach(function (spot) {
+    const ss = (spot.where === 'auth') ? auth : main;
+    const one = { 탭: spot.tab, 칸: spot.what };
+    if (!ss) { one.말 = '시트를 못 열었습니다'; rows.push(one); return; }
+    try {
+      const sh = ss.getSheetByName(spot.tab);
+      if (!sh) { one.말 = '탭이 없습니다'; rows.push(one); return; }
+      const last = sh.getLastRow();
+      if (last < 2) { one.걸린줄 = 0; rows.push(one); return; }
+      const rng = sh.getRange(2, spot.col, last - 1, 1);
+      const vals = rng.getValues();
+      const hits = [];
+      for (let i = 0; i < vals.length; i++) {
+        const nv = renameCell(vals[i][0], from, to, spot.csv);
+        if (nv !== null) { hits.push(i + 2); vals[i][0] = nv; }
+      }
+      one.걸린줄 = hits.length;
+      if (hits.length) one.줄번호 = hits.slice(0, 12).concat(hits.length > 12 ? ['…'] : []);
+      total += hits.length;
+      if (apply && hits.length) {
+        rng.setValues(vals);
+        one.바꿈 = true;
+      }
+    } catch (e) {
+      one.오류 = String(e && e.message || e).slice(0, 70);
+    }
+    rows.push(one);
+  });
+
+  /* ★캐시를 버린다★ — 매장명을 열쇠로 삼는 것들이 옛 이름으로 물려 있다.
+     안 버리면 최대 10분 동안 「고쳤는데 그대로」로 보인다. */
+  const cleared = [];
+  if (apply) {
+    try { dropNaCache(); cleared.push('NA프리셋'); } catch (e) { }
+    try { dropDashCache(); cleared.push('통합시트'); } catch (e) { }
+    try { dropStoreCache(from); dropStoreCache(to); cleared.push('매장현황'); } catch (e) { }
+    try { dropAccountCache(from); dropAccountCache(to); cleared.push('계정'); } catch (e) { }
+    /* 매장 파일 링크 캐시(sfid:)는 열쇠가 매장명이라 옛 이름 것은 그냥 늙어 죽는다(600초).
+       새 이름은 아직 캐시에 없으므로 다음 조회에서 통합시트를 다시 읽는다. */
+    auditLog(ctx, 'admin.renameStore', to, '성공', '',
+      from + ' → ' + to + ' · ' + total + '줄');
+  }
+
+  return {
+    ok: true,
+    미리보기: !apply,
+    옛이름: from, 새이름: to,
+    합계: total,
+    자리: rows,
+    캐시: cleared,
+    말: apply
+      ? (total ? '바꿨습니다. 그 매장 계정은 다시 로그인해야 합니다(아이디가 바뀌면 세션이 끊깁니다).'
+               : '바꿀 것이 없었습니다.')
+      : (total ? '아직 아무것도 바꾸지 않았습니다 — {apply:true} 로 다시 부르십시오.'
+               : '옛 이름으로 남은 줄이 없습니다.'),
+    '손대지 않은 곳': ['통합시트(정본)', '감사로그(그때 기록이라 그대로 둔다)',
+      '매장 파일 이름(사람이 본다)', '_아카이브 파일 이름(로컬)'],
+  };
 }
 
 function fnImpProbe(ctx, payload) {
