@@ -199,6 +199,48 @@ print('매장 %d 개 (구글 통합시트 직독 · 숨김 행은 구글이 제�
 assert len(stores) >= 20, ('★중단★ 매장이 %d곳뿐입니다 — 구글 통합시트 「%s」 탭의 '
                            "'%s' 열을 확인하십시오." % (len(stores), _SHEET_TAB, _STORE_COL))
 
+# ══════════════════════════════════════════════════════════════
+# 매장 유형 (키오스크) — data/store-types.json
+#
+# ★왜 시트가 아니라 파일인가★ (2026-09-08)
+#   손님 화면(survey.html)은 로그인 벽 때문에 config.get 응답을 못 받는다
+#   (config.get 은 anon 이 아니라 legacy 다 — backend/Code.gs:302).
+#   그래서 시트에 두면 손님 화면에는 영영 안 닿는다. master.json 에 실어 배포한다.
+#   대신 고치려면 재배포가 필요하다 — 그 사정은 그 파일 맨 위에 적어 두었다.
+#
+# ★없어도 멈추지 않는다★ — 파일이 없으면 빈 설정으로 둔다(전 매장 38문항).
+_ST = ROOT / 'data' / 'store-types.json'
+store_types, kiosk_excludes = {}, []
+if _ST.exists():
+    _st = json.loads(_ST.read_text(encoding='utf-8'))
+    store_types = {k: str(v).strip() for k, v in (_st.get('types') or {}).items()}
+    kiosk_excludes = [str(c).strip() for c in (_st.get('kioskExcludes') or [])]
+
+    # ★매장명이 통합시트와 한 글자라도 다르면 멈춘다★ — 조용히 안 먹는 것이 가장 나쁘다
+    _unknown = [s for s in store_types if s not in stores]
+    if _unknown:
+        raise SystemExit(
+            '★중단★ store-types.json 의 매장명이 통합시트에 없습니다: %s\n'
+            '   통합시트의 이름과 한 글자도 다르면 안 됩니다 (띄어쓰기 포함).\n'
+            '   지금 통합시트 매장: %s' % (', '.join(_unknown), ', '.join(stores)))
+
+    _badtype = {s: t for s, t in store_types.items() if t not in ('kiosk', 'mixed')}
+    if _badtype:
+        raise SystemExit('★중단★ 매장 유형은 kiosk 또는 mixed 여야 합니다: %s' % _badtype)
+
+    # ★문항 코드가 실제로 있는지★ — 평가표를 고쳐 코드가 사라지면 조용히 안 먹는다
+    _codes = set()
+    for _c in shopper_cats:
+        for _q in _c['questions']:
+            _m = re.match(r'^(\d+-\d+)\.', str(_q['text']))
+            if _m:
+                _codes.add(_m.group(1))
+    _miss = [c for c in kiosk_excludes if c not in _codes]
+    if _miss:
+        raise SystemExit(
+            '★중단★ store-types.json 의 kioskExcludes 문항이 평가표에 없습니다: %s\n'
+            '   평가표에서 문항 번호가 바뀌었는지 확인하십시오.' % ', '.join(_miss))
+
 master = {
     'version': XLSX_VERSION,          # 화면에 '평가표 … 기준'으로 뜬다
     'source_sha': XLSX_SHA,           # 엑셀이 바뀌면 반드시 바뀐다 — 배포 점검이 이걸 본다
@@ -230,6 +272,9 @@ master = {
     },
     'qsc_groups': qsc_groups,
     'shopper_categories': shopper_cats,
+    # 매장 유형 — 앱이 이것으로 문항을 거른다 (data/store-types.json 에서 옴)
+    'store_types': store_types,
+    'kiosk_excludes': kiosk_excludes,
 }
 OUT.parent.mkdir(parents=True, exist_ok=True)
 
