@@ -117,7 +117,7 @@ console.log('── 한 제출 = 문항 수만큼 줄 ──');
 var r = run({});
 ok('[1-1] 문항 3개 → 3줄', r.length, 3);
 ok('[1-2] 비고 없는 문항도 남는다', r.filter(function (x) { return !x[MS_COL.memo - 1]; }).length, 2);
-ok('[1-3] 머리글은 21열', HEADER.length, 21);
+ok('[1-3] 머리글은 16열', HEADER.length, 16);
 
 console.log('── 앞 14열이 QSC_상세와 같은 자리 ──');
 ok('[2-1] 방문날짜', r[0][MS_COL.date - 1], '2026-10-05');
@@ -125,18 +125,13 @@ ok('[2-2] 방문시간', r[0][MS_COL.time - 1], '11:00');
 ok('[2-3] 매장명', r[0][MS_COL.store - 1], '금종제과');
 ok('[2-4] 코드', r[0][MS_COL.code - 1], '1-1');
 ok('[2-5] 문항번호', r[0][MS_COL.no - 1], 1);
-ok('[2-6] 구분(카테고리)', r[0][MS_COL.cat - 1], '1. 입·퇴점 응대');
-ok('[2-7] 문항', r[0][MS_COL.text - 1], '1-1. 인사를 건넸나요?');
-ok('[2-8] 유형', r[0][MS_COL.kind - 1], '예/아니오');
-ok('[2-9] 응답', r[0][MS_COL.answer - 1], '예');
-ok('[2-10] 상태는 빈칸 (MS 에 없다)', r[0][MS_COL.state - 1], '');
-ok('[2-11] 사진·NA사유도 빈칸', [r[0][MS_COL.photo - 1], r[0][MS_COL.naWhy - 1]], ['', '']);
+ok('[2-6] 문항', r[0][MS_COL.text - 1], '1-1. 인사를 건넸나요?');
+ok('[2-7] 응답', r[0][MS_COL.answer - 1], '예');
 
 console.log('── 문항 환산 점수 ──');
 ok('[3-1] 예 → 1', r[0][MS_COL.score - 1], 1);
 ok('[3-2] 아니오 → 0', r[1][MS_COL.score - 1], 0);
 ok('[3-3] 4점 → 0.75', r[2][MS_COL.score - 1], 0.75);
-ok('[3-4] 척도 문항의 유형', r[2][MS_COL.kind - 1], '5점 척도');
 ok('[3-5] 비고가 들어간다', r[1][MS_COL.memo - 1], '다른 곳을 봤어요');
 
 console.log('── 제출 단위 값은 모든 줄에 같이 ──');
