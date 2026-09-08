@@ -40,6 +40,11 @@
     // ★점검 잠금이 걸려 있으면 on=false로 풀려 해도 버튼을 다시 열지 않는다
     b.disabled = on || maintLock;
     b.textContent = on ? '확인 중…' : label;
+    /* ★화면 가운데에도 띄운다★ (2026-09-08 담당자 — *"제출중인지 멈춘건지 잘 구분이 안가서"*)
+       로그인은 비밀번호 해시 계산 때문에 느린 폰에서 몇 초 걸리고, 서버가 잠들어 있었으면
+       거기에 왕복이 더 붙는다. 이 함수 하나가 로그인·비밀번호 설정을 모두 지난다. */
+    if (on) Busy.on('확인 중입니다…');
+    else Busy.off();
   }
   function go() { location.replace(next); }
 

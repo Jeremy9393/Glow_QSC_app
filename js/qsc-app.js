@@ -767,6 +767,9 @@
     };
     const btn = $('#submitBtn');
     btn.disabled = true; btn.textContent = '저장 중…';
+    /* ★화면 가운데에도 띄운다★ (2026-09-08 담당자) — 사진이 붙은 제출은 특히 오래 걸린다
+       (사진 한 장마다 드라이브 왕복). 버튼 글자만으로는 멈춘 것과 구별되지 않는다. */
+    Busy.on('저장 중입니다…');
     try {
       let r = await Api.submit('qsc', payload);
       /* ★이미 낸 날짜면 서버가 멈추고 되묻는다★ (2026-08-26) — 종전에는 아무 말 없이 덮어썼다.
@@ -839,7 +842,12 @@
           location.reload();
         }
       } else alert('저장 실패: ' + (r.error || '알 수 없는 오류'));
-    } catch (e) { alert('저장 실패: ' + e.message); }
+    } catch (e) {
+      alert('저장 실패: ' + e.message);
+    } finally {
+      /* ★finally 로 끈다★ — try 안에 중간 return 이 있다(되묻기에서 취소했을 때) */
+      Busy.off();
+    }
     btn.disabled = false; btn.textContent = '제출';
   };
 
