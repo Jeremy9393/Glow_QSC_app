@@ -1,6 +1,6 @@
 {
  "version": "2026-09-08",
- "source_sha": "ec75dac6c51b",
+ "source_sha": "e260a9f91212",
  "source": "QSC·MS 평가표.xlsx",
  "stores": [
   "금종제과",
@@ -79,5 +79,11 @@
    "name": "부적합",
    "rule": "< 55"
   }
- ]
+ ],
+ "store_types": {
+  "도넛정수": "kiosk",
+  "우물집 판교": "kiosk",
+  "이티에프 베이커리 성수": "mixed",
+  "제주당": "mixed"
+ }
 }

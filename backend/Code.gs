@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v118', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v119', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -3343,8 +3343,13 @@ const MS_DETAIL = 'MS_상세';
 const MS_HEADER = [
   /* 1~9 : 문항 하나를 설명하는 열 */
   '방문날짜', '방문시간', '매장명', '코드', '문항번호', '문항', '응답', '점수', '비고',
-  /* 10~16 : 제출 단위 (문항마다 같은 값이 반복된다) */
+  /* 10~17 : 제출 단위 (문항마다 같은 값이 반복된다) */
   '제출시각', '입력경로', '제출점수', '응답수', '총평', '작성자연령대성별', '주문내역',
+  /* ★17 주문방법★ (2026-09-08) — 「일부만 키오스크」 매장에서만 값이 있다(카운터/키오스크).
+     그 매장은 손님이 고른 방법에 따라 3-1·3-2 를 빼므로, 여기에 남겨 두어야
+     ★한 매장의 키오스크 비율이 이상할 때 담당자가 눈으로 잡을 수 있다★.
+     키오스크 전용 매장·카운터 매장은 물어보지 않으므로 빈 칸이다. */
+  '주문방법',
 ];
 /* 열 자리 (1부터) — 읽는 쪽이 이 표를 본다. 숫자를 코드에 흩뿌리지 않는다.
    ★2026-09-08 정리★ — 구분·유형·상태·사진·NA사유를 뺐다(담당자 지시 + 늘 빈 칸이던 열).
@@ -3352,6 +3357,7 @@ const MS_HEADER = [
 const MS_COL = {
   date: 1, time: 2, store: 3, code: 4, no: 5, text: 6, answer: 7, score: 8, memo: 9,
   at: 10, route: 11, total: 12, answered: 13, overall: 14, demo: 15, order: 16,
+  way: 17,
 };
 
 /* 문항 텍스트 앞의 「1-1.」 을 코드로 쓴다 — QSC 의 A-01 자리에 대응한다.
@@ -3383,8 +3389,22 @@ function msKindOf(scale) {
 /* ★MS_상세는 최신이 맨 위로 온다★ (2026-09-08 담당자) —
    새로 만드는 시트라 읽는 쪽도 함께 쓰므로 안전하다(옛 시트들은 그대로 둔다).
    한 제출의 38줄은 ★문항 순서대로★ 넣는다 — 묶음 안에서까지 뒤집으면 읽기 나쁘다. */
+/* ★열이 늘면 머리글도 늘려 준다★ (2026-09-08 주문방법 열을 더하며)
+   sheet() 는 ★시트가 없을 때만★ 머리글을 쓴다. 그래서 이미 만들어진 MS_상세 에
+   열을 더하면 값은 17열에 들어가는데 머리글은 16개인 채로 남아, 그 열이
+   ★이름 없는 칸★이 된다 — 몇 달 뒤에 보면 무슨 값인지 알 수 없다.
+   같은 값을 다시 써도 무해하므로, 모자랄 때만 한 번 채운다. */
+function msFixHeader(sh) {
+  try {
+    const w = sh.getLastColumn();
+    if (w >= MS_HEADER.length) return;
+    sh.getRange(1, 1, 1, MS_HEADER.length).setValues([MS_HEADER.slice(0)]);
+  } catch (e) { /* 머리글은 덤이다 — 여기서 제출을 막지 않는다 */ }
+}
+
 function msPrepend(sh, rows) {
   if (!rows.length) return;
+  msFixHeader(sh);
   sh.insertRowsBefore(2, rows.length);
   sh.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
 }
@@ -3408,6 +3428,9 @@ function saveShopper(ss, p, ctx, isSurvey) {
       a.memo || '',
       p.submittedAt, route, total, p.result.answered,
       p.overall || '', p.demographic || '', p.order || '',
+      /* ★주문방법★ — 「일부만 키오스크」 매장에서만 값이 온다. 서버는 판정하지 않고
+         손님이 고른 사실을 그대로 남긴다(문항을 뺄지 정하는 것은 앱이다). */
+      p.way || '',
     ]);
   });
   msPrepend(sh, rows);

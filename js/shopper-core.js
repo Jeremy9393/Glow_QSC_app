@@ -53,6 +53,18 @@ async function initShopperForm(opts) {
   ];
   const META_FIELDS = [
     { id: 'store', label: '매장명 *', full: true, control: '<select id="store"><option value="">방문한 매장 선택</option></select>' },
+    /* ★주문 방법 — 「일부만 키오스크」 매장에서만 뜬다★ (2026-09-08 담당자 결정)
+       카운터도 되고 키오스크도 있는 매장(이티에프 베이커리 성수·제주당)에서,
+       매장 전체로 문항을 빼면 ★카운터로 주문한 손님의 멀쩡한 응답까지 버린다★.
+       그렇다고 손님에게 문항마다 「해당 없음」을 주면 담당자 우려대로
+       *"업셀링을 안했다는건 안한건다 해당없음 같이 표시해버릴까봐"* 가 된다.
+       그래서 묻는 것을 ★판단이 아니라 사실★로 바꿨다 — 「내가 어떻게 주문했나」 한 번.
+       ★기본은 숨김★ (hide) — mixed 매장을 고를 때만 applyExclusions 가 연다.
+       ★자리는 매장 바로 다음★ — 문항이 그려지기 전에 정해져야 「줄어드는 장면」이 안 보인다. */
+    { id: 'way', label: '주문 방법 *', full: true, hide: true,
+      control: '<select id="way"><option value="">주문한 방법 선택</option>' +
+        '<option value="카운터">카운터에서 직원에게 주문</option>' +
+        '<option value="키오스크">키오스크(무인 단말)로 주문</option></select>' },
     { id: 'date', label: '방문날짜 *', control: '<input type="date" id="date">' },
     { id: 'time', label: '방문 시간 *', control: TimePick.html('time') },
     /* ★이름·얼굴·체형은 받지 않는다★ (2026-08-27 담당자 결정 · 2026-09-01 완화)
@@ -115,7 +127,10 @@ async function initShopperForm(opts) {
     return '<div class="meta-grid">' + list.map(function (f) {
       // head 만 있는 항목은 입력칸이 아니라 묶음의 머리다 (아래 칸들이 그 밑에 딸린다)
       if (f.head) return '<div class="full metaHead">' + f.head + '</div>';
-      return '<div' + (f.full ? ' class="full"' : '') + '><label class="f">' + f.label + '</label>' + f.control + '</div>';
+      /* ★data-meta 를 달아 둔다★ (2026-09-08) — 칸 하나를 통째로 여닫으려면 라벨까지
+         함께 감춰야 한다. 입력칸 id 만으로는 라벨이 남아 「이름만 있는 빈 자리」가 된다. */
+      return '<div data-meta="' + f.id + '"' + (f.full ? ' class="full"' : '') +
+        (f.hide ? ' hidden' : '') + '><label class="f">' + f.label + '</label>' + f.control + '</div>';
     }).join('') + '</div>';
   }
   if ($('#metaBox')) {
@@ -145,6 +160,99 @@ async function initShopperForm(opts) {
   const QBY = {};
   allQs.forEach(function (q) { QBY[q.no] = q; });
   const updaters = {};
+
+  /* ══ 매장 구조상 답할 수 없는 문항 빼기 (2026-09-08 담당자 결정) ══════════════
+
+     왜 —
+       키오스크로만 주문하는 매장에는 「직원이 메뉴를 설명했나요」가 성립하지 않는다.
+       손님이 「아니오」를 고르면 ★매장이 잘못한 것이 아닌데 감점★이 된다.
+       실제 미스터리쇼퍼에게서 들어온 문의였다.
+
+     ★손님에게 「해당 없음」 버튼을 주지 않는다★ — 담당자 우려:
+       *"업셀링을 안했다는건 안한건다 해당없음 같이 표시해버릴까봐"*
+       판단을 손님에게 떠넘기면 애매할 때마다 감점이 지워진다. 그래서 본사가 미리 정한다.
+
+     ★allQs 는 38개 그대로 둔다★ — 이 줄이 이 설계의 핵심이다.
+       걸러진 배열로 갈아끼우면 updaters[q.no] 가 없어져 임시저장 복원 루프가
+       TypeError 로 죽고(그 손님은 화면이 그 자리에서 멈춘다), QBY·카드 참조도 함께 어긋난다.
+       대신 ★화면에서 감추고 activeQs() 로만 세는★ 방식을 쓴다 — 재렌더가 없어
+       매장을 바꿔도 스크롤·포커스·쓰던 비고가 살아 있다.
+
+     문항 코드로 다룬다 (번호가 아니라) —
+       2026-08-18 에 13번 카테고리가 4→2문항으로 줄자 번호가 밀려 엉뚱한 예시가 붙은 적이 있다.
+       번호로 저장하면 평가표를 한 번 고치는 순간 ★엉뚱한 문항이 조용히 사라진다★. */
+  const STORE_TYPES = master.store_types || {};
+  const KIOSK_EX = master.kiosk_excludes || [];
+  const cardOf = {};        // 문항번호 → 카드 element (buildQ 가 채운다)
+  const secOf = {};         // 카테고리 이름 → 섹션 element
+  let excluded = {};        // 지금 빠져 있는 문항번호 (no → true)
+
+  function codeOf(q) {
+    return (String(q.text).match(/^(\d+-\d+)\./) || [])[1] || '';
+  }
+  function storeType() {
+    const el = $('#store');
+    return STORE_TYPES[(el && el.value || '').trim()] || '';
+  }
+  /* 지금 이 방문에서 키오스크 주문인가 —
+       kiosk  매장 전체가 키오스크다 (주문 방법을 묻지 않는다)
+       mixed  손님이 「키오스크」를 고른 방문만
+       그 밖  아니다 (38문항 그대로) */
+  function isKioskVisit() {
+    const t = storeType();
+    if (t === 'kiosk') return true;
+    if (t !== 'mixed') return false;
+    const w = $('#way');
+    return !!(w && w.value === '키오스크');
+  }
+  /* ★화면·채점·제출에 실제로 쓰이는 문항★ — 빠진 것을 뺀 나머지 */
+  function activeQs() {
+    return allQs.filter(function (q) { return !excluded[q.no]; });
+  }
+  /* 매장이나 주문 방법이 정해질 때마다 부른다. 카드를 여닫고, 빠진 문항의 답을 지우고,
+     주문 방법 칸을 열고 닫는다. ★재렌더가 아니다★ — 만들어 둔 카드를 감출 뿐이다. */
+  function applyExclusions() {
+    const t = storeType();
+    const wayBox = document.querySelector('[data-meta="way"]');
+    const waySel = $('#way');
+    /* 주문 방법은 mixed 매장에서만 묻는다. 닫을 때는 값도 비운다 —
+       카운터 매장으로 바꿨는데 「키오스크」가 남아 있으면 다음에 mixed 를 골랐을 때
+       손님이 고른 적 없는 값으로 문항이 빠진다. */
+    if (wayBox) {
+      const show = (t === 'mixed');
+      wayBox.hidden = !show;
+      if (!show && waySel) waySel.value = '';
+    }
+
+    const kiosk = isKioskVisit();
+    const next = {};
+    if (kiosk) {
+      allQs.forEach(function (q) {
+        if (KIOSK_EX.indexOf(codeOf(q)) >= 0) next[q.no] = true;
+      });
+    }
+    excluded = next;
+
+    /* 빠진 문항의 답·비고를 지운다. ★안 지우면 숨긴 문항이 채점된다★ —
+       카운터로 고쳐 답한 뒤 키오스크로 바꾸면 화면에 없는 답이 점수에 남는다. */
+    allQs.forEach(function (q) {
+      const card = cardOf[q.no];
+      if (card) card.hidden = !!excluded[q.no];
+      if (!excluded[q.no]) return;
+      if (state.answers[q.no] != null || (state.memos[q.no] || '') !== '') {
+        delete state.answers[q.no];
+        delete state.memos[q.no];
+        if (updaters[q.no]) updaters[q.no]();
+      }
+    });
+    /* 카테고리가 통째로 비면 제목 줄도 감춘다 — 「예 / 아니오」만 뜬 빈 상자가 남지 않게.
+       (지금 설정으로는 3-3 이 남아 안 비지만, 뺄 문항이 늘면 바로 생긴다) */
+    master.shopper_categories.forEach(function (c) {
+      const sec = secOf[c.name];
+      if (!sec) return;
+      sec.hidden = c.questions.every(function (q) { return !!excluded[q.no]; });
+    });
+  }
   const LIKERT_LABEL = { 1: '매우 아니다', 2: '아니다', 3: '보통', 4: '그렇다', 5: '매우 그렇다' };
 
   /* 문항별 예시 [아쉬움 예시, 좋음 예시].
@@ -223,6 +331,9 @@ async function initShopperForm(opts) {
   // pick: 드롭다운(고르는 칸) — 안내 문구를 '선택해 주세요'로 바꾼다
   const REQUIRED_META = [
     { id: 'store', label: '매장명' },
+    /* ★주문 방법은 「일부만 키오스크」 매장에서만 필수★ (2026-09-08) —
+       when 이 거짓이면 그 칸은 화면에 없다. 없는 칸을 필수로 검사하면 제출이 막힌다. */
+    { id: 'way', label: '주문 방법', pick: true, when: function () { return storeType() === 'mixed'; } },
     { id: 'date', label: '방문날짜' },
     { id: 'time', label: '방문 시간', pick: true, focus: 'timeH', get: function () { return TimePick.get('time'); } },
     /* ★응대 직원은 필수가 아니다★ (2026-09-04 담당자) — 「추가로 하고 싶은 말 (선택)」 묶음으로 옮겼다 */
@@ -295,6 +406,12 @@ async function initShopperForm(opts) {
       storeSel.value = preStore;
       storeSel.disabled = true;
     }
+    /* ★매장이 정해지는 세 경로가 전부 여기를 지난다★ (2026-09-08) —
+       ?store= 자동선택 · 배경 매장목록 갱신 · 첫 그리기. 이 셋은 change 이벤트를 쏘지 않아
+       리스너만 걸어 두면 「가끔만 문항 제외가 먹는」 가장 잡기 나쁜 상태가 된다.
+       카드가 아직 없을 때(첫 호출) 불려도 무해하다 — excluded 만 정해지고,
+       카드 여닫기는 아래 초기화 끝에서 한 번 더 부르는 applyExclusions 가 마무리한다. */
+    applyExclusions();
   }
 
   let stores = cachedStores() || (master.stores || []);
@@ -350,6 +467,7 @@ async function initShopperForm(opts) {
        다음에 설문지를 연 사람이 그 코드로 아무 매장에나 제출할 수 있게 된다. 칸을 늘릴 때 주의. */
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
       store: $('#store').value, date: $('#date').value, time: TimePick.get('time'),
+      way: $('#way') ? $('#way').value : '',
       staff: '', order: $('#order').value, demo: $('#demo').value,
       overall: $('#overall') ? $('#overall').value : '',
       answers: state.answers, memos: state.memos, t: Date.now(),
@@ -423,6 +541,7 @@ async function initShopperForm(opts) {
       markWhy();
     }
     updaters[q.no] = update;
+    cardOf[q.no] = card;      // applyExclusions 가 이 카드를 여닫는다 (다시 그리지 않는다)
     update();
     return card;
   }
@@ -440,17 +559,23 @@ async function initShopperForm(opts) {
     $('.ghead h2', sec).textContent = c.name;
     c.questions.forEach(function (q) { sec.appendChild(buildQ(q)); });
     catsEl.appendChild(sec);
+    secOf[c.name] = sec;      // 문항이 통째로 빠지면 이 섹션도 감춘다
   });
 
+  /* ★빠진 문항은 채점에 넣지 않는다★ — 값이 null 이라 분모에서 빠지긴 하지만,
+     그래도 배열에서 빼 둔다. answered 수가 화면·시트와 어긋나지 않게. */
   function answersInOrder() {
-    return allQs.map(function (q) { return state.answers[q.no] == null ? null : state.answers[q.no]; });
+    return activeQs().map(function (q) { return state.answers[q.no] == null ? null : state.answers[q.no]; });
   }
 
   // ---------- 진행률(공통) + 점수·집계(관리자 전용) ----------
   function recompute() {
-    const n = allQs.filter(function (q) { return isFilled(q.no); }).length;
-    $('#prog').textContent = n + ' / ' + allQs.length + ' 응답';
-    if ($('#fill')) $('#fill').style.width = (n / allQs.length * 100) + '%';
+    /* ★빠진 문항은 세지 않는다★ — 「0 / 36 응답」이 되어야 한다.
+       38 로 두면 손님이 영영 못 채우는 두 칸을 찾아 헤맨다. */
+    const act = activeQs();
+    const n = act.filter(function (q) { return isFilled(q.no); }).length;
+    $('#prog').textContent = n + ' / ' + act.length + ' 응답';
+    if ($('#fill')) $('#fill').style.width = (act.length ? n / act.length * 100 : 0) + '%';
     if (!ADMIN) return;
 
     const res = Scoring.shopperScore(answersInOrder());
@@ -460,8 +585,12 @@ async function initShopperForm(opts) {
     body.innerHTML = '';
     // 엑셀 집계표(52~64행)와 동일 구성: 환산 점수 · 응답 문항 수(NA 포함) · NA 건 · 달성률(NA 제외)
     master.shopper_categories.forEach(function (c) {
+      /* ★빠진 문항은 분모에서도 뺀다★ — 「1/3」처럼 영영 안 차는 칸이 남으면
+         담당자가 못 채운 문항을 찾아 헤맨다. 통째로 빠진 카테고리는 행도 만들지 않는다. */
+      const qs = c.questions.filter(function (q) { return !excluded[q.no]; });
+      if (!qs.length) return;
       let conv = 0, ans = 0, na = 0;
-      c.questions.forEach(function (q) {
+      qs.forEach(function (q) {
         const a = state.answers[q.no];
         if (a === 'NA') { na++; return; }
         const v = Scoring.shopperConvert(a);
@@ -469,7 +598,7 @@ async function initShopperForm(opts) {
       });
       const tr = document.createElement('tr');
       tr.innerHTML = '<td></td><td class="r">' + (ans ? (Math.round(conv * 100) / 100) : '—') + '</td>' +
-        '<td class="r">' + (ans + na) + '/' + c.questions.length + '</td>' +
+        '<td class="r">' + (ans + na) + '/' + qs.length + '</td>' +
         '<td class="r">' + na + '</td>' +
         '<td class="r">' + (ans ? Math.round(conv / ans * 100) + '%' : '—') + '</td>';
       tr.cells[0].textContent = c.name;
@@ -483,6 +612,7 @@ async function initShopperForm(opts) {
   // ---------- 제출 ----------
   $('#submitBtn').onclick = async function () {
     for (const f of REQUIRED_META) {
+      if (f.when && !f.when()) continue;      // 그 매장에선 화면에 없는 칸이다
       const val = f.get ? f.get() : $('#' + f.id).value.trim();
       if (!val) {
         alert(withEulReul(f.label) + ' ' + (f.verb || (f.pick ? '선택해' : '입력해')) + ' 주세요.' +
@@ -492,8 +622,9 @@ async function initShopperForm(opts) {
         return;
       }
     }
-    const answered = allQs.filter(function (q) { return isFilled(q.no); }).length;
-    const missing = allQs.length - answered;
+    const act = activeQs();
+    const answered = act.filter(function (q) { return isFilled(q.no); }).length;
+    const missing = act.length - answered;
     if (missing > 0) {
       // 완료 게이트: 답변 또는 비고 중 하나는 반드시 — 미완료 상태로는 제출 불가
       alert(ADMIN
@@ -504,7 +635,7 @@ async function initShopperForm(opts) {
     /* ★어느 문항인지 번호로 알려 준다★ (2026-09-04 담당자) — 종전에는 개수만 말해서
        「N개 비었다」는 말을 듣고도 어디를 채워야 할지 몰라 그냥 넘겼다.
        ★막지는 않는다★ — 손님이 기억이 안 날 수도 있고, 여기서 막으면 설문을 버리고 나간다. */
-    const noReason = allQs.filter(function (q) {
+    const noReason = act.filter(function (q) {
       const v = state.answers[q.no];
       const low = q.scale === 'likert' ? (typeof v === 'number' && v <= 2) : v === '아니오';
       return low && !(state.memos[q.no] || '').trim();
@@ -545,7 +676,12 @@ async function initShopperForm(opts) {
       submittedAt: new Date().toISOString(),
       source: ADMIN ? 'admin' : 'customer',
       result: res,
-      answers: allQs.map(function (q) {
+      /* ★주문 방법★ (2026-09-08) — mixed 매장에서만 값이 있다. 시트에 남겨 두면
+         한 매장의 키오스크 비율이 이상할 때 담당자가 눈으로 잡을 수 있다. */
+      way: ($('#way') && $('#way').value) || '',
+      /* ★빠진 문항은 보내지 않는다★ — 서버는 answers 길이만큼 MS_상세 줄을 만든다.
+         빈 줄로 보내면 「답을 안 한 문항」과 「물어보지도 않은 문항」이 시트에서 구별되지 않는다. */
+      answers: activeQs().map(function (q) {
         return {
           no: q.no, row: q.row, text: q.text, scale: q.scale, cat: q.cat || '',
           answer: state.answers[q.no] == null ? null : state.answers[q.no],
@@ -622,6 +758,13 @@ async function initShopperForm(opts) {
   });
   TimePick.onChange('time', saveDraft);
 
+  /* ★매장·주문 방법이 바뀌면 문항을 다시 고른다★ (2026-09-08)
+     recompute 를 함께 부른다 — 문항이 줄면 「n / 36」의 분모가 그 자리에서 바뀌어야 한다.
+     ★다시 그리지 않는다★ — 만들어 둔 카드를 여닫을 뿐이라 스크롤·포커스·쓰던 비고가 살아 있다. */
+  function onScopeChange() { applyExclusions(); recompute(); saveDraft(); }
+  $('#store').addEventListener('change', onScopeChange);
+  if ($('#way')) $('#way').addEventListener('change', onScopeChange);
+
   /* ★매장·날짜를 고르는 순간 '이번 달에 이미 있나'를 배경에서 물어본다★ (2026-08-26)
      QSC 점검 화면과 같은 부품·같은 문구를 쓴다(js/api.js의 watchDup).
      ★관리자 입력일 때만★ — 고객 설문(survey.html)에서는 부르지 않는다:
@@ -640,6 +783,8 @@ async function initShopperForm(opts) {
   const draft = loadDraft();
   if (draft) {
     if (!$('#store').disabled) $('#store').value = draft.store || '';
+    /* 주문 방법도 되살린다 — mixed 매장이 아니면 아래 applyExclusions 가 칸과 값을 함께 비운다 */
+    if ($('#way')) $('#way').value = draft.way || '';
     $('#date').value = draft.date || todayStr();
     // 방문 시간은 기본값을 두지 않는다 — 방문 시각과 작성 시각이 다를 수 있으므로 직접 고르게 함
     TimePick.set('time', draft.time || '');
@@ -653,5 +798,9 @@ async function initShopperForm(opts) {
   } else {
     $('#date').value = todayStr();
   }
+  /* ★여기가 마지막 관문이다★ (2026-09-08) — 카드가 다 만들어지고 임시저장까지 되살아난
+     지금에야 문항을 실제로 여닫을 수 있다. fillStores 안에서 부른 것은 excluded 만 정했다.
+     ★recompute 보다 먼저★ — 그래야 첫 화면의 「0 / 36」이 처음부터 맞는 숫자로 뜬다. */
+  applyExclusions();
   recompute();
 }

@@ -47,7 +47,7 @@ def cutconst(name):
 
 body = '\n'.join([cutconst('MS_DETAIL'), cutconst('MS_HEADER'), cutconst('MS_COL'),
                   cut('msCodeOf'), cut('msConvert'), cut('msKindOf'),
-                  cut('msPrepend'), cut('saveShopper')])
+                  cut('msFixHeader'), cut('msPrepend'), cut('saveShopper')])
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
@@ -58,11 +58,15 @@ var DASHBOARD_ID = '';    // 통합시트는 이 시험에서 다루지 않는�
 function safeRow(r) { return r; }
 function round1(n) { return Math.round(n * 10) / 10; }
 function normStore(s) { return String(s == null ? '' : s).trim(); }
+var HDRW = 0;              // 지금 시트 머리글이 몇 열인가 (msFixHeader 가 늘린다)
 function sheet(ss, name, header) {
   HEADER = header;
+  HDRW = header.length;
   return {
     _name: name,
     getLastRow: function () { return ROWS.length + 1; },
+    /* ★옛 시트 흉내★ — 머리글이 모자란 시트를 만들려면 HDRW 를 줄여 놓고 부른다 */
+    getLastColumn: function () { return HDRW; },
     insertRowsBefore: function (at, n) {
       var blank = [];
       for (var i = 0; i < n; i++) blank.push(new Array(HEADER.length).fill(''));
@@ -70,6 +74,8 @@ function sheet(ss, name, header) {
     },
     getRange: function (r, c, nr, nc) {
       return { setValues: function (vals) {
+        /* 1행은 머리글이다 — 본문(ROWS)에 섞지 않는다 */
+        if (r === 1) { HEADER = vals[0].slice(); HDRW = vals[0].length; return; }
         for (var i = 0; i < vals.length; i++) ROWS[r - 2 + i] = vals[i];
       } };
     },
@@ -95,6 +101,7 @@ function mkPayload(o) {
     date: o.date || '2026-10-05', time: o.time || '11:00', store: o.store || '금종제과',
     staff: '', order: o.order || '아메리카노', demographic: o.demo || '30대 여성',
     overall: o.overall === undefined ? '친절했습니다' : o.overall,
+    way: o.way === undefined ? '' : o.way,          // 「일부만 키오스크」 매장에서만 값이 온다
     result: { score: o.score === undefined ? 83.3 : o.score, answered: qs.length },
     answers: qs,
   };
@@ -117,7 +124,7 @@ console.log('── 한 제출 = 문항 수만큼 줄 ──');
 var r = run({});
 ok('[1-1] 문항 3개 → 3줄', r.length, 3);
 ok('[1-2] 비고 없는 문항도 남는다', r.filter(function (x) { return !x[MS_COL.memo - 1]; }).length, 2);
-ok('[1-3] 머리글은 16열', HEADER.length, 16);
+ok('[1-3] 머리글은 17열', HEADER.length, 17);
 
 console.log('── 앞 14열이 QSC_상세와 같은 자리 ──');
 ok('[2-1] 방문날짜', r[0][MS_COL.date - 1], '2026-10-05');
@@ -144,6 +151,32 @@ ok('[4-4] 총평', r[0][MS_COL.overall - 1], '친절했습니다');
 ok('[4-5] 연령대·성별', r[0][MS_COL.demo - 1], '30대 여성');
 ok('[4-6] 주문내역', r[0][MS_COL.order - 1], '아메리카노');
 ok('[4-7] 입력경로 — 관리자', r[0][MS_COL.route - 1], '관리자 입력');
+
+console.log('── 주문방법 (2026-09-08 · 「일부만 키오스크」 매장) ──');
+var w = run({ way: '키오스크' });
+ok('[4-8] 모든 줄에 같이 실린다',
+   w.map(function (x) { return x[MS_COL.way - 1]; }), ['키오스크', '키오스크', '키오스크']);
+ok('[4-9] 안 물어본 매장은 빈 칸', r[0][MS_COL.way - 1], '');
+ok('[4-10] 카운터도 그대로 남는다', run({ way: '카운터' })[0][MS_COL.way - 1], '카운터');
+ok('[4-11] 17열이 주문방법', MS_HEADER[MS_COL.way - 1], '주문방법');
+
+console.log('── 옛 시트(16열)에 열이 늘면 머리글을 채운다 ──');
+/* 시트는 이미 있고 머리글이 16개뿐인 상태를 흉내 낸다 — sheet() 는 시트가 없을 때만 쓰므로
+   그대로 두면 17열이 ★이름 없는 칸★으로 남는다 */
+ROWS = []; HDRW = 0;
+var shOld = sheet(null, MS_DETAIL, MS_HEADER.slice(0));
+HDRW = 16;                                  // ★옛 시트★ — 머리글이 16열까지만 있다
+HEADER = MS_HEADER.slice(0, 16);
+msPrepend(shOld, [new Array(17).fill('x')]);
+ok('[4-12] 머리글이 17열로 늘어났다', HEADER.length, 17);
+ok('[4-13] 늘어난 자리 이름', HEADER[16], '주문방법');
+ok('[4-14] 본문은 그대로 한 줄', ROWS.length, 1);
+/* 이미 17열인 시트는 다시 안 쓴다 (쓰기 한 번을 아낀다) */
+ROWS = [];
+var shNew = sheet(null, MS_DETAIL, MS_HEADER.slice(0));
+HDRW = 17; HEADER = ['이미', '고쳐진', '머리글'];
+msPrepend(shNew, [new Array(17).fill('y')]);
+ok('[4-15] 충분하면 머리글을 건드리지 않는다', HEADER, ['이미', '고쳐진', '머리글']);
 
 console.log('── 익명 설문은 입력경로를 서버가 정한다 ──');
 var s = run({}, true);
