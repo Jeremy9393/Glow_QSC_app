@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v124', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v125', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -6429,9 +6429,16 @@ const RENAME_SPOTS = [
   { where: 'main', tab: CODE_SHEET, col: 2, what: '매장 (제출 코드)' },
   { where: 'main', tab: 'NA프리셋', col: 1, what: '매장명' },
   { where: 'auth', tab: AUTH_ACCOUNT_SHEET, col: ACCT_COL.id, what: '아이디 (로그인 이름)' },
+  /* 이름 칸 — 동작에는 지장이 없지만 그 매장이 로그인하면 화면 상단 이름표에 옛 매장명이
+     계속 뜬다. 계정 관리 목록에서도 아이디와 이름이 갈려 「고친 게 맞나」를 의심하게 된다.
+     매장담당자 계정은 sync 가 아이디와 같은 값(매장명)을 넣는다. */
+  { where: 'auth', tab: AUTH_ACCOUNT_SHEET, col: ACCT_COL.name, what: '이름 (화면 이름표)' },
   /* 매장범위는 쉼표로 이은 목록이다 — 통째로 비교하면 「A, 이티에프 투고」 같은 줄을 놓친다 */
   { where: 'auth', tab: AUTH_ACCOUNT_SHEET, col: ACCT_COL.scope, what: '매장범위', csv: true },
   { where: 'auth', tab: STORE_MAP_SHEET, col: 1, what: '매장명 (매장파일맵)' },
+  /* ★통합시트 안에도 옛 매장파일맵이 남아 있을 수 있다★ — storeFileIdFromMap 이 인증 시트와
+     통합시트를 ★둘 다★ 본다(옛 배치). 없으면 「탭이 없습니다」로 조용히 넘어간다. */
+  { where: 'dash', tab: STORE_MAP_SHEET, col: 1, what: '매장명 (통합시트 쪽 옛 맵)' },
 ];
 
 /* 한 칸의 값을 새 이름으로 바꾼 결과를 돌려준다. 바꿀 것이 없으면 null. */
@@ -6473,13 +6480,32 @@ function fnRenameStore(ctx, payload) {
       ' — 서로 다른 두 매장이면 합치면 안 됩니다.');
   }
 
+  /* ★「현재 비밀번호 보기」 보관값을 먼저 읽어 둔다★ (2026-09-08 전수 조사)
+     그 값은 스크립트 속성 PWS:<아이디> 에 있고 ★MAC 에 아이디가 섞여 있다★(pwShowMac).
+     그래서 아이디를 바꾸면 키도 MAC 도 안 맞아 「확인 불가」가 되고 ★되살릴 길이 없다★.
+     여기서 옛 아이디로 풀어 두었다가, 시트를 고친 뒤 새 아이디로 다시 저장한다.
+     읽지 못해도(설정 안 됨·이미 깨짐) 그냥 넘어간다 — 표시 전용이라 로그인과 무관하다. */
+  let pwCarry = '';
+  let pwHashOf = '';
+  if (apply) {
+    try {
+      const a0 = getAccount(from);
+      if (a0 && a0.hash) {
+        pwHashOf = a0.hash;
+        pwCarry = pwStashRead(from, a0.hash) || '';
+      }
+    } catch (e) { }
+  }
+
   const main = SpreadsheetApp.openById(SPREADSHEET_ID);
   const auth = authSS();
+  let dash = null;
+  try { if (DASHBOARD_ID) dash = SpreadsheetApp.openById(DASHBOARD_ID); } catch (e) { }
   const rows = [];
   let total = 0;
 
   RENAME_SPOTS.forEach(function (spot) {
-    const ss = (spot.where === 'auth') ? auth : main;
+    const ss = (spot.where === 'auth') ? auth : (spot.where === 'dash' ? dash : main);
     const one = { 탭: spot.tab, 칸: spot.what };
     if (!ss) { one.말 = '시트를 못 열었습니다'; rows.push(one); return; }
     try {
@@ -6511,12 +6537,30 @@ function fnRenameStore(ctx, payload) {
      안 버리면 최대 10분 동안 「고쳤는데 그대로」로 보인다. */
   const cleared = [];
   if (apply) {
-    try { dropNaCache(); cleared.push('NA프리셋'); } catch (e) { }
-    try { dropDashCache(); cleared.push('통합시트'); } catch (e) { }
-    try { dropStoreCache(from); dropStoreCache(to); cleared.push('매장현황'); } catch (e) { }
+    /* 비밀번호 표시 보관값을 새 아이디 자리로 옮긴다 (위에서 미리 풀어 둔 값) */
+    if (pwCarry && pwHashOf) {
+      try {
+        pwStash(to, pwCarry, pwHashOf);
+        pwStashClear(from);
+        cleared.push('비밀번호 표시 보관값 옮김');
+      } catch (e) { }
+    }
+    /* ★CACHE_EPOCH 를 한 칸 올린다★ (2026-09-08 전수 조사로 고침)
+       처음에는 dropStoreCache(from) 을 불렀는데 ★그 함수는 ym 없이 부르면 아무것도 안 지운다★
+       (`if (!s || !ym) return;`). 그런데 응답에는 「매장현황」이 찍혀 ★보고가 거짓★이었다.
+       매장명이 열쇠에 들어간 캐시가 12종이고 그중 sfid 는 3600초다 — 잘못 굳으면
+       한 시간 동안 「매장 파일을 찾지 못했습니다」가 이어진다.
+       epoch 을 올리면 그 12종이 한꺼번에 무효가 된다. 26곳이 잠깐 느려지지만
+       이름 변경은 드문 일이고, 「고쳤는데 그대로」보다 낫다. */
+    try {
+      const cur = propN('CACHE_EPOCH', 1);
+      PROPS.setProperty('CACHE_EPOCH', String(cur + 1));
+      cleared.push('CACHE_EPOCH ' + cur + ' → ' + (cur + 1) + ' (매장명이 열쇠인 캐시 전부)');
+    } catch (e) {
+      /* 못 올렸으면 적어도 아는 것만 버린다 */
+      try { dropNaCache(); dropDashCache(); cleared.push('NA프리셋·통합시트(일부만)'); } catch (e2) { }
+    }
     try { dropAccountCache(from); dropAccountCache(to); cleared.push('계정'); } catch (e) { }
-    /* 매장 파일 링크 캐시(sfid:)는 열쇠가 매장명이라 옛 이름 것은 그냥 늙어 죽는다(600초).
-       새 이름은 아직 캐시에 없으므로 다음 조회에서 통합시트를 다시 읽는다. */
     auditLog(ctx, 'admin.renameStore', to, '성공', '',
       from + ' → ' + to + ' · ' + total + '줄');
   }
@@ -6533,8 +6577,19 @@ function fnRenameStore(ctx, payload) {
                : '바꿀 것이 없었습니다.')
       : (total ? '아직 아무것도 바꾸지 않았습니다 — {apply:true} 로 다시 부르십시오.'
                : '옛 이름으로 남은 줄이 없습니다.'),
-    '손대지 않은 곳': ['통합시트(정본)', '감사로그(그때 기록이라 그대로 둔다)',
-      '매장 파일 이름(사람이 본다)', '_아카이브 파일 이름(로컬)'],
+    '손대지 않은 곳': ['통합시트 매장명(정본 — 이미 새 이름이어야 한다)',
+      '감사로그(그때 기록이라 그대로 둔다)', '월말반영 비고(지난 실행 기록)',
+      '매장 파일 이름 · 드라이브 사진 폴더 · NAS 아카이브 파일명(사람이 본다)'],
+    '먼저 확인할 것': [
+      '★통합시트 D열 그 셀의 하이퍼링크가 살아 있는가★ — 매장 파일을 찾는 유일한 정상 경로다. ' +
+      "Api.call('admin.shareProbe', {store:'" + to + "'}) 로 열리는지 본다(읽기 전용)",
+      '★바꾸기 전에 「통합시트에서 계정 동기화」를 누르지 말 것★ — 새 이름으로 계정이 하나 더 ' +
+      '생겨 26곳인데 계정이 27개가 된다(새 계정은 비밀번호가 없어 로그인이 안 된다)',
+      '★되돌리는 길이 없다★ — 뒤집어 부르면 안전검사에 걸린다. 이 미리보기 응답을 남겨 둘 것',
+      '살아 있는 제출 코드와 이미 인쇄·배포된 QR — 옛 이름이 박혀 있으면 손님이 현장에서 막힌다. ' +
+      '그 매장 코드를 취소하고 다시 발급하거나 QR 을 새로 뽑아 교체할 것',
+      '아이디가 바뀌면 그 매장은 ★다시 로그인★해야 한다(비밀번호는 그대로다)',
+    ],
   };
 }
 

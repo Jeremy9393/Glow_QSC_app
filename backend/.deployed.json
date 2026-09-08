@@ -1,6 +1,6 @@
 {
- "sha256": "371bd680536868d1da4c2f4c490f2e3b18b1dd07c511c98c40ddd1b400e92791",
- "version": 124,
- "when": "2026-09-08 15:39:54",
- "description": "2026-09-08 매장 이름 갈아 끼우기 (admin.renameStore) — 계정·지난 기록·제출 코드"
+ "sha256": "fd1bbf30ad3de65edf1dfeb2ff2029bfc0bca495d6224783e98c84adafe3b261",
+ "version": 125,
+ "when": "2026-09-08 15:53:51",
+ "description": "2026-09-08 renameStore 보강 — 계정 이름·비밀번호 표시 보관값·CACHE_EPOCH"
 }

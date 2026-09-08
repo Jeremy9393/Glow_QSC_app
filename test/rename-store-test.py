@@ -74,6 +74,18 @@ function dropNaCache() { DROPPED.push('na'); }
 function dropDashCache() { DROPPED.push('dash'); }
 function dropStoreCache(s) { DROPPED.push('store:' + s); }
 function dropAccountCache(s) { DROPPED.push('acct:' + s); }
+var EPOCH = 1;
+var PROPS = { setProperty: function (k, v) { if (k === 'CACHE_EPOCH') EPOCH = Number(v); DROPPED.push('prop:' + k + '=' + v); } };
+function propN(k, d) { return (k === 'CACHE_EPOCH') ? EPOCH : d; }
+/* 「현재 비밀번호 보기」 보관값 — 아이디를 바꾸면 MAC 이 안 맞아 되살릴 수 없으므로
+   renameStore 가 옛 아이디로 읽어 새 아이디로 다시 저장해야 한다 */
+var PWDB = {};
+var ACCTS = {};
+function getAccount(id) { return ACCTS[id] || null; }
+function pwStashRead(id, hash) { return (PWDB[id] && PWDB[id].h === hash) ? PWDB[id].p : ''; }
+function pwStash(id, plain, hash) { PWDB[id] = { p: plain, h: hash }; }
+function pwStashClear(id) { delete PWDB[id]; }
+var DASHBOARD_ID = '';
 function auditLog(ctx, a, t, r, c, m) { LOGGED.push(a + '|' + t + '|' + m); }
 
 /* 탭 하나 — ★열마다 따로 담는다★ { 열번호: [값…] }
@@ -119,6 +131,7 @@ function ok(name, got, want) {
 }
 function setup(o) {
   TABS = {}; WROTE = []; DROPPED = []; LOGGED = [];
+  EPOCH = 1; PWDB = {}; ACCTS = {};
   o = o || {};
   var c = {};
   c['main|QSC_회차'] = {}; c['main|QSC_회차'][4] = o.round || ['이티에프 투고', '금종제과', '이티에프 투고'];
@@ -129,6 +142,9 @@ function setup(o) {
   /* 계정 — ★한 탭에 두 열★. 아이디(1)와 매장범위(4)를 따로 둔다 */
   c['auth|계정'] = {};
   c['auth|계정'][ACCT_COL.id] = o.acctId || ['이티에프 투고', 'admin'];
+  /* 이름 칸 — sync 가 매장담당자 계정에 아이디와 같은 값(매장명)을 넣는다.
+     이 자료가 없으면 「이름 열을 빠뜨렸다」는 변형을 시험이 못 잡는다(자기 검증에서 놓쳤다) */
+  c['auth|계정'][ACCT_COL.name] = o.acctName || ['이티에프 투고', '감사총무팀'];
   c['auth|계정'][ACCT_COL.scope] = o.acctScope || ['이티에프 투고', '*'];
   c['auth|매장파일맵'] = {}; c['auth|매장파일맵'][1] = o.map || ['이티에프 투고'];
   for (var k in c) TABS[k] = mkTab(c[k]);
@@ -149,8 +165,8 @@ ok('[1-2] ★미리보기 표시★', r.미리보기, true);
 ok('[1-3] ★쓴 것이 없다★', WROTE.length, 0);
 ok('[1-4] 캐시도 안 버린다', DROPPED.length, 0);
 ok('[1-5] 감사로그도 안 남긴다', LOGGED.length, 0);
-// 회차2 + 상세1 + MS2 + 코드1 + 계정 아이디1 + 계정 매장범위1 + 매장파일맵1 = 9
-ok('[1-6] 걸린 줄을 센다', r.합계, 9);
+// 회차2 + 상세1 + MS2 + 코드1 + 계정 아이디1 + 계정 이름1 + 계정 매장범위1 + 매장파일맵1 = 10
+ok('[1-6] 걸린 줄을 센다', r.합계, 10);
 ok('[1-7] 탭마다 줄 수', spot(r, 'QSC_회차').걸린줄, 2);
 ok('[1-8] 줄 번호를 알려 준다', spot(r, 'QSC_회차').줄번호, [2, 4]);
 
@@ -158,7 +174,7 @@ console.log('── apply 면 실제로 바꾼다 ──');
 setup();
 r = run({ from: OLD, to: NEW, apply: true });
 ok('[2-1] 미리보기 아님', r.미리보기, false);
-ok('[2-2] ★걸린 자리만 쓴다★ (NA프리셋은 0줄이라 안 쓴다)', WROTE.length, 7);
+ok('[2-2] ★걸린 자리만 쓴다★ (NA프리셋·통합시트맵은 0줄이라 안 쓴다)', WROTE.length, 8);
 ok('[2-3] QSC_회차가 새 이름으로', col('main|QSC_회차', 4), [NEW, '금종제과', NEW]);
 ok('[2-4] MS_상세도', col('main|' + MS_DETAIL, MS_COL.store), [NEW, NEW]);
 ok('[2-5] 제출 코드도', col('main|쇼퍼_코드', 2), [NEW]);
@@ -166,11 +182,30 @@ ok('[2-6] 계정 아이디도', col('auth|계정', ACCT_COL.id), [NEW, 'admin'])
 ok('[2-6b] ★계정 매장범위도★ — '*' 은 그대로 둔다',
    col('auth|계정', ACCT_COL.scope), [NEW, '*']);
 ok('[2-6c] 매장파일맵도', col('auth|매장파일맵', 1), [NEW]);
-/* ★종류별로 본다★ — 길이만 세면 하나를 빠뜨려도 통과한다(자기 검증에서 실제로 놓쳤다).
-   하나라도 안 버리면 최대 10분 동안 「고쳤는데 그대로」로 보인다. */
-ok('[2-7] ★캐시를 종류별로 버린다★',
-   ['na', 'dash', 'store:' + OLD, 'store:' + NEW, 'acct:' + OLD, 'acct:' + NEW]
-     .filter(function (k) { return DROPPED.indexOf(k) < 0; }), []);
+ok('[2-6d] ★계정 이름도★ — 화면 상단 이름표에 옛 매장명이 남지 않게',
+   col('auth|계정', ACCT_COL.name), [NEW, '감사총무팀']);
+/* ★CACHE_EPOCH 를 올린다★ (2026-09-08 전수 조사로 바꾼 규칙)
+   처음에는 dropStoreCache(from) 을 불렀는데 ★그 함수는 ym 없이 부르면 아무것도 안 지운다★
+   — 그런데 응답에는 「매장현황」이 찍혀 보고가 거짓이었다. 매장명이 열쇠인 캐시가 12종이고
+   sfid 는 3600초라, epoch 을 한 칸 올려 한꺼번에 무효화하는 편이 확실하다. */
+ok('[2-7] ★CACHE_EPOCH 를 올린다★', EPOCH, 2);
+ok('[2-7b] 계정 캐시도 버린다',
+   ['acct:' + OLD, 'acct:' + NEW].filter(function (k) { return DROPPED.indexOf(k) < 0; }), []);
+ok('[2-7c] ★거짓 보고가 없다★ — 안 지우는 dropStoreCache 를 부르지 않는다',
+   DROPPED.filter(function (k) { return k.indexOf('store:') === 0; }), []);
+
+console.log('── 「현재 비밀번호 보기」 보관값을 새 아이디로 옮긴다 ──');
+/* pwShowMac 에 아이디가 섞여 있어, 옮기지 않으면 ★되살릴 길이 없다★ */
+setup();
+ACCTS[OLD] = { id: OLD, hash: 'H1' };
+PWDB[OLD] = { p: 'glow1234', h: 'H1' };
+run({ from: OLD, to: NEW, apply: true });
+ok('[2-9] 새 아이디로 옮겨졌다', PWDB[NEW] && PWDB[NEW].p, 'glow1234');
+ok('[2-10] 옛 자리는 지운다', PWDB[OLD], undefined);
+/* 보관값이 없거나 비밀번호가 설정되지 않은 계정에서도 죽지 않는다 */
+setup(); ACCTS = {}; PWDB = {};
+r = run({ from: OLD, to: NEW, apply: true });
+ok('[2-11] 보관값이 없어도 그냥 넘어간다', r.ok, true);
 ok('[2-8] 감사로그를 남긴다', LOGGED.length, 1);
 
 console.log('── ★안전 검사★ ──');
