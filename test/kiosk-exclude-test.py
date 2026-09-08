@@ -147,10 +147,17 @@ ok('[5-5] way change 리스너가 걸려 있다',
 ok('[5-6] ★초기화 끝(카드가 다 만들어진 뒤)에서 한 번 더★ — recompute 보다 먼저',
    re.search(r'applyExclusions\(\);\s*\n\s*recompute\(\);\s*\n\}', CORE) is not None, True)
 
-print('── ⑥ 빠진 문항의 답을 지우는가 ──')
+print('── ⑥ 빠진 문항을 어떻게 다루는가 ──')
 b = body_of(CORE, '  function applyExclusions() {')
-ok('[6-1] state.answers 를 지운다', bool(b and 'delete state.answers[q.no]' in b), True)
-ok('[6-2] state.memos 도 지운다', bool(b and 'delete state.memos[q.no]' in b), True)
+# ★2026-09-08 뒤집은 규칙★ — 처음에는 지웠는데 그 전제가 틀렸다.
+#   채점·집계·게이트·payload 가 이미 activeQs()/excluded 로 거르므로 숨긴 답은 새지 않는다.
+#   지우면 잃는 것만 있었다: 손님이 카운터로 비고를 길게 적고 주문 방법을 잘못 눌렀다가
+#   되돌리면 ★그 글이 되돌릴 수단 없이 사라졌다★(onScopeChange 가 곧바로 saveDraft 를 부른다).
+ok('[6-1] ★답을 지우지 않는다★ — 되돌아오면 그대로 있어야 한다',
+   bool(b) and 'delete state.answers' not in b, True)
+ok('[6-2] ★비고도 지우지 않는다★', bool(b) and 'delete state.memos' not in b, True)
+ok('[6-2b] 숨긴 답이 새지 않는 근거 — 채점이 activeQs 를 본다',
+   'return activeQs().map(function (q) {' in CORE, True)
 ok('[6-3] 카드를 여닫는다 (다시 그리지 않는다)', bool(b and 'card.hidden' in b), True)
 ok('[6-4] 통째로 빈 카테고리는 섹션도 감춘다', bool(b and 'sec.hidden' in b), True)
 ok('[6-5] mixed 가 아니면 주문방법 값도 비운다', bool(b and "waySel.value = ''" in b), True)
@@ -166,7 +173,15 @@ ok('[7-3] mixed 에서만 필수',
 ok('[7-4] 필수 검사가 when 을 본다 — 없는 칸을 요구하면 제출이 막힌다',
    'if (f.when && !f.when()) continue;' in CORE, True)
 ok('[7-5] 임시저장에 담긴다', "way: $('#way') ? $('#way').value : ''," in CORE, True)
-ok('[7-6] 임시저장에서 되살아난다', "if ($('#way')) $('#way').value = draft.way || '';" in CORE, True)
+# ★2026-09-08 조인 규칙★ — 임시저장 열쇠는 매장별로 갈리지 않는다.
+#   조건 없이 되살리면 mixed 매장 A 에서 고른 「키오스크」가 mixed 매장 B 로 따라와,
+#   ★손님이 한 번도 고르지 않았는데 3-1·3-2 가 빠진 채 제출된다★ — 우려가 다른 문으로 들어온다.
+ok('[7-6] ★같은 매장일 때만 되살린다★',
+   "$('#way').value = (draft.store && draft.store === $('#store').value)" in CORE, True)
+ok('[7-6b] 조건 없는 옛 복원이 남아 있지 않다',
+   "if ($('#way')) $('#way').value = draft.way || '';" in CORE, False)
+ok('[7-6c] 임시저장에 매장이 담긴다 — 비교할 대상이 있어야 한다',
+   "store: $('#store').value," in CORE, True)
 
 print('── ⑧ 시트 열 (백엔드) ──')
 i = GS.find('const MS_COL = {')

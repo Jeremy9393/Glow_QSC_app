@@ -233,17 +233,16 @@ async function initShopperForm(opts) {
     }
     excluded = next;
 
-    /* 빠진 문항의 답·비고를 지운다. ★안 지우면 숨긴 문항이 채점된다★ —
-       카운터로 고쳐 답한 뒤 키오스크로 바꾸면 화면에 없는 답이 점수에 남는다. */
+    /* 카드를 여닫기만 한다 — ★답과 비고는 지우지 않는다★ (2026-09-08 전수검사로 고침)
+       처음에는 「안 지우면 숨긴 문항이 채점된다」고 보고 지웠는데 ★그 전제가 틀렸다★:
+       채점(answersInOrder) · 관리자 집계 · 제출 게이트 · payload 가 모두 activeQs()/excluded
+       로 이미 거른다. 숨긴 답은 어디로도 새지 않는다.
+       지우면 잃는 것만 있었다 — 손님이 카운터로 3-1 비고를 길게 적고 주문 방법을
+       잘못 눌렀다가 되돌리면, ★그 글이 되돌릴 수단 없이 사라졌다★(onScopeChange 가
+       곧바로 saveDraft 를 불러 임시저장까지 덮어쓴다). 이제는 되돌아오면 그대로 있다. */
     allQs.forEach(function (q) {
       const card = cardOf[q.no];
       if (card) card.hidden = !!excluded[q.no];
-      if (!excluded[q.no]) return;
-      if (state.answers[q.no] != null || (state.memos[q.no] || '') !== '') {
-        delete state.answers[q.no];
-        delete state.memos[q.no];
-        if (updaters[q.no]) updaters[q.no]();
-      }
     });
     /* 카테고리가 통째로 비면 제목 줄도 감춘다 — 「예 / 아니오」만 뜬 빈 상자가 남지 않게.
        (지금 설정으로는 3-3 이 남아 안 비지만, 뺄 문항이 늘면 바로 생긴다) */
@@ -783,8 +782,18 @@ async function initShopperForm(opts) {
   const draft = loadDraft();
   if (draft) {
     if (!$('#store').disabled) $('#store').value = draft.store || '';
-    /* 주문 방법도 되살린다 — mixed 매장이 아니면 아래 applyExclusions 가 칸과 값을 함께 비운다 */
-    if ($('#way')) $('#way').value = draft.way || '';
+    /* ★주문 방법은 「같은 매장일 때만」 되살린다★ (2026-09-08 전수검사로 고침)
+       임시저장 열쇠는 매장별로 갈리지 않는다. 그래서 제주당(mixed)에서 「키오스크」를 고르고
+       제출하지 않은 채 나갔다가, 같은 폰으로 이티에프 베이커리 성수(mixed) QR 을 열면
+       ★손님이 한 번도 고르지 않았는데 「키오스크」가 채워져 3-1·3-2 가 빠진 채 제출됐다★.
+       칸은 이미 값이 있어 보이니 손대지 않고, 필수 검사도 「비어 있지 않다」로 통과한다.
+       담당자 우려(*"업셀링을 안했다는건 안한건다 해당없음 같이 표시해버릴까봐"*)가
+       「해당 없음」 버튼이 아니라 ★임시저장이라는 다른 문★으로 들어오는 길이었다.
+       바로 위 줄이 매장을 먼저 정하므로 여기서 비교할 수 있다. */
+    if ($('#way')) {
+      $('#way').value = (draft.store && draft.store === $('#store').value)
+        ? (draft.way || '') : '';
+    }
     $('#date').value = draft.date || todayStr();
     // 방문 시간은 기본값을 두지 않는다 — 방문 시각과 작성 시각이 다를 수 있으므로 직접 고르게 함
     TimePick.set('time', draft.time || '');

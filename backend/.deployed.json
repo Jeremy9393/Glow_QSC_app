@@ -1,6 +1,6 @@
 {
- "sha256": "bbb53258723e78a25414084e1e40368467dc048f963a000df545c9c976a38e4e",
- "version": 120,
- "when": "2026-09-08 11:34:27",
- "description": "확인"
+ "sha256": "8208ffd46ee07098e400f78249827fd5a0c1f17bd6e5e1229bf75676c42f5a9e",
+ "version": 121,
+ "when": "2026-09-08 12:02:38",
+ "description": "2026-09-08 status.month MS 집계 열 밀림 수정 — 그 달 MS 제출이 늘 0곳이던 것"
 }
