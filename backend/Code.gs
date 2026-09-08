@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v122', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v123', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -8010,6 +8010,59 @@ function impStateFormula(c, r) {
     'IF(AND(ISNUMBER(' + B + '),TODAY()>' + B + '),"기한 지남","미착수")))))))';
 }
 
+/* ★표 서식을 끝 줄까지 편다★ (2026-09-08 · 2026-09-07 담당자 지적을 뒤늦게 처리)
+     *"현재 서식이 원본을 기준으로 4개만 있는데 / 개선요청 건수에 맞게 서식 자동생성 하게
+       못만들어? / 지금 시트 보면 5번째껀 서식이 망가져있어"*
+
+   ★왜 생기는 일인가★ — 서식(테두리·사진칸 병합·담당부서 드롭다운·정렬)을 만드는 코드가
+   ★어디에도 없었다★. 그 셋은 원본 탭을 copyTo 로 통째 복제할 때만 따라온다.
+   그런데 표의 끝은 요약칸의 `=COUNTA(J12:J38)` 이 정한다(tableEndRow) — 원본에 4줄만
+   그려져 있어도 쓰기 경로는 38행까지 그냥 값을 얹는다. 그래서 5번째 줄부터
+   ★값은 있고 서식은 없다★.
+
+   고침은 「본문 첫 줄을 견본 삼아 끝 줄까지 편다」 하나다. 행을 더하지 않으므로
+   COUNTA 범위·표 아래 안내문·이월 메모가 하나도 안 밀린다.
+
+   ★병합은 따로 건다★ — copyTo(formatOnly) 가 병합까지 옮기는지는 보장돼 있지 않다.
+   이 표는 사진 칸이 행마다 병합돼 있고(D:I), 그것이 풀리면 값이 조용히 버려진다
+   (writeStoreQscInto 주석 참조). 어느 열이 병합됐는지는 ★첫 줄을 읽어 그대로 따라한다★ —
+   열 번호를 박아 두면 서식이 바뀌는 날 엉뚱한 칸을 붙인다.
+
+   ★표 범위 밖으로 번지지 않게★ 기한 열부터 마지막 열까지만 만진다 —
+   오른쪽에 「차기 월 목표」 같은 것이 있던 파일이 있다. */
+function spreadImproveRows(sh, c, plan) {
+  const n = c.endRow - c.row0 + 1;
+  if (n <= 1) return;
+  const first = c.due;
+  const last = Math.max(c.memo || 0, c.roll || 0, c.waive || 0, c.redo || 0, c.audit || 0);
+  if (!first || last < first) return;
+  const w = last - first + 1;
+  try {
+    /* ① 서식 복제 — 테두리·정렬·글꼴·드롭다운(담당부서)이 여기서 따라온다.
+       ★formatOnly★ 라 값과 수식은 오지 않는다(상태 수식은 아래에서 줄마다 새로 쓴다). */
+    sh.getRange(c.row0, first, 1, w)
+      .copyTo(sh.getRange(c.row0 + 1, first, n - 1, w), { formatOnly: true });
+
+    /* ② 병합 — 첫 줄에 걸린 병합을 그대로 아래 줄에 되풀이한다.
+       이미 병합돼 있으면 건드리지 않는다(다시 merge 하면 터진다). */
+    let merged = 0;
+    const src = sh.getRange(c.row0, first, 1, w).getMergedRanges();
+    for (let k = 0; k < src.length; k++) {
+      const mc = src[k].getColumn(), mw = src[k].getNumColumns();
+      if (mw <= 1) continue;
+      for (let r = c.row0 + 1; r <= c.endRow; r++) {
+        const rng = sh.getRange(r, mc, 1, mw);
+        if (!rng.getMergedRanges().length) { rng.merge(); merged++; }
+      }
+    }
+    plan.push('본문 서식을 ' + c.row0 + '행 기준으로 ' + c.endRow + '행까지 폈습니다' +
+      (merged ? ' (병합 ' + merged + '칸 포함)' : ''));
+  } catch (e) {
+    /* ★여기서 멈추지 않는다★ — 서식은 덤이고, 탭을 만드는 일 자체가 막히면 그 달을 못 쓴다 */
+    plan.push('★서식 펴기 실패★ — ' + String(e && e.message || e).slice(0, 90));
+  }
+}
+
 /* 한 탭을 새 서식으로 올린다. ★몇 번을 돌려도 같은 결과가 되게 만든다★ —
    makeMonthTabIn은 본문을 지운(상태 수식도 같이 지워진다) 뒤 이 함수를 부르므로,
    칸이 이미 있더라도 수식과 서식은 항상 다시 깔아 끼운다.
@@ -8034,6 +8087,7 @@ function upgradeMonthTab(sh, dry) {
       ' 머리글을 단다 (오른쪽 내용은 밀려난다)');
   }
   if (!c.isNew) plan.push('본문 ' + c.row0 + '~' + c.endRow + '행의 옛 번호(1,2,3…)를 지운다 — 날짜 서식이 씌워지면 1899-12-31이 된다');
+  plan.push('본문 ' + c.row0 + '행 서식(테두리 · 사진칸 병합 · 담당부서 목록)을 ' + c.endRow + '행까지 편다');
   plan.push('본문 ' + c.row0 + '~' + c.endRow + '행: 기한 날짜서식 · 상태 수식 · 검수 목록 · 감점제외 체크박스');
   plan.push('기한 · 상태 칸을 넓힌다 (옛 NO. 칸은 숫자 한 자리용이라 글자가 잘린다)');
   plan.push('감점제외 · 이월 열을 숨긴다');
@@ -8078,6 +8132,10 @@ function upgradeMonthTab(sh, dry) {
     }
     if (bad) plan.push('★번호가 날짜로 둔갑한 칸 ' + bad + '개를 지웠습니다★');
   } catch (e) { }
+
+  /* ★서식을 끝 줄까지 먼저 편다★ (2026-09-08) — 아래 네 가지(날짜서식·상태 수식·검수 목록·
+     체크박스)가 그 위에 다시 깔리므로 순서가 이래야 한다. 반대로 두면 복제가 그것들을 덮는다. */
+  spreadImproveRows(sh, c, plan);
 
   sh.getRange(c.row0, c.due, n, 1).setNumberFormat('yyyy-mm-dd').setHorizontalAlignment('center');
   /* 옛 'NO.' 칸은 숫자 한 자리만 담으면 됐으므로 아주 좁다. 날짜와 상태 글자가 잘려
