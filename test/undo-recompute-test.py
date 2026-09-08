@@ -31,13 +31,11 @@ HARNESS = r'''
 //   시험틀은 함수만 잘라오므로 상수는 여기서 세워 준다.
 var MS_DETAIL = 'MS_상세';
 var MS_COL = {
-  date: 1, time: 2, store: 3, code: 4, no: 5, cat: 6, text: 7,
-  kind: 8, answer: 9, state: 10, score: 11, memo: 12, photo: 13, naWhy: 14,
-  at: 15, route: 16, total: 17, answered: 18, overall: 19, demo: 20, order: 21,
+  date: 1, time: 2, store: 3, code: 4, no: 5, text: 6, answer: 7, score: 8, memo: 9,
+  at: 10, route: 11, total: 12, answered: 13, overall: 14, demo: 15, order: 16,
 };
 var MS_HEADER = [
-  '방문날짜', '방문시간', '매장명', '코드', '문항번호', '구분', '문항',
-  '유형', '응답', '상태', '점수', '비고', '사진', 'NA사유',
+  '방문날짜', '방문시간', '매장명', '코드', '문항번호', '문항', '응답', '점수', '비고',
   '제출시각', '입력경로', '제출점수', '응답수', '총평', '작성자연령대성별', '주문내역',
 ];
 // ══ 가짜 세계 ═══════════════════════════════════════════════

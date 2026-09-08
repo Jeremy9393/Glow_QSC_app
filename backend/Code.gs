@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v115', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v117', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -368,7 +368,9 @@ function actionTable() {
     /* 관리자 시트 탭별 행 수·머리글 — ★읽기만★ (MS 통합 설계용) */
     'admin.sheetProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnSheetProbe },
     /* 쇼퍼_응답 + 쇼퍼_비고 → MS_상세 이관 — ★기본이 미리보기★ */
-    'admin.msMigrate':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMsMigrate },
+    /* ★문항 38개를 함께 받는다★ — 서버는 평가표를 갖고 있지 않아 앱이 보내 준다.
+       1KB 로는 문항 텍스트가 안 들어간다(2026-09-08 실제로 막혔다). */
+    'admin.msMigrate':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 64 * KB, fn: fnMsMigrate },
     /* 요약 탭에서 잠든 칸을 깨운다(같은 수식을 다시 쓴다) — ★기본이 미리보기★ */
     'admin.wakeSummary':  { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnWakeSummary },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
@@ -3339,17 +3341,17 @@ function saveQsc(ss, p, ctx) {
      prevSubmitsOf·submittedStores·fnUndoSubmit 이 그렇게 고쳐져 있다. */
 const MS_DETAIL = 'MS_상세';
 const MS_HEADER = [
-  /* 1~14 : QSC_상세와 같은 자리 */
-  '방문날짜', '방문시간', '매장명', '코드', '문항번호', '구분', '문항',
-  '유형', '응답', '상태', '점수', '비고', '사진', 'NA사유',
-  /* 15~21 : 제출 단위 (문항마다 반복) */
+  /* 1~9 : 문항 하나를 설명하는 열 */
+  '방문날짜', '방문시간', '매장명', '코드', '문항번호', '문항', '응답', '점수', '비고',
+  /* 10~16 : 제출 단위 (문항마다 같은 값이 반복된다) */
   '제출시각', '입력경로', '제출점수', '응답수', '총평', '작성자연령대성별', '주문내역',
 ];
-/* 열 자리 (1부터) — 읽는 쪽이 이 표를 본다. 숫자를 코드에 흩뿌리지 않는다. */
+/* 열 자리 (1부터) — 읽는 쪽이 이 표를 본다. 숫자를 코드에 흩뿌리지 않는다.
+   ★2026-09-08 정리★ — 구분·유형·상태·사진·NA사유를 뺐다(담당자 지시 + 늘 빈 칸이던 열).
+   빼면서 뒤 열이 앞으로 당겨졌으므로 ★이 표만 고치면 읽는 쪽이 따라온다★. */
 const MS_COL = {
-  date: 1, time: 2, store: 3, code: 4, no: 5, cat: 6, text: 7,
-  kind: 8, answer: 9, state: 10, score: 11, memo: 12, photo: 13, naWhy: 14,
-  at: 15, route: 16, total: 17, answered: 18, overall: 19, demo: 20, order: 21,
+  date: 1, time: 2, store: 3, code: 4, no: 5, text: 6, answer: 7, score: 8, memo: 9,
+  at: 10, route: 11, total: 12, answered: 13, overall: 14, demo: 15, order: 16,
 };
 
 /* 문항 텍스트 앞의 「1-1.」 을 코드로 쓴다 — QSC 의 A-01 자리에 대응한다.
@@ -3400,12 +3402,10 @@ function saveShopper(ss, p, ctx, isSurvey) {
   const rows = p.answers.map(function (a) {
     const conv = msConvert(a.answer);
     return safeRow([
-      p.date, p.time || '', p.store, msCodeOf(a.text), a.no, a.cat || '', a.text,
-      msKindOf(a.scale), a.answer == null ? '' : a.answer,
-      '',                                   // 상태 — MS 에는 없다(자리만 맞춘다)
-      conv == null ? '' : conv,             // 점수 — 문항 환산값
+      p.date, p.time || '', p.store, msCodeOf(a.text), a.no, a.text,
+      a.answer == null ? '' : a.answer,
+      conv == null ? '' : conv,             // 점수 — 문항 환산값 (0~1)
       a.memo || '',
-      '', '',                               // 사진 · NA사유 — MS 에는 없다
       p.submittedAt, route, total, p.result.answered,
       p.overall || '', p.demographic || '', p.order || '',
     ]);
@@ -6186,19 +6186,26 @@ function fnWakeSummary(ctx, payload) {
      없으면 빈 칸으로 둔다 — ★짐작해서 지어내지 않는다★.
      카테고리도 같은 이유로 비고에 있는 줄만 채운다.
 
-   부르는 법
-     await Api.call('admin.msMigrate', {})              ← 무엇이 옮겨질지만
-     await Api.call('admin.msMigrate', {apply:true})    ← 실제로 옮긴다
+   ★문항 텍스트는 앱이 보내 준다★ — 옛 쇼퍼_응답에는 답만 있고 문항 글이 없다.
+   서버는 평가표를 갖고 있지 않으므로, 앱이 questions 를 실어 보내면 문항번호로 채운다.
+     questions: [{no, text}, …]
+
+   부르는 법 (앱 화면 콘솔에서)
+     const qs = []; master.shopper_categories.forEach(c => c.questions.forEach(q => qs.push({no:q.no, text:q.text})));
+     await Api.call('admin.msMigrate', {questions: qs})                     ← 미리보기
+     await Api.call('admin.msMigrate', {questions: qs, apply:true, reset:true})
+       reset:true = MS_상세를 ★비우고★ 다시 만든다 (열 구성이 바뀌었을 때)
 */
 function fnMsMigrate(ctx, payload) {
   const p = payload || {};
   const apply = p.apply === true;
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const src = ss.getSheetByName('쇼퍼_응답');
-  const memoSh = ss.getSheetByName('쇼퍼_비고');
+  /* 이미 한 번 이관해 이름이 바뀌었으면 그 이름으로 읽는다 (다시 만들 수 있게) */
+  const src = ss.getSheetByName('쇼퍼_응답') || ss.getSheetByName('쇼퍼_응답_구');
+  const memoSh = ss.getSheetByName('쇼퍼_비고') || ss.getSheetByName('쇼퍼_비고_구');
   const out = { 적용: apply, 한일: [] };
 
-  if (!src) return { ok: true, 안내: '쇼퍼_응답 시트가 없습니다 — 옮길 것이 없습니다.' };
+  if (!src) return { ok: true, 안내: '쇼퍼_응답(_구) 시트가 없습니다 — 옮길 것이 없습니다.' };
   const last = src.getLastRow();
   if (last < 2) return { ok: true, 안내: '쇼퍼_응답에 자료가 없습니다 — 옮길 것이 없습니다.' };
 
@@ -6248,6 +6255,13 @@ function fnMsMigrate(ctx, payload) {
     out.찾은열.비고줄 = mv.length;
   }
 
+  /* 앱이 보낸 평가표 — 문항번호 → 문항 글. 없으면 비고 시트에 있는 것만 채운다. */
+  const qText = {};
+  ((p.questions && p.questions.length) ? p.questions : []).forEach(function (q) {
+    if (q && q.no != null) qText[String(q.no)] = String(q.text || '');
+  });
+  out.찾은열.받은문항 = Object.keys(qText).length;
+
   const rows = [];
   vals.forEach(function (v) {
     const at2 = function (nm) { return at[nm] >= 0 ? v[at[nm]] : ''; };
@@ -6257,14 +6271,15 @@ function fnMsMigrate(ctx, payload) {
       const ans = v[q.col];
       const m = memoBy[String(submittedAt) + '|' + String(q.no)] || {};
       const conv = msConvert(ans);
+      /* 문항 글은 ①앱이 보낸 평가표 ②비고 시트에 남은 것 차례로 찾는다.
+         ★둘 다 없으면 빈 칸으로 둔다★ — 짐작해서 지어내지 않는다. */
+      const text = qText[String(q.no)] || m.text || '';
       rows.push(safeRow([
         at2('방문날짜'), at2('방문시간'), at2('매장명'),
-        msCodeOf(m.text || ''), q.no, '', m.text || '',
-        '', ans == null ? '' : ans,
-        '',                                  // 상태
+        msCodeOf(text), q.no, text,
+        ans == null ? '' : ans,
         conv == null ? '' : conv,
         m.memo || '',
-        '', '',                              // 사진 · NA사유
         submittedAt, at2('입력경로'), total, at2('응답수'),
         at2('총평'), at2('작성자연령대성별'), at2('주문내역'),
       ]));
@@ -6279,9 +6294,15 @@ function fnMsMigrate(ctx, payload) {
     return { ok: true, 결과: out };
   }
 
+  /* ★reset★ — 열 구성이 바뀌었을 때 통째로 다시 만든다. 옛 시트는 그대로 있으므로
+     언제든 다시 이관할 수 있다(그래서 지워도 되돌릴 수 있다). */
+  if (p.reset === true) {
+    const old = ss.getSheetByName(MS_DETAIL);
+    if (old) { ss.deleteSheet(old); out.한일.push(MS_DETAIL + ' 을 비우고 다시 만듭니다 (reset)'); }
+  }
   const dst = sheet(ss, MS_DETAIL, MS_HEADER.slice(0));
   if (dst.getLastRow() > 1) {
-    out.한일.push('★' + MS_DETAIL + '에 이미 ' + (dst.getLastRow() - 1) + '줄이 있습니다 — 그 위에 옛 자료를 얹습니다★');
+    out.한일.push('★' + MS_DETAIL + '에 이미 ' + (dst.getLastRow() - 1) + '줄이 있습니다 — 그 아래에 옛 자료를 붙입니다★');
   }
   /* 옛 자료는 ★아래쪽★에 붙인다 — 새 제출이 위로 오는 시트라 옛 것이 아래가 맞다 */
   if (rows.length) {
@@ -6293,7 +6314,7 @@ function fnMsMigrate(ctx, payload) {
   [['쇼퍼_응답', '쇼퍼_응답_구'], ['쇼퍼_비고', '쇼퍼_비고_구']].forEach(function (pair) {
     const s = ss.getSheetByName(pair[0]);
     if (!s) return;
-    if (ss.getSheetByName(pair[1])) { out.한일.push(pair[1] + ' 이 이미 있어 이름을 안 바꿨습니다'); return; }
+    if (ss.getSheetByName(pair[1])) { out.한일.push(pair[1] + ' 은 이미 보관돼 있습니다'); return; }
     try { s.setName(pair[1]); out.한일.push(pair[0] + ' → ' + pair[1] + ' 로 이름만 바꿨습니다 (지우지 않음)'); }
     catch (e) { out.한일.push('★' + pair[0] + ' 이름 변경 실패: ' + String(e).slice(0, 50) + '★'); }
   });

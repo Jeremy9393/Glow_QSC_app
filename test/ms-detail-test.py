@@ -161,11 +161,16 @@ ok('[11-1] 1 방문날짜', MS_COL.date, 1);
 ok('[11-2] 3 매장명', MS_COL.store, 3);
 ok('[11-3] 4 코드', MS_COL.code, 4);
 ok('[11-4] 5 문항번호', MS_COL.no, 5);
-ok('[11-5] 6 구분', MS_COL.cat, 6);
-ok('[11-6] 7 문항', MS_COL.text, 7);
-ok('[11-7] 머리글 21개', MS_HEADER.length, 21);
-ok('[11-8] 10·13·14 는 자리만 (상태·사진·NA사유)',
-   [MS_HEADER[9], MS_HEADER[12], MS_HEADER[13]], ['상태', '사진', 'NA사유']);
+ok('[11-5] 6 문항', MS_COL.text, 6);
+ok('[11-6] 7 응답 · 8 점수 · 9 비고', [MS_COL.answer, MS_COL.score, MS_COL.memo], [7, 8, 9]);
+ok('[11-7] 머리글 16개', MS_HEADER.length, 16);
+/* ★2026-09-08 담당자 지시로 뺀 열★ — 구분·유형·상태, 그리고 늘 빈 칸이던 사진·NA사유.
+   다시 넣자는 말이 나오면 「빈 칸이 많다」는 지적이 있었다는 것을 먼저 떠올릴 것. */
+ok('[11-8] 없앤 열이 머리글에 없다',
+   MS_HEADER.filter(function (h) {
+     return ['구분', '유형', '상태', '사진', 'NA사유'].indexOf(h) >= 0;
+   }), []);
+ok('[11-9] 제출 단위는 10열부터', MS_COL.at, 10);
 
 console.log('\n' + (fail ? '★' + fail + '개 실패★' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);
