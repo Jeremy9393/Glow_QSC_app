@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v114', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v115', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -6212,12 +6212,25 @@ function fnMsMigrate(ctx, payload) {
    '작성자연령대성별', '입력경로', '점수', '응답수', '총평'].forEach(function (nm) {
     at[nm] = head.indexOf(nm);
   });
+  /* ★문항열은 머리글로 못 찾는다★ (2026-09-08 실물 확인)
+     옛 쇼퍼_응답에는 Q1~Q38 머리글이 없다 — sheet() 는 ★시트가 없을 때만★ 머리글을 쓰는데
+     문항 열은 나중에 값만 들어갔기 때문이다(머리글 11개 · 값은 49열까지).
+     그래서 자리로 본다: 기본 10열 + 총평 1열 = 11열 다음부터 순서대로 1,2,3…
+     ①머리글에 Q 가 있으면 그것을 먼저 믿는다(나중에 머리글이 채워질 수도 있다)
+     ②없으면 ★총평 자리 다음 열부터★ 센다. 총평도 못 찾으면 11열 다음으로 본다. */
   const qAt = [];   // [{no, col}]
   head.forEach(function (h, i) {
     const m = h.match(/^Q(\d+)$/);
     if (m) qAt.push({ no: Number(m[1]), col: i });
   });
-  out.찾은열 = { 머리글: head.length, 문항열: qAt.length };
+  let how = '머리글';
+  if (!qAt.length) {
+    how = '자리';
+    const first = (at['총평'] >= 0 ? at['총평'] : 10) + 1;   // 총평 다음 열
+    for (let c = first; c < wide; c++) qAt.push({ no: qAt.length + 1, col: c });
+  }
+  out.찾은열 = { 머리글: head.length, 문항열: qAt.length, 찾은방법: how,
+                 첫문항열: qAt.length ? (qAt[0].col + 1) : 0 };
 
   /* 비고 시트에서 (제출시각|문항번호) → {문항, 비고, 응답} 를 모은다 */
   const memoBy = {};
