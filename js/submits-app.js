@@ -75,8 +75,15 @@
     setHtml(subList, '');
     if (!store) return;
     subList.appendChild(note('제출 목록을 불러오는 중입니다…'));
+    /* 목록 자리가 비어 있는 채로 기다리므로 가운데 덮개가 맞다 (2026-09-08) */
+    Busy.on('제출 목록을 불러오는 중입니다…');
     /* 날짜 없이 부르면 서버가 목록만 돌려준다(읽기만 한다 — 아무것도 지우지 않는다). */
-    const r = await Api.call('admin.undoSubmit', { store: store }).catch(function () { return null; });
+    let r = null;
+    try {
+      r = await Api.call('admin.undoSubmit', { store: store }).catch(function () { return null; });
+    } finally {
+      Busy.off();
+    }
     setHtml(subList, '');
     if (!(r && r.ok)) {
       subList.appendChild(note('제출 목록을 불러오지 못했습니다. ' + ((r && r.error) || ''), 'mockNote'));

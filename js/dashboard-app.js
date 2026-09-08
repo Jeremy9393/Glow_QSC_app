@@ -155,7 +155,10 @@
   const canStore = Auth.hasMenu('store');
   /* '미입력 매장 N곳' 배너는 통합시트에 점수를 옮겨 적는 사람에게만 의미가 있다.
      그 사람이 누구인지는 역할 이름이 아니라 대시보드 쓰기 권한이 정한다. */
-  const isCollector = Auth.can('dashboard', '쓰기');
+  /* ⚠2026-09-08 에 「아직 점수가 입력되지 않은 매장이 N곳」 줄을 없애면서 쓰는 곳이 사라졌다.
+     지우지 않고 남겨 둔다 — 이 화면에서 「본사 집계 담당인가」를 다시 물을 일이 곧 온다
+     (예: 담당자에게만 보이는 안내를 #adminNote 에 붙일 때). */
+  const isCollector = Auth.can('dashboard', '쓰기');   // eslint-disable-line no-unused-vars
 
   // ---------- 렌더 ----------
 
@@ -188,11 +191,17 @@
     const s = data.stats || {};
     /* ★'최고·최저'는 적지 않는다★ — 표를 보면 누구인지 바로 알 수 있는 숫자라, 요약 줄에 올리는
        순간 매달 두 매장을 지목하는 게시판이 된다. 서버는 s.top·s.bottom을 계속 주지만 쓰지 않는다.
-       평균만 남긴다 — 우리 매장이 어디쯤인지 가늠하는 데는 평균 하나면 충분하다. */
+       평균만 남긴다 — 우리 매장이 어디쯤인지 가늠하는 데는 평균이면 충분하다. */
+    /* ★평균을 셋으로 나눈다★ (2026-09-08 담당자 — *"위생평균, CS평균, 종합평균으로 바꿔줘"*)
+       ★이름은 서버가 준 열 이름을 그대로 쓴다★ — 9월까지는 「위생·CS」, 10월부터 「QSC·MS」다.
+         화면에 박아 두면 달을 옮길 때 표 머리글과 요약 줄이 서로 다른 말을 하게 된다. */
+    const cols = (data && data.cols) || {};
     const pairs = [
       ['대상', (typeof s.n === 'number') ? String(s.n) : '—'],
       ['점검', (typeof s.scored === 'number') ? String(s.scored) : '—'],
-      ['평균', fmt1(s.avgTotal)],
+      [(cols.qsc || '위생') + '평균', fmt1(s.avgQsc)],
+      [(cols.ms || 'CS') + '평균', fmt1(s.avgCs)],
+      ['종합평균', fmt1(s.avgTotal)],
     ];
     pairs.forEach(function (p) {
       const sp = document.createElement('span');
@@ -203,11 +212,13 @@
       box.appendChild(sp);
     });
 
-    if (isCollector && typeof s.n === 'number' && typeof s.scored === 'number' && s.n > s.scored) {
-      setNote($('#adminNote'), '아직 점수가 입력되지 않은 매장이 ' + (s.n - s.scored) + '곳 있습니다. 통합시트에 옮겨 적으면 이 화면에 바로 반영됩니다.');
-    } else {
-      setNote($('#adminNote'), '');
-    }
+    /* ★「아직 점수가 입력되지 않은 매장이 N곳」 줄은 뺐다★ (2026-09-08 담당자)
+         *"점수는 본사 집계 후 반영됩니다. 이것만 남기는건 어때? 이거 매장에서도 다 보는 내용이라서"*
+       그 줄은 본사(dashboard 쓰기)에게만 뜨던 것이지만, 담당자 판단으로 없앤다 —
+       안 채운 매장 수는 표를 보면 바로 알 수 있고(「—」로 뜬다), 요약 줄이 짧을수록
+       매장이 자기 숫자를 찾기 쉽다.
+       ★그 자리(#adminNote)는 남겨 둔다★ — 다른 안내를 붙일 때 쓴다. */
+    setNote($('#adminNote'), '');
   }
 
   function renderHead(cols, hasHC) {
@@ -242,20 +253,36 @@
     return c;
   }
 
+  /* 점수 한 칸 — 「96.0(우수)」처럼 등급을 작은 글씨로 뒤에 붙인다 (2026-09-08 담당자)
+     ★등급은 서버 문자열이라 textContent 로 넣는다★ — 등급 이름이 바뀌어도 화면이 안 깨진다. */
+  function scoreTd(row, score, grade) {
+    const c = document.createElement('td');
+    c.className = 'r';
+    if (typeof score !== 'number') { c.textContent = '—'; row.appendChild(c); return c; }
+    c.appendChild(document.createTextNode(fmt1(score)));
+    if (grade) {
+      const g = document.createElement('span');
+      g.className = 'gradeTag';
+      g.textContent = '(' + grade + ')';
+      c.appendChild(g);
+    }
+    row.appendChild(c);
+    return c;
+  }
+
   function renderRows(data, hasHC) {
     const body = $('#rankBody');
     body.innerHTML = '';
     const ym = (data.period && data.period.type === 'month') ? ymOf(data.period.key) : null;
 
-    /* 서버가 이미 정렬해 주지만 화면에서도 한 번 더 내려 둔다. 아직 점검하지 않은 매장이 표 중간에
-       0점으로 섞이면, 점검을 안 한 것뿐인데 점수가 낮은 것처럼 보인다.
-       ★r.rank는 정렬에만 쓰고 화면에는 찍지 않는다★ — 서버가 계속 내려주지만 열로 만들지 않는다. */
-    const rows = (data.rows || []).slice().sort(function (a, b) {
-      const an = (a.status === 'none') ? 1 : 0, bn = (b.status === 'none') ? 1 : 0;
-      if (an !== bn) return an - bn;
-      if (an) return String(a.store).localeCompare(String(b.store));
-      return (a.rank == null ? 9999 : a.rank) - (b.rank == null ? 9999 : b.rank);
-    });
+    /* ★정렬하지 않는다 — 통합시트에 적힌 순서 그대로 그린다★ (2026-09-08 담당자)
+         *"매장들 정렬을 점수대로하지말고 실제 시트에있는 순서대로(이름순일꺼야) 해줘..
+           1등부터 꼴등까지 매기는건 별로 좋지 않아서"*
+       종전에는 점수 높은 순으로 세우고 미점검 매장만 아래로 내렸다. 등수 열이 없어도
+       ★줄 자체가 순위표★였다 — 위에서 몇 번째인지 세면 그만이다.
+       r.rank 는 서버가 계속 담아 보내지만(전월 대비 delta 를 내는 데 쓴다)
+       ★여기서는 정렬에도 쓰지 않는다★. */
+    const rows = (data.rows || []).slice();
 
     let mineRow = null;
     rows.forEach(function (r) {
@@ -290,8 +317,11 @@
       tr.appendChild(nm);
 
       if (hasHC) {
-        td(tr, none ? '—' : fmt1(r.qsc), 'r');
-        td(tr, none ? '—' : fmt1(r.cs), 'r');
+        /* ★점수 옆에 등급을 작은 글씨로★ (2026-09-08 담당자 — *"96.0(우수) 이런식으로"*)
+           등급만 보는 열을 새로 만들지 않는다 — 표가 넓어지면 폰에서 가로로 밀린다.
+           등급이 없으면(점수만 있고 등급 칸이 빈 달) 점수만 그린다. */
+        scoreTd(tr, none ? null : r.qsc, none ? '' : r.qscGrade);
+        scoreTd(tr, none ? null : r.cs, none ? '' : r.csGrade);
       }
       td(tr, none ? '—' : fmtNum(r.improve), 'r');
 
@@ -350,7 +380,13 @@
     const when = (n == null) ? '방금' : (n <= 0 ? '방금' : n + '분 전');
     /* 캐시본을 그리는 동안에도 '몇 분 전 기준'은 그대로 적는다 — 옛 숫자라는 사실을 지우지 않기
        위해서다. 다만 그 옆에 갱신 중임을 반드시 붙인다(꼬리표 없는 옛 숫자가 이 화면 최악의 사고다). */
-    $('#trust').textContent = '본사 통합시트 입력 기준 · ' + when
+    /* ★문구를 한 줄로 줄였다★ (2026-09-08 담당자 — *"「점수는 본사 집계 후 반영됩니다.」
+         이것만 남기는건 어때? 이거 매장에서도 다 보는 내용이라서"*)
+       종전에는 「본사 통합시트 입력 기준 · N분 전」이었다. 「몇 분 전」은 상단 #freshInfo 에
+       그대로 남아 있으므로 "왜 안 바뀌지"는 거기서 확인된다.
+       ★꼬리표는 반드시 남긴다★ — 오프라인이거나 갱신 중일 때 그 말을 지우면
+       옛 숫자를 최신인 양 보여 주게 된다(이 화면 최악의 사고다). */
+    $('#trust').textContent = '점수는 본사 집계 후 반영됩니다.'
       + (offline ? ' (저장된 화면)' : (stale ? ' (지난번 받아둔 화면 · 갱신 중)' : ''));
     $('#freshInfo').textContent = offline ? '오프라인' : (stale ? '갱신 중…' : when);
   }
@@ -482,6 +518,11 @@
        ★오류·점검 화면 위에도 그리지 않는다★(noStale) — 표를 비운 이유가 그것이었다.
        staleShown은 '이 화면의 숫자가 캐시본이다'라는 표식이라, 아래 non-ok 분기에서 지울 근거가 된다. */
     staleShown = (!noStale && key !== shownKey) ? showStale(key) : false;
+    /* ★볼 것이 있으면 덮지 않는다★ (2026-09-08 담당자 결정 — 「로딩중인 모든 순간에 표시」를
+       둘로 갈랐다). 캐시본이 떠 있거나(staleShown) 같은 달을 새로고침하는 중이면
+       화면에 이미 표가 있다 — 그때 가운데를 덮으면 읽던 것을 가린다. 구석에서 조용히 알린다. */
+    if (staleShown || (shownKey && key === shownKey)) Busy.tiny(true);
+    else Busy.on('불러오는 중입니다…');
     if (!staleShown) {
       /* ★다른 달을 기다리는 동안 지난 달 표를 남겨 두지 않는다★ — select는 새 달을 가리키는데
          숫자는 지난 달 그대로면, 점장은 자기가 고른 달의 숫자라고 믿고 다른 달 숫자를 읽는다.
@@ -505,6 +546,7 @@
       if (staleShown) clearStale();
       showSnapshot(OFFMSG, key);
       loading = false; $('#reloadBtn').disabled = false;
+      Busy.off(); Busy.tiny(false);
       return;
     }
 
@@ -514,6 +556,9 @@
 
     loading = false;
     $('#reloadBtn').disabled = false;
+    /* ★어느 길로 끝나든 끈다★ — 아래에 ok/non-ok 갈래가 여럿이라 각각에 넣으면 하나를 빠뜨린다.
+       (지나간 요청은 바로 위에서 return 하므로 여기에 닿지 않는다 — 최신 요청이 정리한다) */
+    Busy.off(); Busy.tiny(false);
 
     if (res && res.ok) {
       setNote($('#stateNote'), '');

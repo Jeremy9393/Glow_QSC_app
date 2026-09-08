@@ -662,9 +662,11 @@
     if (busy) return;
     lock(true);
     setNote($('#stateNote'), '불러오는 중입니다…');
+    Busy.on('불러오는 중입니다…');          // 목록이 빈 채로 기다린다 (2026-09-08)
     let res = null;
     try { res = await Api.call('account.list', {}); }
     catch (e) { res = null; }
+    finally { Busy.off(); }
     lock(false);
 
     if (res && res.ok) {

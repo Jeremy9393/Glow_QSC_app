@@ -434,6 +434,11 @@
         if (closeBox) closeBox.style.display = 'none';
       }
     }
+    /* ★볼 것이 있으면 덮지 않는다★ (2026-09-08 담당자 결정)
+       바로 위에서 사본을 그렸으면(fromSnap) 화면에 이미 목록이 있다 — 그때 가운데를 덮으면
+       읽던 것을 가린다. 구석에서 조용히 알린다. 사본이 없어 빈 화면이면 덮개가 맞다. */
+    if (fromSnap) Busy.tiny(true);
+    else Busy.on('불러오는 중입니다…');
 
     let res = null;
     if (online()) {
@@ -442,6 +447,8 @@
     loading = false;
     revalidating = false;                 // 응답이 왔든 실패했든 '받아오는 중'은 여기서 끝난다
     $('#listNote').textContent = '';
+    /* ★아래에 return 하는 갈래가 여럿이라 여기서 한 번에 끈다★ (오프라인·오류·정상) */
+    Busy.off(); Busy.tiny(false);
 
     // api.js는 던지지 않고 code:'NETWORK'로 돌려준다 — 오프라인 판정은 이 코드까지 봐야 한다
     if (!res || res.code === 'NETWORK') {
