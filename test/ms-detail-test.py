@@ -48,9 +48,22 @@ def cutconst(name):
     return '\n'.join(buf)
 
 
+def cutcall(mark):
+    """호출문 한 덩어리를 잘라낸다 — 세미콜론까지만 (뒤의 catch 를 물면 문법이 깨진다)"""
+    st = next(i for i, l in enumerate(lines) if mark in l)
+    buf = []
+    for j in range(st, len(lines)):
+        buf.append(lines[j])
+        if lines[j].rstrip().endswith(';'):
+            return '\n'.join(buf)
+    raise SystemExit('%s 끝 못 찾음' % mark)
+
+
 body = '\n'.join([cutconst('MS_DETAIL'), cutconst('MS_HEADER'), cutconst('MS_COL'),
                   cut('msCodeOf'), cut('msConvert'), cut('msKindOf'),
-                  cut('shopperMonthAvg')])
+                  cut('shopperMonthAvg'), cut('submittedStores')])
+# status.month 가 MS_상세를 부르는 자리 — 인자를 그대로 시험에 넘긴다
+CALLSITE = cutcall('shopperSet = submittedStores(')
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
@@ -59,7 +72,11 @@ function normStore(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').t
 function ymOfCell(v, tz) { return String(v == null ? '' : v).slice(0, 7); }
 function grid(sh, r, c, nr, nc) {
   if (nr <= 0) return null;
-  return { getValues: function () { return sh._rows.slice(r - 2, r - 2 + nr); } };
+  return {
+    getValues: function () { return sh._rows.slice(r - 2, r - 2 + nr); },
+    getNumColumns: function () { return nc; },
+    _from: r,                       // 시험이 「어디서부터 읽었나」를 본다
+  };
 }
 function mkSheet(rows) {
   return { _rows: rows, getLastRow: function () { return rows.length + 1; } };
@@ -176,9 +193,51 @@ ok('[11-8] 없앤 열이 머리글에 없다',
    }), []);
 ok('[11-9] 제출 단위는 10열부터', MS_COL.at, 10);
 
+console.log('── ★submittedStores — 「그 달에 MS 를 냈는가」★ ──');
+/* ★2026-09-08 전수검사에서 잡은 진짜 버그★
+   MS_COL 은 1부터인데 submittedStores 는 0부터 센다. -1 을 빼먹어서
+   ★날짜 자리에서 「11:00」을, 매장 자리에서 「1-1」을★ 읽었고, 그래서 언제나 빈 집합이었다.
+   즉 「그 달에 MS 를 안 낸 매장」이 늘 26곳 전부로 나왔다 — 오류 없이 답만 틀리는 종류다.
+   그리고 MS_상세는 msPrepend 로 ★최신이 맨 위★라 끝에서 읽으면 옛 자료를 본다. */
+var msSh = mkSheet(submit({ date: '2026-10-05', time: '11:00', store: '금종제과', at: 'A', total: 90 })
+  .concat(submit({ date: '2026-10-06', time: '15:00', store: '도넛정수', at: 'B', total: 80 }))
+  .concat(submit({ date: '2026-09-20', time: '09:00', store: '제주당', at: 'C', total: 70 })));
+var got = callSite(msSh, 'Asia/Seoul', '2026-10');
+ok('[12-1] ★그 달에 낸 매장이 잡힌다★ (종전에는 언제나 빈 집합이었다)',
+   Object.keys(got).sort(), ['금종제과', '도넛정수']);
+ok('[12-2] 지난 달 제출은 안 잡는다', got['제주당'] === undefined, true);
+ok('[12-3] 9월로 물으면 9월 것만',
+   Object.keys(callSite(msSh, 'Asia/Seoul', '2026-09')), ['제주당']);
+ok('[12-4] 그 달에 아무도 안 냈으면 빈 집합',
+   Object.keys(callSite(msSh, 'Asia/Seoul', '2026-12')), []);
+
+/* ★최신이 맨 위★ — 앞에서부터 읽어야 새 제출이 잡힌다.
+   시트를 크게 만들어(스캔 한도 밖) 뒤에서 읽으면 못 찾게 해 둔다. */
+var big = submit({ date: '2026-10-25', time: '11:00', store: '신라당 경주', at: 'NEW', total: 95 });
+for (var b = 0; b < 90; b++) {
+  big = big.concat(submit({ date: '2026-01-05', time: '11:00', store: '옛매장' + b, at: 'OLD' + b, total: 50 }));
+}
+ok('[12-5] ★맨 위의 새 제출이 잡힌다★ (뒤에서 읽으면 옛 자료만 본다)',
+   callSite(mkSheet(big), 'Asia/Seoul', '2026-10')['신라당 경주'], true);
+
+ok('[12-6] 빈 시트', Object.keys(callSite(mkSheet([]), 'Asia/Seoul', '2026-10')), []);
+
 console.log('\n' + (fail ? '★' + fail + '개 실패★' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);
 '''
+
+# ★진짜 호출문을 그대로 끼운다★ — 인자를 시험이 다시 쓰면 「시험만 맞는」 상태가 된다
+HARNESS = HARNESS.replace(
+    "console.log('── ★submittedStores",
+    '''/* Code.gs 의 진짜 호출문을 그대로 쓴다 — 인자를 시험이 베껴 쓰면
+   본체가 틀려도 시험은 통과하는 「시험만 맞는」 상태가 된다 */
+function callSite(sheetObj, tz, wantYm) {
+  var ss = { getSheetByName: function () { return sheetObj; } };
+  var shopperSet;
+%s
+  return shopperSet;
+}
+console.log('── ★submittedStores''' % CALLSITE.replace('\\', '\\\\'))
 
 io.open(OUT, 'w', encoding='utf-8', newline='\n').write(body + '\n' + HARNESS)
 r = subprocess.run([str(NODE), str(OUT)], capture_output=True, text=True, encoding='utf-8')

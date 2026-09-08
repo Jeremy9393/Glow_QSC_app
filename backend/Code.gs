@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v120', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v121', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -2533,9 +2533,16 @@ function fnStatusMonth(ctx, payload) {
        마지막 인자 -1 = 입력경로를 보지 않는다. */
     /* ★MS_상세는 문항마다 한 줄★ (2026-09-08) — 같은 매장·같은 달을 여러 번 만나지만
        submittedStores 는 '그 달에 냈는가'만 보므로 중복이 답을 바꾸지 않는다.
-       열 자리는 MS_COL 을 따른다: 1 방문날짜 · 3 매장명 · 16 입력경로. */
+
+       ★★두 번 틀렸던 자리다 — 고칠 때 둘 다 보라★★ (2026-09-08 전수검사에서 발견)
+       ①MS_COL 은 ★1부터★인데 submittedStores 는 ★0부터★ 센다(QSC 호출이 4,1,3 으로
+         0부터를 주는 것이 대조군이다). -1 을 빼먹어서 ★날짜 자리에서 「11:00」을,
+         매장 자리에서 「1-1」을★ 읽었다 — ymOfCell 이 전부 걸러 ★언제나 빈 집합★이었다.
+         즉 「그 달에 MS 를 안 낸 매장」이 늘 26곳 전부로 나왔다.
+       ②msPrepend 가 2행에 끼워 ★최신이 맨 위★다. 끝에서 읽으면 가장 오래된 자료를 본다
+         (한 제출이 36~38줄이라 3000줄이면 80건쯤에서 최신을 놓치기 시작한다). → fromTop */
     shopperSet = submittedStores(ss.getSheetByName(MS_DETAIL), tz, wantYm,
-      MS_COL.route, MS_COL.date, MS_COL.store, -1);
+      MS_COL.store, MS_COL.date - 1, MS_COL.store - 1, -1, true);
   } catch (e) {
     return err('SERVER_ERROR', '제출 현황을 불러오지 못했습니다.');
   }
@@ -2552,7 +2559,9 @@ function fnStatusMonth(ctx, payload) {
 
 /* 해당 월에 제출이 1건이라도 있는 매장 이름 집합.
    routeCol이 0 이상이면 그 칸이 '관리자 입력'인 행만 센다(-1이면 검사하지 않는다). */
-function submittedStores(sh, tz, wantYm, nCols, dateCol, storeCol, routeCol) {
+/* ★열 번호는 0부터다★ — MS_COL·QSC 표는 1부터이므로 부르는 쪽에서 -1 을 해야 한다.
+   ★fromTop★ 은 「최신이 맨 위인 시트」(MS_상세)를 위한 것이다. 끝에서 읽으면 옛 자료를 본다. */
+function submittedStores(sh, tz, wantYm, nCols, dateCol, storeCol, routeCol, fromTop) {
   const set = {};
   if (!sh || sh.getLastRow() < 2) return set;
   /* ★끝에서부터 읽는다★ (audit.list와 같은 이유)
@@ -2563,7 +2572,7 @@ function submittedStores(sh, tz, wantYm, nCols, dateCol, storeCol, routeCol) {
   const SCAN_MAX = 3000;
   const last = sh.getLastRow();
   const n = Math.min(SCAN_MAX, last - 1);
-  const rng = grid(sh, last - n + 1, 1, n, nCols);
+  const rng = fromTop ? grid(sh, 2, 1, n, nCols) : grid(sh, last - n + 1, 1, n, nCols);
   if (!rng) return set;
   const vals = rng.getValues();
   const width = rng.getNumColumns();
