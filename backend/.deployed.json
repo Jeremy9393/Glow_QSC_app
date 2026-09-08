@@ -1,6 +1,6 @@
 {
- "sha256": "cc92f109d9a6d7010433eadc03effaff2168fb860f3bbe4883533106bbed121f",
- "version": 122,
- "when": "2026-09-08 12:32:15",
- "description": "2026-09-08 통합시트 — 시트 순서 그대로 보내기 + 위생·CS 평균 추가"
+ "sha256": "371bd680536868d1da4c2f4c490f2e3b18b1dd07c511c98c40ddd1b400e92791",
+ "version": 124,
+ "when": "2026-09-08 15:39:54",
+ "description": "2026-09-08 매장 이름 갈아 끼우기 (admin.renameStore) — 계정·지난 기록·제출 코드"
 }
