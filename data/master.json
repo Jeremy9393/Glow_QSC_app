@@ -1,6 +1,6 @@
 {
  "version": "2026-09-10",
- "source_sha": "fe9e3167c1ec",
+ "source_sha": "9ccb3bd2203b",
  "source": "QSC·MS 평가표.xlsx",
  "stores": [
   "금종제과",
@@ -174,7 +174,7 @@
      "no": 10,
      "code": "B-03",
      "row": 19,
-     "text": "장신구 착용 (반지·팔찌 등 — 업무상 착용하는 스마트워치는 제외)",
+     "text": "장신구 착용 (반지·팔찌 등)",
      "severity": "",
      "critical": false
     },
