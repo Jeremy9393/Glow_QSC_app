@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v126', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v128', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -376,6 +376,8 @@ function actionTable() {
     'admin.wakeSummary':  { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnWakeSummary },
     /* 이미 쌓인 줄의 행 높이를 한 줄로 낮춘다(새 줄은 제출할 때 저절로 된다) — ★기본이 미리보기★ */
     'admin.tidyRows':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnTidyRows },
+    /* 이미 쌓인 줄을 최신이 맨 위로 한 번 뒤집는다 · QSC_상세 머리글도 채운다 — ★기본이 미리보기★ */
+    'admin.reorderRows':  { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnReorderRows },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -3497,6 +3499,175 @@ function fnTidyRows(ctx, payload) {
     }
   });
   if (apply) auditLog(ctx, 'admin.tidyRows', '', '성공', '', out.join(' · ').slice(0, 200));
+  return { ok: true, preview: !apply, lines: out };
+}
+
+/* ---------- 이미 쌓인 줄을 최신이 맨 위로 (2026-09-10) ----------
+
+   ★왜 또 필요한가★ — 2026-09-10 에 `prependRows` 로 「앞으로 들어올 제출」은 맨 위에 넣게
+   바꿨다. 그런데 담당자가 시트를 열어 보고 *"모든 시트 가장 최신 입력된 자료가 제일 위로
+   오게 했는데 적용 안됨"* 이라고 한 것은 ★이미 쌓여 있던 1,122줄★ 이야기다. 그것은 여전히
+   옛날 순이다. 이 도구가 그것을 한 번 뒤집는다.
+
+   ★값을 읽어 다시 쓰지 않는다 — moveRows 로 옮긴다★
+   QSC_상세 13열 '사진' 은 ★셀 내 이미지(CellImage 객체)★ 다. getValues() 는 그것을 글자가
+   아니라 객체로 주고 setValues() 로는 되돌려 쓸 수 없다 — 읽어서 다시 쓰는 방식이면
+   ★사진이 전부 날아간다★. moveRows 는 행을 통째로 옮기므로 사진·서식·행 높이가 그대로 간다.
+
+   ★한 묶음은 쪼개지 않는다★ — QSC 한 제출이 74줄, MS 한 제출이 36~38줄이다. 묶음의 차례만
+   뒤집고 묶음 안의 문항 순서는 건드리지 않는다.
+
+   ★날짜를 파싱하지 않는다★ — 「이어 붙인 순서 = 시간순」이라는 사실만 쓴다(맨 아래가 최신).
+   그래서 묶음 차례를 뒤집으면 그대로 최신이 맨 위가 된다. 날짜 서식·시간대에 안 걸린다.
+
+   부르는 법
+     await Api.call('admin.reorderRows', {})              ← 미리보기
+     await Api.call('admin.reorderRows', {apply:true})    ← QSC_회차·MS_상세 (제출시각 기준 · 여러 번 돌려도 같다)
+     await Api.call('admin.reorderRows', {only:['QSC_상세'], apply:true})   ← ★한 번만★ (뒤집기)
+
+   ★QSC_상세만 only 로 이름을 대야 돈다★ — 그 시트는 기댈 시각이 없어 「이어 붙인 차례」를
+   뒤집는 방식이고, 두 번 돌리면 도로 옛날 순이 되기 때문이다. */
+
+/* 이어진 같은 열쇠끼리 한 묶음으로 묶는다. ★열쇠 칸만 읽는다★ (사진 칸을 안 건드리려고) */
+function rowGroups(sh, keyCols) {
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return [];
+  const w = Math.max.apply(null, keyCols);
+  const vals = sh.getRange(2, 1, n, w).getValues();
+  const keyOf = function (r) {
+    return keyCols.map(function (c) { return String(r[c - 1]); }).join('');
+  };
+  const groups = [];
+  let start = 0;
+  for (let i = 1; i < n; i++) {
+    if (keyOf(vals[i]) !== keyOf(vals[start])) {
+      groups.push({ row: 2 + start, len: i - start, key: keyOf(vals[start]) });
+      start = i;
+    }
+  }
+  groups.push({ row: 2 + start, len: n - start, key: keyOf(vals[start]) });
+  return groups;
+}
+
+/* 묶음을 원하는 차례로 다시 세운다. wantIdx = 최종 차례(위→아래)를 담은 groups 번호 목록.
+   ★뒤에서부터 하나씩 맨 위로 올린다★ — 마지막에 올린 것이 맨 위에 남으므로 wantIdx[0] 이 위로 온다.
+   자리는 「지금 차례(cur)」로 다시 센다 — 하나 올릴 때마다 아래가 밀리기 때문이다. */
+function orderGroups(sh, groups, wantIdx) {
+  const cur = groups.map(function (g, i) { return { i: i, len: g.len }; });
+  let moves = 0;
+  for (let t = wantIdx.length - 1; t >= 0; t--) {
+    const target = wantIdx[t];
+    let k = 0, before = 0;
+    while (k < cur.length && cur[k].i !== target) { before += cur[k].len; k++; }
+    if (k >= cur.length) continue;                      // 있을 수 없지만 조용히 넘긴다
+    if (k > 0) { sh.moveRows(sh.getRange(2 + before, 1, cur[k].len), 2); moves++; }
+    cur.unshift(cur.splice(k, 1)[0]);
+  }
+  return moves;
+}
+
+/* 차례를 정하는 두 가지 방법.
+
+   ★keydesc — 몇 번을 돌려도 같은 결과다★ (제출시각이 열쇠라 시간을 담고 있다).
+   ★reverse — 두 번 돌리면 제자리로 돌아간다★. 열쇠에 시간이 없는 시트에만 쓴다.
+     QSC_상세가 그렇다 — 지난 줄에는 제출시각이 없고 점검일자는 죄다 같은 날이라,
+     기댈 것이 「이어 붙인 차례 = 시간순」 하나뿐이다.
+     ⚠2026-09-10 에 이것으로 ★MS_상세를 망가뜨렸다★ — 그 시트는 이미 위쪽 9묶음이
+       최신순이었는데(prependRows 를 먼저 쓰던 시트다) 통째로 뒤집어 거꾸로 만들었다.
+       그래서 ①시간이 있는 시트는 keydesc 로 바꾸고 ②reverse 는 이름을 대고 부를 때만 돌게 했다. */
+function wantOrderOf(groups, how) {
+  const idx = groups.map(function (_, i) { return i; });
+  if (how === 'keydesc') {
+    return idx.slice().sort(function (a, b) {
+      const ka = groups[a].key, kb = groups[b].key;
+      if (ka === kb) return a - b;                      // 같으면 원래 차례를 지킨다
+      return ka < kb ? 1 : -1;                          // 내림차순 (ISO 시각은 글자 비교로 충분)
+    });
+  }
+  return idx.reverse();
+}
+
+/* 이미 그 차례인가 — 미리보기에서 「할 일 없음」을 정직하게 말하려고 */
+function alreadyOrdered(wantIdx) {
+  for (let i = 0; i < wantIdx.length; i++) if (wantIdx[i] !== i) return false;
+  return true;
+}
+
+function fnReorderRows(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const out = [];
+
+  /* ① QSC_상세 머리글 — '제출시각'(15)·'제출점수'(16) 은 제출이 들어와야 붙는다(qscFixHeader).
+     배포 직후에는 아직 없으므로 여기서 채운다. ★앞 14칸이 정본과 다르면 손대지 않는다★ */
+  const det = ss.getSheetByName('QSC_상세');
+  if (!det) {
+    out.push('QSC_상세 — 시트가 없습니다');
+  } else if (det.getLastColumn() >= QSC_DETAIL_HEADER.length) {
+    out.push('QSC_상세 머리글 — 이미 ' + QSC_DETAIL_HEADER.length + '칸입니다 (그대로 둡니다)');
+  } else {
+    const have = det.getRange(1, 1, 1, det.getLastColumn()).getValues()[0]
+      .map(function (v) { return String(v).trim(); });
+    const same = have.every(function (v, i) { return v === QSC_DETAIL_HEADER[i]; });
+    if (!same) {
+      out.push('★QSC_상세 머리글이 정본과 달라 손대지 않았습니다★ — 지금: ' + have.join(' | '));
+    } else if (!apply) {
+      out.push('QSC_상세 머리글 — ' + have.length + '칸 → ' + QSC_DETAIL_HEADER.length +
+        '칸으로 늘립니다 (' + QSC_DETAIL_HEADER.slice(have.length).join(' · ') + ')');
+    } else {
+      const need = QSC_DETAIL_HEADER.length;
+      if (det.getMaxColumns() < need) det.insertColumnsAfter(det.getMaxColumns(), need - det.getMaxColumns());
+      det.getRange(1, have.length + 1, 1, need - have.length)
+        .setValues([QSC_DETAIL_HEADER.slice(have.length)]);
+      out.push('QSC_상세 머리글 — ' + QSC_DETAIL_HEADER.slice(have.length).join(' · ') + ' 를 붙였습니다 ✓');
+    }
+  }
+
+  /* ② 이미 쌓인 줄을 최신이 맨 위로.
+     묶는 열쇠 — QSC_회차와 MS_상세는 제출시각이 있어 ★keydesc★ (몇 번을 돌려도 같다).
+     QSC_상세는 지난 줄에 제출시각이 없어 점검일자·방문시간·매장명으로 묶고 ★reverse★ 인데,
+     두 번 돌리면 제자리라서 ★only 로 이름을 대야만★ 돈다. */
+  const jobs = [
+    { name: 'QSC_회차', keys: [1], what: '제출시각', how: 'keydesc', 기본: true },
+    { name: MS_DETAIL, keys: [MS_COL.at], what: '제출시각', how: 'keydesc', 기본: true },
+    { name: 'QSC_상세', keys: [1, 2, 3], what: '이어 붙인 차례', how: 'reverse', 기본: false },
+  ];
+  const only = Array.isArray(p.only) ? p.only.map(String) : null;
+  jobs.forEach(function (j) {
+    if (only ? only.indexOf(j.name) < 0 : !j.기본) {
+      if (!only) out.push(j.name + ' — 건너뜁니다 (★두 번 돌리면 제자리★라 only 로 이름을 대야 돕니다)');
+      return;
+    }
+    const sh = ss.getSheetByName(j.name);
+    if (!sh) { out.push(j.name + ' — 시트가 없습니다'); return; }
+    let groups;
+    try { groups = rowGroups(sh, j.keys); }
+    catch (e) { out.push(j.name + ' — ★묶음을 못 읽었습니다★ ' + String(e && e.message || e).slice(0, 80)); return; }
+    if (groups.length < 2) {
+      out.push(j.name + ' — 묶음이 ' + groups.length + '개라 옮길 것이 없습니다');
+      return;
+    }
+    const want = wantOrderOf(groups, j.how);
+    if (alreadyOrdered(want)) {
+      out.push(j.name + ' — ' + groups.length + '묶음이 이미 최신순입니다 (그대로 둡니다)');
+      return;
+    }
+    if (!apply) {
+      out.push(j.name + ' — ' + (sh.getLastRow() - 1) + '줄 / ' + groups.length +
+        '묶음을 ' + j.what + ' 기준으로 최신이 위에 오게 세웁니다' +
+        (j.how === 'reverse' ? ' ★두 번 돌리면 제자리★' : ''));
+      return;
+    }
+    try {
+      const n = orderGroups(sh, groups, want);
+      out.push(j.name + ' — ' + groups.length + '묶음 중 ' + n + '개를 옮겼습니다 ✓');
+    } catch (e) {
+      out.push(j.name + ' — ★실패★ ' + String(e && e.message || e).slice(0, 90));
+    }
+  });
+
+  if (apply) auditLog(ctx, 'admin.reorderRows', '', '성공', '', out.join(' · ').slice(0, 200));
   return { ok: true, preview: !apply, lines: out };
 }
 

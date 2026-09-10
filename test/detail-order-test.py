@@ -147,6 +147,77 @@ sh = mkSheet(20, 20);
 qscFixHeader(sh);
 ok('[3-5] 더 넓어도 건드리지 않는다', sh.headWrites, 0);
 
+console.log('── 이미 쌓인 줄 뒤집기 (rowGroups · reverseGroups) ──');
+/* 가짜 시트 — 실제로 행을 옮긴다. ★열쇠 칸만 읽는지★ 도 같이 본다
+   (QSC_상세 13열 사진은 셀 내 이미지라, 읽어서 다시 쓰면 날아간다). */
+function mkGrid(rows) {
+  var G = { body: rows.map(function (r) { return r.slice(); }), reads: [], moves: [] };
+  G.getLastRow = function () { return G.body.length + 1; };
+  G.getRange = function (r, c, nr, nc) {
+    return {
+      _r: r, _nr: nr,
+      getValues: function () {
+        G.reads.push([r, c, nr, nc]);
+        return G.body.slice(r - 2, r - 2 + nr).map(function (x) { return x.slice(c - 1, c - 1 + nc); });
+      },
+    };
+  };
+  G.moveRows = function (rng, dest) {
+    G.moves.push([rng._r, rng._nr, dest]);
+    var cut = G.body.splice(rng._r - 2, rng._nr);
+    G.body.splice.apply(G.body, [dest - 2, 0].concat(cut));
+  };
+  return G;
+}
+/* 한 제출 = 2줄인 세 묶음. 3번째 칸에 「사진 자리」를 흉내 낸 물건을 둔다 */
+var IMG = { 사진: true };
+var g = mkGrid([
+  ['09-01', 'A', IMG], ['09-01', 'A', IMG],
+  ['09-05', 'B', IMG], ['09-05', 'B', IMG],
+  ['09-07', 'C', IMG], ['09-07', 'C', IMG],
+]);
+var gr = rowGroups(g, [1, 2]);
+ok('[4-1] 이어진 같은 열쇠끼리 묶는다', gr.map(function (x) { return [x.row, x.len]; }),
+   [[2, 2], [4, 2], [6, 2]]);
+ok('[4-2] ★열쇠 칸까지만 읽는다★ — 사진 칸(3열)을 안 읽는다', g.reads, [[2, 1, 6, 2]]);
+
+orderGroups(g, gr, wantOrderOf(gr, 'reverse'));
+ok('[4-3] reverse — ★묶음 차례가 뒤집힌다★ (최신이 맨 위)',
+   g.body.map(function (r) { return r[0] + r[1]; }),
+   ['09-07C', '09-07C', '09-05B', '09-05B', '09-01A', '09-01A']);
+ok('[4-4] ★묶음 안 순서는 그대로★ · 줄 수도 그대로', g.body.length, 6);
+ok('[4-5] 사진 자리가 살아 있다 (moveRows 는 값을 다시 쓰지 않는다)',
+   g.body.every(function (r) { return r[2] === IMG; }), true);
+
+/* ★2026-09-10 사고★ — MS_상세는 이미 위쪽이 최신순이었는데 통째로 뒤집어 거꾸로 만들었다.
+   그 시트는 제출시각이 있으므로 keydesc 로 세워야 하고, keydesc 는 ★몇 번을 돌려도 같다★. */
+function mkMS(keys) { return mkGrid(keys.map(function (k) { return [k]; })); }
+var m = mkMS(['09-10', '09-08', '09-03', '09-07']);   // 앞은 최신순인데 뒤 둘이 뒤엉킨 모양
+var mg = rowGroups(m, [1]);
+orderGroups(m, mg, wantOrderOf(mg, 'keydesc'));
+ok('[4-6] keydesc — 제출시각 내림차순으로 세운다',
+   m.body.map(function (r) { return r[0]; }), ['09-10', '09-08', '09-07', '09-03']);
+
+var m2 = mkMS(['09-10', '09-08', '09-07', '09-03']);
+var before2 = m2.body.map(function (r) { return r[0]; });
+var g2 = rowGroups(m2, [1]);
+ok('[4-7] ★이미 최신순이면 손대지 않는다★', alreadyOrdered(wantOrderOf(g2, 'keydesc')), true);
+orderGroups(m2, g2, wantOrderOf(g2, 'keydesc'));
+orderGroups(m2, rowGroups(m2, [1]), wantOrderOf(rowGroups(m2, [1]), 'keydesc'));
+ok('[4-8] ★keydesc 는 두 번 돌려도 같다★ (reverse 와 다른 점)',
+   m2.body.map(function (r) { return r[0]; }), before2);
+
+var r2 = mkMS(['a', 'b', 'c']);
+orderGroups(r2, rowGroups(r2, [1]), wantOrderOf(rowGroups(r2, [1]), 'reverse'));
+orderGroups(r2, rowGroups(r2, [1]), wantOrderOf(rowGroups(r2, [1]), 'reverse'));
+ok('[4-9] ★reverse 는 두 번 돌리면 제자리★ — 그래서 only 로 이름을 대야 돈다',
+   r2.body.map(function (r) { return r[0]; }), ['a', 'b', 'c']);
+
+var g3 = mkGrid([['x', '1'], ['x', '2']]);
+ok('[4-10] 묶음이 하나면 옮길 것이 없다', rowGroups(g3, [1]).length, 1);
+ok('[4-11] 같은 열쇠끼리는 원래 차례를 지킨다 (묶음 안이 안 흔들린다)',
+   wantOrderOf([{key:'x'},{key:'x'},{key:'y'}], 'keydesc'), [2, 0, 1]);
+
 console.log('── 소스에서 직접 보는 것 ──');
 __SRC_CHECKS__
 
@@ -154,7 +225,8 @@ console.log('\n' + (fail ? 'X 실패 ' + fail + '건' : '전부 통과') + '  (�
 process.exit(fail ? 1 : 0);
 '''
 
-code = '\n\n'.join([cutconst('QSC_DETAIL_HEADER'), cut('qscFixHeader'), cut('prependRows')])
+code = '\n\n'.join([cutconst('QSC_DETAIL_HEADER'), cut('qscFixHeader'), cut('prependRows'),
+                    cut('rowGroups'), cut('orderGroups'), cut('wantOrderOf'), cut('alreadyOrdered')])
 print('잘라낸 줄 수: %d' % len(code.split('\n')))
 
 js = HARNESS.replace('__CODE__', code).replace('__SRC_CHECKS__', js_src_checks)
