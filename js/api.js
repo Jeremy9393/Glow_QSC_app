@@ -103,7 +103,7 @@ const Api = (function () {
       data = await post(body);
     } catch (err) {
       // 오프라인·DNS 실패 등. 던지지 않고 코드로 돌려줘 화면이 분기할 수 있게 한다.
-      return { ok: false, code: 'NETWORK', error: '네트워크에 연결할 수 없습니다.', _err: err };
+      return { ok: false, code: 'NETWORK', error: '네트워크에 연결할 수 없습니다. 연결을 확인한 뒤 다시 시도해 주세요.', _err: err };
     }
     /* 점검 모드(공사중) 판정은 maint.js 한 곳에 맡긴다 — 응답을 보여만 주고 흐름은 바꾸지 않는다.
        ★MAINT면 화면 전체가 덮이고, ok면 덮개가 걷힌다.★ maint.js가 없어도(구버전 캐시 등)

@@ -660,7 +660,7 @@ async function initShopperForm(opts) {
 
     const res = Scoring.shopperScore(answersInOrder());
     if (ADMIN && res.score != null &&
-        !confirm('응답 ' + answered + '/' + allQs.length + '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade + '\n제출할까요?')) return;
+        !confirm('응답 ' + answered + '/' + act.length + '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade + '\n제출할까요?')) return;
 
     /* ★익명 제출은 제출 코드가 있어야 한다★ (설계: 제출 순간에만 검사한다)
        작성은 코드 없이 자유롭게 하고, 여기서 한 번 묻는다.
