@@ -47,7 +47,7 @@ def cutconst(name):
 
 body = '\n'.join([cutconst('MS_DETAIL'), cutconst('MS_HEADER'), cutconst('MS_COL'),
                   cut('msCodeOf'), cut('msConvert'), cut('msKindOf'),
-                  cut('msFixHeader'), cut('msPrepend'), cut('saveShopper')])
+                  cut('msFixHeader'), cut('msTidyRows'), cut('msPrepend'), cut('saveShopper')])
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''

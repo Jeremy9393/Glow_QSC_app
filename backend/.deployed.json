@@ -1,6 +1,6 @@
 {
- "sha256": "fd1bbf30ad3de65edf1dfeb2ff2029bfc0bca495d6224783e98c84adafe3b261",
- "version": 125,
- "when": "2026-09-08 15:53:51",
- "description": "2026-09-08 renameStore 보강 — 계정 이름·비밀번호 표시 보관값·CACHE_EPOCH"
+ "sha256": "bfa3e87a9aeda2ded317f1d04256763f34decf5d0d803cba1bb352f18b29269d",
+ "version": 126,
+ "when": "2026-09-10 14:39:56",
+ "description": "2026-09-10 개선요청 행 높이 · 떠 있는 사진 정리 · QSC_상세 제출시각/제출점수 · 최신이 맨 위 · MS_상세 한 줄 보기"
 }

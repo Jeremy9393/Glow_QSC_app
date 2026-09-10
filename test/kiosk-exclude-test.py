@@ -73,8 +73,24 @@ for c in MASTER['shopper_categories']:
 ok('[1-3] 문항이 전부 코드로 시작한다 (코드로 빼므로 하나라도 없으면 못 뺀다)',
    [i for i, c in enumerate(codes) if not c], [])
 ok('[1-4] ★뺄 문항이 평가표에 실제로 있다★', [c for c in excl if c not in codes], [])
-ok('[1-5] 담당자가 정한 것은 3-1·3-2 둘뿐', sorted(excl), ['3-1', '3-2'])
+# ★2026-09-10 에 7번(결제)이 통째로 빠졌다★ — 담당자:
+#   *"키오스크로 결제하면 7-1이나 7-3이 매장 입장에선 실수한게 없는거 아니야?"*
+#   *"7-1, 7-2는 그냥 키오스크에서 삭제하자"*
+#   ⚠같은 날 오전에 「7-1·7-2 는 문구를 넓혀 살린다」로 적어 두었던 것을 ★담당자가 뒤집었다★.
+#   ⚠이로써 키오스크 기기 문제(먹통·카드리더기·영수증 용지·잔돈)를 잡는 자리가
+#     회사 전체에 없어졌다 — QSC 74문항에도 없다(2026-09-10 전수 확인). 담당자가 알고 골랐다.
+# ★이 줄은 「모르는 사이에 늘어나는 것」을 막는 자물쇠다★ — 늘릴 때마다 여기도 함께 고칠 것.
+ok('[1-5] 담당자가 정한 것은 3-1·3-2·7-1·7-2·7-3 다섯',
+   sorted(excl), ['3-1', '3-2', '7-1', '7-2', '7-3'])
 ok('[1-6] ★3-3 은 빼지 않는다★ (문구를 넓혀 살리기로 했다)', '3-3' in excl, False)
+# ★7번 카테고리가 통째로 빈다★ — 앱이 제목 줄까지 감추는지는 [6-4] 에서 본다
+_cat7 = [c for c in MASTER['shopper_categories'] if c['name'].startswith('7.')]
+ok('[1-7] 7번 카테고리가 있다', len(_cat7), 1)
+ok('[1-7] ★7번은 문항이 하나도 안 남는다★',
+   [q['text'][:5] for q in _cat7[0]['questions']
+    if re.match(r'^(\d+-\d+)\.', q['text']).group(1) not in excl], [])
+ok('[1-8] 키오스크 방문은 33문항', sum(len(c['questions']) for c in MASTER['shopper_categories'])
+   - len(excl), 33)
 
 print('── ② master.json 에 실려 앱까지 가는가 ──')
 ok('[2-1] store_types 가 실렸다', MASTER.get('store_types'), types)
