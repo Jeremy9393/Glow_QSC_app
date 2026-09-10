@@ -83,7 +83,13 @@ function rangeObj(r, c, nr, nc) {
   };
 }
 function mkSheet() {
-  return { getRange: function (r, c, nr, nc) { return rangeObj(r, c, nr || 1, nc || 1); } };
+  return {
+    getRange: function (r, c, nr, nc) { return rangeObj(r, c, nr || 1, nc || 1); },
+    /* ★행 높이★ (2026-09-10) — copyTo(formatOnly) 는 셀 서식만 옮기므로 높이는 따로 건다.
+       견본 줄은 34, 그 아래는 시트 기본값(21)이라고 본다. */
+    getRowHeight: function (r) { return r === 12 ? 34 : 21; },
+    setRowHeights: function (at, n, h) { LOG.push({ act: 'rowH', at: at, n: n, h: h }); },
+  };
 }
 /* 표 자리 — 실제 새 서식과 같은 모양: 기한 B(2) · 상태 C(3) · 사진 D~I(4~9 병합) ·
    개선요청 J(10) · 담당부서 K(11) · 비고 O(15) · 검수 P~S(16~19) */
@@ -126,7 +132,17 @@ var mg = merges(r);
 ok('[2-1] ★26줄에 병합을 건다★ (13~38행)', mg.length, 26);
 ok('[2-2] 첫 병합은 13행 D열 6칸', mg[0].at, [13, 4, 6]);
 ok('[2-3] 마지막은 38행', mg[mg.length - 1].at, [38, 4, 6]);
-ok('[2-4] plan 에 남긴다', /서식을 12행 기준으로 38행까지/.test(r.plan.join(' ')), true);
+ok('[2-4] plan 에 남긴다', /서식·행 높이를 12행 기준으로 38행까지/.test(r.plan.join(' ')), true);
+
+/* ★행 높이★ — 담당자 2026-09-10: "6번째 개선요청부터 행 높이가 설정 안된상태".
+   사진 칸이 병합돼 있어 높이가 곧 사진 크기다 — 납작하면 사진이 안 보인다. */
+console.log('── 행 높이도 견본 줄을 따라간다 ──');
+function heights(x) { return x.log.filter(function (y) { return y.act === 'rowH'; }); }
+var rh = heights(r);
+ok('[2-5] 높이를 한 번 건다', rh.length, 1);
+ok('[2-6] ★둘째 줄부터 끝 줄까지 · 견본 줄 높이(34)★', [rh[0].at, rh[0].n, rh[0].h], [13, 26, 34]);
+ok('[2-7] 병합보다 먼저 건다 (병합이 터져도 높이는 남는다)',
+   r.log.indexOf(rh[0]) < r.log.indexOf(merges(r)[0]), true);
 
 console.log('── 이미 병합된 줄은 건드리지 않는다 (다시 merge 하면 터진다) ──');
 r = run({}, { '12,4,6': true, '13,4,6': true, '14,4,6': true });

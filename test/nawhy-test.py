@@ -82,7 +82,10 @@ process.exit(fail ? 1 : 0);
 '''
 
 # 머리글 순서를 실제 소스에서 뽑아 확인한다
-m = re.search(r"sheet\(ss, 'QSC_상세', \[(.*?)\]\)", gs, re.S)
+# ★2026-09-10부터 QSC_DETAIL_HEADER 상수다★ — 제출시각·제출점수를 뒤에 붙이면서 뺐다.
+#   (그 전에는 sheet(ss, 'QSC_상세', [...]) 호출 안에 그대로 적혀 있었다)
+m = re.search(r"const QSC_DETAIL_HEADER = \[(.*?)\];", gs, re.S)
+assert m, 'QSC_DETAIL_HEADER 를 찾지 못했습니다'
 heads = [h.strip().strip("'") for h in m.group(1).split(',')]
 undo = re.search(r'grid\(detail\.sh, 2, (\d+),', gs)
 import json

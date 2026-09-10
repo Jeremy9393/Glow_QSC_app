@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v125', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v126', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -374,6 +374,8 @@ function actionTable() {
     'admin.msMigrate':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 64 * KB, fn: fnMsMigrate },
     /* 요약 탭에서 잠든 칸을 깨운다(같은 수식을 다시 쓴다) — ★기본이 미리보기★ */
     'admin.wakeSummary':  { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnWakeSummary },
+    /* 이미 쌓인 줄의 행 높이를 한 줄로 낮춘다(새 줄은 제출할 때 저절로 된다) — ★기본이 미리보기★ */
+    'admin.tidyRows':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnTidyRows },
     /* 계정 관리 (accounts.html) — 전부 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
@@ -2526,8 +2528,11 @@ function fnStatusMonth(ctx, payload) {
   try {
     const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     const tz = ss.getSpreadsheetTimeZone();
-    // QSC_회차: 0 제출시각 · 1 점검일자 · 2 방문시간 · 3 매장명
-    qscSet = submittedStores(ss.getSheetByName('QSC_회차'), tz, wantYm, 4, 1, 3, -1);
+    /* QSC_회차: 0 제출시각 · 1 점검일자 · 2 방문시간 · 3 매장명
+       ★fromTop★ (2026-09-10) — 이 시트도 최신이 맨 위로 바뀌었다(prependRows).
+       빼먹으면 끝에서 3000줄을 읽어 ★가장 오래된 자료★를 보게 되고, 그러면
+       「이번 달 미제출」이 늘 26곳 전부로 나온다 — MS_상세에서 이미 한 번 밟은 함정이다. */
+    qscSet = submittedStores(ss.getSheetByName('QSC_회차'), tz, wantYm, 4, 1, 3, -1, true);
     /* 쇼퍼_응답: 1 방문날짜 · 3 매장명.
        ★본사가 냈든 고객이 냈든 그 달은 제출된 것으로 본다★ (2026-08-20 사용자 결정) —
        점수에서 두 경로를 구별하지 않기로 했으므로 '아직 안 받은 달'의 기준도 같아야 한다.
@@ -3249,6 +3254,21 @@ function fnNotReady() {
 
 /* ---------- ① 응답 원본 ---------- */
 
+/* QSC_상세 열 이름. ★1~14 는 2026-08-27 부터 자리가 굳어 있다★ — 13 '사진' 을 fnUndoSubmit 이
+   열 번호로 직접 읽으므로 앞쪽에 끼우면 사진이 미아가 된다. 새 칸은 언제나 맨 뒤에. */
+const QSC_DETAIL_HEADER = ['점검일자', '방문시간', '매장명', '코드', '문항번호', '구분', '문항',
+  '등급구분', '개선필요건수', '상태', '감점', '비고', '사진', 'NA사유', '제출시각', '제출점수'];
+
+/* ★열이 늘면 머리글도 늘려 준다★ — sheet() 는 ★시트가 없을 때만★ 머리글을 쓴다.
+   이미 만들어진 QSC_상세 에 열을 더하면 값은 15·16 열에 들어가는데 머리글은 14개인 채로 남아
+   ★이름 없는 칸★ 이 된다. msFixHeader 와 같은 방식이다(모자랄 때만 한 번 채운다). */
+function qscFixHeader(sh) {
+  try {
+    if (sh.getLastColumn() >= QSC_DETAIL_HEADER.length) return;
+    sh.getRange(1, 1, 1, QSC_DETAIL_HEADER.length).setValues([QSC_DETAIL_HEADER.slice(0)]);
+  } catch (e) { /* 머리글은 덤이다 — 여기서 제출을 막지 않는다 */ }
+}
+
 function saveQsc(ss, p, ctx) {
   const photoMap = savePhotos(p, ctx); // {문항no: [{url, id}]}
   // v3.7 절대 감점제 스키마: 대분류 점수 대신 감점 3층 + 중대 차감 기록
@@ -3258,19 +3278,21 @@ function saveQsc(ss, p, ctx) {
   const r = p.result || {};
   let photoN = 0;
   p.items.forEach(function (it) { photoN += (photoMap[it.no] || []).length; });
-  sum.appendRow(safeRow([p.submittedAt, p.date, p.time || '', p.store, p.inspector,
+  /* ★최신이 맨 위★ (2026-09-10) — MS_상세와 같은 방향으로 맞췄다.
+     이 시트를 「끝에서부터」 읽던 곳은 submittedStores 하나뿐이고, 그 자리에 fromTop 을 켰다. */
+  prependRows(sum, [safeRow([p.submittedAt, p.date, p.time || '', p.store, p.inspector,
     r.qsc == null ? '' : round1(r.qsc), r.grade || '',
     r.genDeduct || 0, (r.s2 && r.s2.deduct) || 0, (r.s1 && r.s1.deduct) || 0, r.criticalDeduct || 0,
     p.items.filter(function (it) { return it.value !== null; }).length, photoN,
-    ctx ? ctx.id : '']));
+    ctx ? ctx.id : ''])]);
 
-  /* ★'NA사유'는 반드시 맨 뒤다★ (2026-08-27) — 사이에 끼우면 사진 칸이 13번째에서 밀리는데,
-     fnUndoSubmit 이 그 자리를 열 번호 13 으로 직접 읽어 사진 ID를 모은다. 밀리면 되돌리기가
-     사진을 못 찾고, 지워야 할 사진이 드라이브에 영영 남는다. */
-  const det = sheet(ss, 'QSC_상세', ['점검일자', '방문시간', '매장명', '코드', '문항번호', '구분', '문항', '등급구분', '개선필요건수', '상태', '감점', '비고', '사진', 'NA사유']);
-  /* sheet() 는 ★시트를 만들 때만★ 머리글을 쓴다 — 이미 있던 시트에는 이 칸 이름이 비어 있다.
-     한 번만 채워 준다(빈 칸일 때만 건드리므로 여러 번 돌아도 무해하다). */
-  try { if (det.getLastColumn() < 14) det.getRange(1, 14).setValue('NA사유'); } catch (e) { }
+  /* ★13번째 '사진' 칸 앞에는 아무것도 끼우지 않는다★ (2026-08-27) — fnUndoSubmit 이 그 자리를
+     열 번호 13 으로 직접 읽어 사진 ID를 모은다. 밀리면 되돌리기가 사진을 못 찾고, 지워야 할
+     사진이 드라이브에 영영 남는다. ★새 칸은 반드시 맨 뒤에 붙인다.★
+     ⚠2026-09-10 에 '제출시각'·'제출점수' 를 15·16 에 붙였다(담당자: "MS_상세 참고하여 열 추가").
+       MS_상세와 달리 앞쪽에 끼우지 않은 것은 위 사진 칸 때문이다. */
+  const det = sheet(ss, 'QSC_상세', QSC_DETAIL_HEADER.slice(0));
+  qscFixHeader(det);
   const rows = p.items
     .filter(function (it) { return it.value !== null; })
     .map(function (it) {
@@ -3278,9 +3300,11 @@ function saveQsc(ss, p, ctx) {
       return safeRow([p.date, p.time || '', p.store, it.code || '', it.no, it.group || '', it.text, sev,
         String(it.value), it.rating || '', it.deduct == null ? '' : -it.deduct,
         it.memo || '', (photoMap[it.no] || []).map(function (x) { return x.url; }).join('\n'),
-        it.value === 'NA' ? String(it.naWhy || '해당 없음') : '']);
+        it.value === 'NA' ? String(it.naWhy || '해당 없음') : '',
+        /* 15·16 : 제출 단위 (74줄에 같은 값이 반복된다 — MS_상세 10·12 열과 같은 뜻) */
+        p.submittedAt, r.qsc == null ? '' : round1(r.qsc)]);
     });
-  appendRows(det, rows);
+  prependRows(det, rows);
 
   // 매장별 NA 프리셋 갱신 — 다음 회차에 앱이 자동 제안 (config.get으로 내려감)
   try {
@@ -3412,11 +3436,68 @@ function msFixHeader(sh) {
   } catch (e) { /* 머리글은 덤이다 — 여기서 제출을 막지 않는다 */ }
 }
 
+/* ★긴 글이 든 칸은 한 줄로 보이게★ (2026-09-10 담당자: *"총평이나 비고 내용들 작성했을때
+   실제 작성자가 줄바꿈 많이 해도 시트페이지에선 한줄로 보일 수 있도록 설정 (행의 높이가
+   넓어지면 시트가 너무 커져서 불편함, 어차피 여긴 기록용 확인 페이지이라서 괜찮음)"*)
+
+   ★글을 자르지 않는다★ — 보이는 것만 한 줄이고 칸 안의 글자는 그대로다(칸을 누르면
+   수식 입력줄에 전문이 나오고, 내려받기·복사에도 전문이 따라간다). CLIP 은 ★넘치는 부분을
+   옆 칸으로 흘리지 않는다★는 뜻이라, 옆 칸이 비어 있어도 표가 어그러지지 않는다.
+   행 높이를 함께 못 박는 이유: 줄바꿈이 든 칸은 시트가 자동으로 키우는데, 그 자동 맞춤은
+   ★높이를 명시적으로 정해 주어야만★ 꺼진다. */
+const MS_ROW_H = 21;
+function msTidyRows(sh, at, n) {
+  try {
+    sh.setRowHeights(at, n, MS_ROW_H);
+    const clip = SpreadsheetApp.WrapStrategy.CLIP;
+    [MS_COL.memo, MS_COL.overall, MS_COL.order].forEach(function (col) {
+      try { sh.getRange(at, col, n, 1).setWrapStrategy(clip); } catch (e) { }
+    });
+  } catch (e) { /* 보기 좋게 하는 일이다 — 제출을 막지 않는다 */ }
+}
+
 function msPrepend(sh, rows) {
   if (!rows.length) return;
   msFixHeader(sh);
   sh.insertRowsBefore(2, rows.length);
   sh.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  msTidyRows(sh, 2, rows.length);
+}
+
+/* ★이미 쌓여 있는 줄까지 한 줄로★ — 위 msTidyRows 는 ★앞으로 들어올 줄★ 에만 걸린다.
+   지금 시트에 있는 줄은 한 번 훑어 줘야 한다.
+     await Api.call('admin.tidyRows', {})              ← 미리보기 (몇 줄인지만)
+     await Api.call('admin.tidyRows', {apply:true})    ← 실제로 낮춘다
+   ★값은 건드리지 않는다★ — 행 높이와 「넘침 처리」 두 가지 보기 설정뿐이다. */
+function fnTidyRows(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const out = [];
+  /* QSC_상세는 '비고'(12) 가 긴 칸이다 — MS_COL 과 열 번호가 다르므로 따로 준다 */
+  const jobs = [
+    { name: MS_DETAIL, cols: [MS_COL.memo, MS_COL.overall, MS_COL.order] },
+    { name: 'QSC_상세', cols: [12] },
+  ];
+  jobs.forEach(function (j) {
+    const sh = ss.getSheetByName(j.name);
+    if (!sh) { out.push(j.name + ' — 시트가 없습니다'); return; }
+    const n = sh.getLastRow() - 1;
+    if (n < 1) { out.push(j.name + ' — 자료 줄이 없습니다'); return; }
+    if (!apply) { out.push(j.name + ' — ' + n + '줄을 높이 ' + MS_ROW_H + '(으)로 낮춥니다'); return; }
+    try {
+      sh.setRowHeights(2, n, MS_ROW_H);
+      const clip = SpreadsheetApp.WrapStrategy.CLIP;
+      j.cols.forEach(function (col) {
+        try { sh.getRange(2, col, n, 1).setWrapStrategy(clip); } catch (e) { }
+      });
+      out.push(j.name + ' — ' + n + '줄 ✓');
+    } catch (e) {
+      out.push(j.name + ' — ★실패★ ' + String(e && e.message || e).slice(0, 90));
+    }
+  });
+  if (apply) auditLog(ctx, 'admin.tidyRows', '', '성공', '', out.join(' · ').slice(0, 200));
+  return { ok: true, preview: !apply, lines: out };
 }
 
 function saveShopper(ss, p, ctx, isSurvey) {
@@ -8233,6 +8314,15 @@ function spreadImproveRows(sh, c, plan) {
     sh.getRange(c.row0, first, 1, w)
       .copyTo(sh.getRange(c.row0 + 1, first, n - 1, w), { formatOnly: true });
 
+    /* ①-2 ★행 높이★ (2026-09-10 담당자: *"6번째 개선요청부터 행 높이가 설정 안된상태"*)
+       copyTo(formatOnly) 는 ★셀★ 서식만 옮긴다 — 행 높이는 셀이 아니라 ★행★의 속성이라
+       따라오지 않는다. 그래서 테두리·병합은 맞는데 줄만 납작한 상태가 됐다.
+       사진 칸이 병합돼 있어 높이가 곧 사진 크기다 — 납작하면 사진이 안 보인다. */
+    try {
+      const h = sh.getRowHeight(c.row0);
+      if (h > 0) sh.setRowHeights(c.row0 + 1, n - 1, h);
+    } catch (e) { /* 높이는 덤이다 — 아래 병합까지는 반드시 간다 */ }
+
     /* ② 병합 — 첫 줄에 걸린 병합을 그대로 아래 줄에 되풀이한다.
        이미 병합돼 있으면 건드리지 않는다(다시 merge 하면 터진다). */
     let merged = 0;
@@ -8245,7 +8335,7 @@ function spreadImproveRows(sh, c, plan) {
         if (!rng.getMergedRanges().length) { rng.merge(); merged++; }
       }
     }
-    plan.push('본문 서식을 ' + c.row0 + '행 기준으로 ' + c.endRow + '행까지 폈습니다' +
+    plan.push('본문 서식·행 높이를 ' + c.row0 + '행 기준으로 ' + c.endRow + '행까지 폈습니다' +
       (merged ? ' (병합 ' + merged + '칸 포함)' : ''));
   } catch (e) {
     /* ★여기서 멈추지 않는다★ — 서식은 덤이고, 탭을 만드는 일 자체가 막히면 그 달을 못 쓴다 */
@@ -8611,6 +8701,26 @@ function clearMonthBody(sh) {
   const wipeLast = c0.ok ? Math.max(c0.memo, c0.roll || 0) : 15;   // 못 읽으면 종전대로 O열까지
   const bodyRng = grid(sh, row0, 2, Math.max(1, sh.getMaxRows() - row0 + 1), Math.max(1, wipeLast - 1));
   if (bodyRng) bodyRng.clearContent();
+
+  /* ①-2 ★셀 위에 떠 있는 사진★ (2026-09-10 담당자: *"8월에 개선요청에 대한 답변 사진이
+     12월에 넘어와있어서"*)
+
+     ★왜 지난 달 사진이 새 달에 남는가★ — 매장이 개선 답변 사진을 붙일 때 구글시트의 기본은
+     ★셀 위에 얹기(over-grid)★ 다. 그것은 셀 값이 아니라 시트에 딸린 ★별개의 객체★라
+     위 clearContent() 가 건드리지 못한다. 그런데 copyTo 는 그 객체까지 통째로 복제한다 —
+     즉 한 번 붙은 사진은 그 뒤로 태어나는 모든 달 탭에 영영 따라다닌다.
+     (앱이 넣는 사진은 셀 안 이미지·=IMAGE() 라 값이므로 위에서 함께 지워진다.)
+
+     ★본문 아래만 지운다★ — 머리글 위 로고·안내 그림이 있는 파일을 봐 왔다.
+     닻이 어느 행인지 못 읽는 그림은 ★건드리지 않는다★(모르는 것은 지우지 않는다). */
+  try {
+    const imgs = sh.getImages();
+    for (let i = 0; i < imgs.length; i++) {
+      let ar = 0;
+      try { ar = imgs[i].getAnchorCell().getRow(); } catch (e) { continue; }
+      if (ar >= row0) { try { imgs[i].remove(); } catch (e) { } }
+    }
+  } catch (e) { /* 옛 런타임에 getImages 가 없어도 탭 만들기는 계속된다 */ }
 
   // ② 라벨 옆 값 칸 중 수식이 아닌 것
   const lm = labelMap(sh);
@@ -9612,6 +9722,24 @@ function appendRows(sh, rows) {
   const width = rows[0].length;
   if (sh.getMaxColumns() < width) sh.insertColumnsAfter(sh.getMaxColumns(), width - sh.getMaxColumns());
   sh.getRange(start, 1, rows.length, width).setValues(rows);
+}
+
+/* 여러 행을 ★머리글 바로 밑★에 끼운다 — 최신이 맨 위로 온다 (2026-09-10 담당자:
+   *"모든 시트 가장 최신 입력된 자료가 제일 위로 오게"*).
+
+   ★시트를 정렬해 두는 것으로는 안 된다★ — 구글시트의 정렬은 그때 한 번뿐이고, 그 뒤에
+   앱이 쓰는 행은 여전히 맨 아래로 간다. 담당자가 "정렬했는데 적용 안됨" 이라고 본 것이 이것이다.
+   쓰는 자리를 바꿔야 계속 유지된다.
+
+   ★한 묶음 안에서는 뒤집지 않는다★ — 한 제출의 74줄(또는 38줄)은 문항 순서대로 둔다.
+   insertRowsBefore 가 자리를 만들어 주므로 appendRows 처럼 그리드를 넓힐 일이 없다.
+   ⚠읽는 쪽이 「끝에서부터」 훑고 있으면 옛 자료를 보게 된다 — submittedStores 의 fromTop 참조. */
+function prependRows(sh, rows) {
+  if (!rows || !rows.length) return;
+  const width = rows[0].length;
+  if (sh.getMaxColumns() < width) sh.insertColumnsAfter(sh.getMaxColumns(), width - sh.getMaxColumns());
+  sh.insertRowsBefore(2, rows.length);
+  sh.getRange(2, 1, rows.length, width).setValues(rows);
 }
 
 /* 드라이브 사진을 시트·앱에서 보여줄 수 있는 유일한 주소 형식.
