@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=118">
+<link rel="stylesheet" href="css/app.css?v=119">
 </head>
 <body>
 <div class="home">
@@ -83,11 +83,11 @@
      api.js는 이 화면이 직접 부르지는 않지만 계속 싣는다 — window.Api를 붙여
      auth.js가 서버 주소를 자기 폴백 상수가 아니라 CONFIG에서 읽게 하기 위해서다.
      (endpoint()는 호출 시점에 읽으므로 auth.js보다 뒤에 실려도 된다) -->
-<script src="js/maint.js?v=118"></script>
-<script src="js/ui-busy.js?v=118"></script>
-<script src="js/auth.js?v=118"></script>
-<script src="js/menu.js?v=118"></script>
-<script src="js/api.js?v=118"></script>
+<script src="js/maint.js?v=119"></script>
+<script src="js/ui-busy.js?v=119"></script>
+<script src="js/auth.js?v=119"></script>
+<script src="js/menu.js?v=119"></script>
+<script src="js/api.js?v=119"></script>
 <script>
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
@@ -363,7 +363,7 @@
     location.href = 'login.html?mode=changepw&next=index.html';
   };
   $('#outBtn').onclick = function () {
-    if (!confirm('로그아웃할까요?')) return;
+    if (!confirm('로그아웃하시겠습니까?')) return;
     /* 세션이 무기한이라 로그아웃은 사용자가 세션을 끊을 수 있는 유일한 수단이다.
        ★Auth.logout()을 먼저 쓴다 — 저장물 정리와 화면 이동이 거기 한곳에 모여 있다.
          구버전 auth.js가 캐시에 남아 logout()이 없을 때만 clear()로 내려간다. */

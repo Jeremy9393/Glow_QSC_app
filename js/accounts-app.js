@@ -44,7 +44,7 @@
     'auth.setPassword': '비밀번호 변경(본인)',
     'config.get': '설정 조회',
     'qsc.submit': 'QSC 평가표 제출',
-    'shopper.submit': '미스터리쇼퍼 제출',
+    'shopper.submit': 'MS 평가표 제출',
     'survey.submit': '고객 설문 제출',
     'dashboard.get': '[감사총무팀_QSC]통합시트 조회',
     'store.get': '매장별 QSC현황 조회',
