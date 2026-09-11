@@ -17,6 +17,13 @@
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
 
+  /* 가나다순 비교 (2026-09-11 담당자 — "계정목록같이 주르륵 나오는것들은 … 글자순으로 정렬해줘").
+     서버도 같은 순서로 주지만 화면에서 한 번 더 정렬한다 — 옛 서버 응답·삭제 뒤 목록에도 같은 규칙이 적용되게. */
+  function koCmp(a, b) {
+    const x = String(a == null ? '' : a), y = String(b == null ? '' : b);
+    try { return x.localeCompare(y, 'ko'); } catch (e) { return x < y ? -1 : (x > y ? 1 : 0); }
+  }
+
   const BASE = 'https://jeremy9393.github.io/Glow_QSC_app/';   // codes-app.js와 같은 앱 주소
   const MINPW = 8;                                             // login-app.js·서버와 같은 규칙
   const AUDIT_LIMIT = 100;                                     // 서버가 1~200으로 클램프한다
@@ -53,6 +60,9 @@
     'account.setPassword': '비밀번호 설정',
     'account.setStatus': '계정 사용/중지',
     'account.sync': '계정 동기화',
+    'account.delete': '계정 삭제',
+    'account.rename': '계정 이름 변경',
+    'admin.renameStore': '매장 이름 변경',
     'audit.list': '감사로그 조회',
     'status.month': '미제출 현황 조회',
     'notify.badge': '알림 배지 조회',
@@ -102,6 +112,7 @@
   let dups = null;      // 정규화 후 아이디가 겹치는 계정 (아래 findDups 주석 참조)
   let busy = false;
   let openId = '';      // 비밀번호 패널이 열려 있는 계정. 한 번에 하나만 연다
+  let panelKind = '';   // 열린 패널의 종류: 'pw' | 'rename' (2026-09-11 이름 변경 패널이 같은 자리를 쓴다)
   let panel = null;     // 그 패널 DOM. 목록을 다시 그려도 이 노드를 그대로 다시 끼워 넣는다
 
   // ---------- 작은 도구들 ----------
@@ -340,6 +351,7 @@
 
   function closePanel() {
     openId = '';
+    panelKind = '';
     if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
     panel = null;
   }
@@ -347,6 +359,7 @@
   function openPanel(a) {
     closePanel();
     openId = a.id;
+    panelKind = 'pw';
     panel = buildPanel(a);
     render();                       // 목록을 다시 그리면서 해당 줄 아래에 끼워 넣는다
     const el = $('#npw', panel);
@@ -449,6 +462,206 @@
     if (!(res && res.ok)) { const m = failMsg(res); if (m) alert(m); return; }
     a.status = to;
     render();
+  }
+
+  // ---------- 이름 변경 · 삭제 (2026-09-11 담당자 요청) ----------
+
+  /* [이름 변경] 패널 — 새 이름을 적고 [미리보기]로 어디가 몇 줄 바뀌는지 본 뒤 [실행]한다.
+     서버(account.rename)가 개명 도구(admin.renameStore)를 감싼다: 계정뿐 아니라 지난 기록·제출 코드·
+     NA프리셋·매장파일맵의 매장명까지 새 이름으로 바꾼다. 새 이름은 통합시트에 먼저 있어야 한다.
+     동기화가 먼저 만들어 버린 빈 계정(비밀번호·접속 없음)이 새 이름을 차지하고 있으면 서버가 먼저 정리한다. */
+  function buildRenamePanel(a) {
+    const box = document.createElement('section');
+    box.className = 'card pwPanel';
+    box.innerHTML =
+      '<h2>이름 변경</h2>' +
+      '<p class="note rnWho"></p>' +
+      '<div class="meta-grid"><div class="full">' +
+      '<label class="f" for="rnTo">새 이름 (통합시트의 매장명 그대로)</label>' +
+      '<input type="text" id="rnTo" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">' +
+      '</div></div>' +
+      '<div class="bcAct">' +
+      '<button class="miniBtn" id="rnPrev" type="button">미리보기</button>' +
+      '<button class="miniBtn warn" id="rnOk" type="button" disabled>실행</button>' +
+      '<button class="miniBtn" id="rnNo" type="button">취소</button>' +
+      '</div>' +
+      '<p class="note pre" id="rnOut" style="display:none"></p>';
+    $('.rnWho', box).textContent = a.id +
+      ' 의 이름을 바꿉니다. 계정·지난 기록·제출 코드·NA프리셋의 매장명이 함께 바뀌고, 그 매장은 다시 로그인해야 합니다.';
+    $('#rnNo', box).onclick = function () { closePanel(); };
+    $('#rnPrev', box).onclick = function () { doRename(a, box, false); };
+    $('#rnOk', box).onclick = function () { doRename(a, box, true); };
+    $('#rnTo', box).oninput = function () { $('#rnOk', box).disabled = true; };   // 이름을 고치면 미리보기부터 다시
+    return box;
+  }
+
+  function openRename(a) {
+    closePanel();
+    openId = a.id;
+    panelKind = 'rename';
+    panel = buildRenamePanel(a);
+    render();
+    const el = $('#rnTo', panel);
+    if (el) el.focus();
+  }
+
+  function renameSummary(res) {
+    const lines = [];
+    (res.자리 || []).forEach(function (r) {
+      if (r.걸린줄) lines.push('· ' + r.탭 + ' — ' + r.칸 + ': ' + r.걸린줄 + '줄');
+      if (r.오류) lines.push('· ' + r.탭 + ' — 오류: ' + r.오류);
+    });
+    if (!lines.length) lines.push('· 바꿀 줄이 없습니다');
+    return (res.말 ? res.말 + '\n\n' : '') +
+      res.옛이름 + ' → ' + res.새이름 + ' (합계 ' + (res.합계 || 0) + '줄)\n' + lines.join('\n');
+  }
+
+  async function doRename(a, box, apply) {
+    if (busy) return;
+    const to = $('#rnTo', box).value.trim();
+    const out = $('#rnOut', box);
+    if (!to) { setNote(out, '새 이름을 적어 주세요.'); return; }
+    if (apply && !confirm(a.id + ' → ' + to +
+      '\n\n계정·지난 기록·제출 코드·NA프리셋의 매장명을 새 이름으로 바꿉니다.\n되돌리는 길이 없습니다. 실행할까요?')) return;
+    lock(true);
+    let res = null;
+    try { res = await Api.call('account.rename', { from: a.id, to: to, apply: apply }); }
+    catch (e) { res = null; }
+    lock(false);
+    if (!(res && res.ok)) {
+      const m = failMsg(res);
+      setNote(out, m || '처리하지 못했습니다.');
+      $('#rnOk', box).disabled = true;
+      return;
+    }
+    setNote(out, renameSummary(res));
+    if (!apply) { $('#rnOk', box).disabled = false; return; }
+    alert('이름을 바꿨습니다.\n' + (res.말 || ''));
+    closePanel();
+    await load();
+  }
+
+  /* [삭제] — 계정 행만 지운다. 지난 점수·제출 기록은 남는다. 서버가 본인·전 매장 권한 계정은 거절한다. */
+  async function doDelete(a) {
+    if (busy) return;
+    if (!confirm(a.id + '\n\n이 계정을 지웁니다.\n' +
+      '· 계정 행만 지워지고 지난 점수·제출 기록은 남습니다\n' +
+      '· 비밀번호도 함께 지워져 되돌릴 수 없습니다\n' +
+      (a.hasPw ? '· ★비밀번호가 설정된 계정입니다★\n' : '') +
+      (a.lastSeen ? '· 최근 접속: ' + fmtSeen(a.lastSeen) + '\n' : '') +
+      '\n지울까요?')) return;
+    lock(true);
+    let res = null;
+    try { res = await Api.call('account.delete', { id: a.id }); }
+    catch (e) { res = null; }
+    lock(false);
+    if (!(res && res.ok)) { const m = failMsg(res); if (m) alert(m); return; }
+    rows = rows.filter(function (r) { return r.id !== a.id; });
+    dups = findDups(rows);
+    if (openId === a.id) closePanel();
+    render();
+  }
+
+  // ---------- 동기화 미리보기(계획) ----------
+
+  /* 통합시트에 없는 계정 한 줄 + 처리 선택(그대로 / 삭제 / 이름 변경 → 추가될 이름) */
+  function planRow(o, toAdd) {
+    const row = document.createElement('div');
+    row.className = 'codeRow accRow' + (o.status !== '사용' ? ' acc-off' : '');
+    const st = document.createElement('span'); st.className = 'st'; st.textContent = (o.status !== '사용') ? '⛔' : '●';
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = o.id;   // 사용자 데이터 — textContent
+    const info = document.createElement('span'); info.className = 'info';
+    info.textContent = [
+      o.hasPw ? '비밀번호 있음' : '비밀번호 미설정',
+      o.lastSeen ? (fmtSeen(o.lastSeen) + ' 접속') : '접속 기록 없음',
+      o.status || '',
+    ].filter(function (v) { return !!v; }).join(' · ');
+    const act = document.createElement('span'); act.className = 'act';
+    const sel = document.createElement('select');
+    [['', '그대로 둔다'], ['del', '삭제']]
+      .concat(toAdd.map(function (n) { return ['rn:' + n, '이름 변경 → ' + n]; }))
+      .forEach(function (p) {
+        const op = document.createElement('option');
+        op.value = p[0]; op.textContent = p[1];
+        sel.appendChild(op);
+      });
+    act.appendChild(sel);
+    row.appendChild(st); row.appendChild(nm); row.appendChild(info); row.appendChild(act);
+    row._sel = sel; row._id = o.id;
+    return row;
+  }
+
+  function showPlan(res) {
+    const box = $('#syncPlan');
+    box.innerHTML = '';
+    box.style.display = '';
+    const toAdd = Array.isArray(res.added) ? res.added : [];
+    const orphans = Array.isArray(res.orphans) ? res.orphans : [];
+    const conflict = Array.isArray(res.conflict) ? res.conflict : [];
+    const h = document.createElement('p');
+    h.className = 'note';
+    h.textContent = '새로 만들 계정 ' + toAdd.length + '개' + (toAdd.length ? ' — ' + toAdd.join(', ') : '') +
+      ' / 통합시트에 없는 계정 ' + orphans.length + '개' +
+      (orphans.length ? ' — 줄마다 어떻게 할지 고르세요' : '') +
+      (conflict.length ? ' / 이름 충돌 ' + conflict.length + '건: ' + conflict.join(', ') : '');
+    box.appendChild(h);
+    const planRows = orphans.map(function (o) { const r = planRow(o, toAdd); box.appendChild(r); return r; });
+    const bar = document.createElement('div');
+    bar.className = 'bcAct';
+    const ok = document.createElement('button'); ok.className = 'miniBtn warn'; ok.type = 'button'; ok.textContent = '실행';
+    const no = document.createElement('button'); no.className = 'miniBtn'; no.type = 'button'; no.textContent = '취소';
+    bar.appendChild(ok); bar.appendChild(no);
+    box.appendChild(bar);
+    no.onclick = function () { box.style.display = 'none'; box.innerHTML = ''; };
+    ok.onclick = function () { runPlan(toAdd, planRows, box); };
+  }
+
+  /* 실행 순서: 이름 변경 → 삭제 → 추가. 이름 변경으로 새 이름을 차지하면 추가에서는 저절로 건너뛴다(서버 taken). */
+  async function runPlan(toAdd, planRows, box) {
+    if (busy) return;
+    const renames = [], dels = [], seen = {};
+    for (let i = 0; i < planRows.length; i++) {
+      const v = planRows[i]._sel.value;
+      if (v === 'del') dels.push(planRows[i]._id);
+      else if (v.indexOf('rn:') === 0) {
+        const to = v.slice(3);
+        if (seen[to]) { alert('「' + to + '」로 이름을 바꾸려는 계정이 둘입니다. 하나만 고르세요.'); return; }
+        seen[to] = 1;
+        renames.push({ from: planRows[i]._id, to: to });
+      }
+    }
+    const remainAdd = toAdd.filter(function (n) { return !seen[n]; });
+    if (!confirm('실행합니다.\n· 이름 변경 ' + renames.length + '건\n· 삭제 ' + dels.length + '건\n· 새로 추가 ' +
+      remainAdd.length + '건\n\n이름 변경·삭제는 되돌릴 수 없습니다. 계속할까요?')) return;
+    lock(true);
+    const done = { rn: 0, del: 0, add: 0 }, errs = [];
+    for (let i = 0; i < renames.length; i++) {
+      let res = null;
+      try { res = await Api.call('account.rename', { from: renames[i].from, to: renames[i].to, apply: true }); }
+      catch (e) { res = null; }
+      if (res && res.ok) done.rn++;
+      else errs.push('이름 변경 ' + renames[i].from + ' → ' + renames[i].to + ': ' + (failMsg(res) || '실패'));
+    }
+    for (let i = 0; i < dels.length; i++) {
+      let res = null;
+      try { res = await Api.call('account.delete', { id: dels[i] }); }
+      catch (e) { res = null; }
+      if (res && res.ok) done.del++;
+      else errs.push('삭제 ' + dels[i] + ': ' + (failMsg(res) || '실패'));
+    }
+    let res = null;
+    try { res = await Api.call('account.sync', {}); }
+    catch (e) { res = null; }
+    if (res && res.ok) done.add = Array.isArray(res.added) ? res.added.length : 0;
+    else errs.push('추가: ' + (failMsg(res) || '실패'));
+    lock(false);
+    box.style.display = 'none';
+    box.innerHTML = '';
+    alert('동기화를 마쳤습니다.\n· 이름 변경 ' + done.rn + '건\n· 삭제 ' + done.del + '건\n· 새로 추가 ' + done.add + '건' +
+      (done.add ? '\n\n새 계정은 비밀번호가 아직 없습니다 — [비밀번호]로 정해 매장에 알려 주세요.' : '') +
+      (done.rn ? '\n\n이름을 바꾼 매장은 다시 로그인해야 합니다. 상태가 「중지」면 [사용]으로 켜 주세요.' : '') +
+      (errs.length ? '\n\n★처리하지 못한 것★\n' + errs.join('\n') : ''));
+    await load();
   }
 
   // ---------- 렌더 ----------
@@ -562,6 +775,22 @@
         stBtn.textContent = off ? '사용' : '중지';
         stBtn.onclick = function () { doToggle(a); };
         act.appendChild(stBtn);
+
+        /* [이름 변경]·[삭제] (2026-09-11 담당자 요청) — 본인 계정과 중복 줄에는 두지 않는다.
+           이름 변경은 계정만이 아니라 지난 기록·제출 코드·NA프리셋의 매장명까지 바꾼다(서버 account.rename). */
+        const rnBtn = document.createElement('button');
+        rnBtn.className = 'miniBtn';
+        rnBtn.type = 'button';
+        rnBtn.textContent = '이름 변경';
+        rnBtn.onclick = function () { if (openId === a.id && panelKind === 'rename') closePanel(); else openRename(a); };
+        act.appendChild(rnBtn);
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'miniBtn warn';
+        delBtn.type = 'button';
+        delBtn.textContent = '삭제';
+        delBtn.onclick = function () { doDelete(a); };
+        act.appendChild(delBtn);
       }
     }
 
@@ -677,6 +906,7 @@
       /* ★서버(fnAccountList)가 담는 키는 `rows`다★ — 여기서 res.accounts만 읽고 있어
          목록이 늘 비어 보였다. 옛 이름도 함께 받아 두어, 서버 쪽이 어느 이름으로 오든 뜨게 한다. */
       rows = normalize(res.rows || res.accounts);
+      rows.sort(function (x, y) { return koCmp(x.name || x.id, y.name || y.id); });   // 가나다순 (2026-09-11)
       dups = findDups(rows);
       /* 목록을 새로 받으면 열려 있던 패널의 계정 객체가 옛 객체를 가리키게 된다.
          비밀번호를 이미 설정한 뒤라면 그 화면을 유지해야 하므로 닫지는 않고, 그대로 둔다. */
@@ -815,35 +1045,28 @@
   }
   paintPwEye();
 
+  /* [통합시트에서 계정 동기화] — ★먼저 미리보기★ (2026-09-11 담당자 요청 "새로 생기기만 하잖아").
+     서버가 「추가될 계정」과 「통합시트에 없는 계정」을 주면(preview:true 는 아무것도 쓰지 않는다),
+     시트에 없는 계정마다 그대로 / 이름 변경(→ 추가될 이름 중 하나) / 삭제 를 고르고 [실행]한다(runPlan).
+     열려 있는 비밀번호 패널은 닫지 않는다 — 방금 설정한 안내 문구를 아직 복사하지 않았을 수 있다. */
   $('#syncBtn').onclick = async function () {
     if (busy) return;
-    if (!confirm('통합시트의 매장 목록을 읽어 계정을 맞춥니다.\n\n' +
-      '· 새로 생긴 매장의 계정이 추가됩니다 (상태 사용 · 비밀번호 미설정)\n' +
-      '· 이미 있는 계정은 손대지 않습니다\n' +
-      '· 없어진 매장의 계정은 자동으로 지워지지 않습니다 — 필요하면 [중지]로 막아 주세요\n\n계속할까요?')) return;
-
-    /* 열려 있는 비밀번호 패널은 닫지 않는다. 방금 설정한 안내 문구를 아직 복사하지 않았을 수
-       있고, 조작 하나가 남의 화면을 치우는 것은 그 자체로 놀랄 일이다(값 자체는 이제 목록에도
-       남으므로 잃지는 않는다). 목록을 다시 그려도 패널은 남는다. */
     lock(true);
-    $('#syncBtn').textContent = '동기화 중…';
+    $('#syncBtn').textContent = '통합시트 읽는 중…';
     let res = null;
-    try { res = await Api.call('account.sync', {}); }
+    try { res = await Api.call('account.sync', { preview: true }); }
     catch (e) { res = null; }
     lock(false);
     $('#syncBtn').textContent = '통합시트에서 계정 동기화';
-
     if (!(res && res.ok)) { const m = failMsg(res); if (m) alert(m); return; }
-    /* ★서버(syncStoreAccountsCore)가 주는 added는 '만든 계정 이름의 배열'이다★
-       typeof []는 'object'라 숫자로만 받으면 계정을 몇 개 만들어도 항상 0으로 떨어져
-       "새로 만들 계정이 없습니다"만 나온다 — 담당자는 동기화가 안 된 줄 알고 반복해서 누른다.
-       나중에 서버가 숫자로 바꿔도 그대로 동작하도록 두 형태를 다 받는다. */
-    const added = Array.isArray(res.added) ? res.added.length
-                : (typeof res.added === 'number' ? res.added : 0);
-    alert(added
-      ? ('동기화를 마쳤습니다.\n계정 ' + added + '개를 새로 만들었습니다.\n\n새 계정은 비밀번호가 아직 없습니다 — [비밀번호]로 정해 매장에 알려 주세요.')
-      : '동기화를 마쳤습니다.\n새로 만들 계정이 없습니다.');
-    await load();
+    const toAdd = Array.isArray(res.added) ? res.added : [];
+    const orphans = Array.isArray(res.orphans) ? res.orphans : [];
+    if (!toAdd.length && !orphans.length) {
+      alert('통합시트와 계정이 이미 같습니다.\n새로 만들거나 정리할 계정이 없습니다.');
+      return;
+    }
+    showPlan(res);
+    try { $('#syncPlan').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { }
   };
 
   await load();

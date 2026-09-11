@@ -1,6 +1,6 @@
 {
- "sha256": "098b0be67d56613873f95f181ae867e3097df1800ba74ad60fd5c5292845e91f",
- "version": 128,
- "when": "2026-09-10 16:08:43",
- "description": "2026-09-10 정렬을 keydesc 로 (여러 번 돌려도 같다) · QSC_상세는 only 로만"
+ "sha256": "c9babfb284c49bf11e32bdc10169ec1f95e9e3e1a74c087d47dfca426bcc1e3d",
+ "version": 129,
+ "when": "2026-09-11 18:17:31",
+ "description": "2026-09-11 계정 관리 — 동기화 미리보기(추가·이름 변경·삭제) · account.delete · account.rename · 목록 가나다순"
 }

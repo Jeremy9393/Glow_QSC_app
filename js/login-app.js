@@ -400,6 +400,7 @@
       storeList = names;
       sel.textContent = '';  // 두 번째 호출이면 갈아 끼운다
       opt(sel, '', '— 매장을 골라 주세요 —');
+      names.sort(function (a, b) { return String(a).localeCompare(String(b), 'ko'); });   // 가나다순 (2026-09-11)
       for (let i = 0; i < names.length; i++) opt(sel, names[i], names[i]);
       /* ★'직접 입력…'을 반드시 남긴다★ — 관리자 계정(admin)은 매장 목록에 없고,
          통합시트에 갓 추가된 매장도 캐시가 도는 동안에는 목록에 없다. 고르는 길만 두면

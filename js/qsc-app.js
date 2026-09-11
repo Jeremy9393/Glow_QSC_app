@@ -114,7 +114,8 @@
     const keep = storeSel.value || pendingStore;
     storeSel.innerHTML = '';
     if (storeHead) storeSel.appendChild(storeHead);
-    storeList(live).forEach(function (s) {
+    /* 가나다순 (2026-09-11 담당자 — 목록은 글자순). 통합시트 행 순서와 무관하게 고르기 쉽게 */
+    storeList(live).slice().sort(function (a, b) { return String(a).localeCompare(String(b), 'ko'); }).forEach(function (s) {
       const o = document.createElement('option');
       o.value = s; o.textContent = s;
       storeSel.appendChild(o);

@@ -56,7 +56,8 @@
   const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
   const live = await Api.getConfig();
   const stores = (live && live.stores && live.stores.length) ? live.stores : (master.stores || []);
-  stores.forEach(function (s) {
+  /* 가나다순 (2026-09-11 담당자 — 목록은 글자순) */
+  stores.slice().sort(function (a, b) { return String(a).localeCompare(String(b), 'ko'); }).forEach(function (s) {
     const o = document.createElement('option');
     o.value = s; o.textContent = s;
     $('#store').appendChild(o);
