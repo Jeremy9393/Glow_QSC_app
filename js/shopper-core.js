@@ -384,7 +384,8 @@ async function initShopperForm(opts) {
   function fillStores(list) {
     const keep = storeSel.value;                              // 사람이 이미 고른 값은 다시 그려도 잃지 않는다
     while (storeSel.options.length > 1) storeSel.remove(1);   // 첫 안내 문구는 META_FIELDS 한 곳에만 두려고 남긴다
-    list.forEach(function (s) {
+    /* 가나다순 (2026-09-11 담당자 — 목록은 글자순). 아래 indexOf 는 원래 list 로 그대로 판정한다 */
+    list.slice().sort(function (a, b) { return String(a).localeCompare(String(b), 'ko'); }).forEach(function (s) {
       const o = document.createElement('option');
       o.value = s; o.textContent = s;
       storeSel.appendChild(o);

@@ -186,7 +186,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v128', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v129', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -385,6 +385,10 @@ function actionTable() {
     'account.setPassword': { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnAccountSetPassword },
     'account.setStatus':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnAccountSetStatus },
     'account.sync':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnAccountSync },
+    /* 계정 행 삭제 · 계정 이름 변경(개명 도구 admin.renameStore 를 감싼다) — 2026-09-11 담당자 요청
+       "새로 생기기만 하잖아 … 변경, 삭제 추가 이렇게 셋 다 동기화" */
+    'account.delete':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnAccountDelete },
+    'account.rename':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnAccountRename },
     /* 홈 화면 알림 배지. menu:'store'라 `역할` 탭의 매장담당자 store 읽기 행이 그대로 연다 —
        배지를 위한 새 권한 어휘를 만들지 않는다(개선요청 표를 읽는 것이 곧 배지의 재료다).
        scope:'none'이라 payload.store는 읽지도 않는다. 대상 매장은 ctx.stores 하나가 정한다. */
@@ -2278,6 +2282,12 @@ function accountRow(a, props) {
   };
 }
 
+/* 가나다순 비교. V8 의 localeCompare('ko') 가 없거나 죽으면 코드값 순(한글 음절은 그것도 가나다순이다). */
+function koCmp(a, b) {
+  const x = String(a == null ? '' : a), y = String(b == null ? '' : b);
+  try { return x.localeCompare(y, 'ko'); } catch (e) { return x < y ? -1 : (x > y ? 1 : 0); }
+}
+
 function fnAccountList(ctx) {
   const all = readAccounts();
   const rows = [];
@@ -2290,14 +2300,10 @@ function fnAccountList(ctx) {
   /* 속성은 한 번만 읽어 넘긴다 — 줄마다 따로 읽으면 26번의 속성 조회가 된다 */
   const props = pwStashAll();
   for (let i = 0; i < all.length; i++) rows.push(accountRow(all[i], props));
-  /* 아직 쓰지 않는 매장을 위로 올린다 — 이 화면을 여는 이유가 대부분 그것이기 때문이다
-     (비밀번호 미설정 → 접속 이력 없음 → 나머지). 같은 묶음 안에서는 이름순. */
-  rows.sort(function (x, y) {
-    const rx = (x.hasPw ? 2 : 0) + (x.lastSeen ? 1 : 0);
-    const ry = (y.hasPw ? 2 : 0) + (y.lastSeen ? 1 : 0);
-    if (rx !== ry) return rx - ry;
-    return x.name < y.name ? -1 : (x.name > y.name ? 1 : 0);
-  });
+  /* ★가나다순★ (2026-09-11 담당자 — "계정목록같이 주르륵 나오는것들은 … 글자순으로 정렬해줘")
+     종전에는 미설정·미접속 계정을 위로 올렸는데, 담당자가 찾는 방식은 이름이다.
+     미설정·중지는 줄마다 뱃지와 상단 요약 숫자로 그대로 보인다. */
+  rows.sort(function (x, y) { return koCmp(x.name || x.id, y.name || y.id); });
   return {
     ok: true,
     rows: rows,
@@ -2428,16 +2434,107 @@ function fnAccountSetStatus(ctx, payload) {
 }
 
 /* [통합시트에서 계정 동기화] */
-function fnAccountSync(ctx) {
-  const r = syncStoreAccountsCore();
+function fnAccountSync(ctx, payload) {
+  /* ★preview:true 면 아무것도 쓰지 않는다★ (2026-09-11) — 화면이 먼저 「추가될 계정」과
+     「통합시트에 없는 계정」을 보여 주고, 담당자가 이름 변경·삭제·그대로를 고른 뒤 다시 부른다. */
+  const preview = !!(payload && payload.preview === true);
+  const r = syncStoreAccountsCore(preview);
   if (!r.ok) return err('SERVER_ERROR', r.error);
   const conflict = r.conflict || [];
-  auditLog(ctx, 'account.sync', '', '성공', '',
+  if (!preview) auditLog(ctx, 'account.sync', '', '성공', '',
     '추가 ' + r.added.length + '건 · 건너뜀 ' + r.skipped.length + '건' +
     (conflict.length ? ' · 이름 충돌 ' + conflict.length + '건' : ''));
   /* ★added는 배열이다★ — 화면이 개수를 셀 때 length를 봐야 한다(숫자로 읽으면 항상 0이 되어
      계정을 5개 만들어도 "새로 만들 계정이 없습니다"가 뜬다). 그 오해를 없애려고 count도 함께 준다. */
-  return { ok: true, added: r.added, skipped: r.skipped, conflict: conflict, count: r.added.length };
+  return { ok: true, preview: preview, added: r.added, skipped: r.skipped, conflict: conflict,
+    count: r.added.length, orphans: r.orphans || [] };
+}
+
+/* [계정 삭제] — 계정 행만 지운다. 지난 점수·제출 기록은 그대로 남는다 (2026-09-11 담당자 요청:
+   "매장이 사라지면 앱에서 안보이게 하는 경우도 있는데 삭제버튼도 있으면 좋을꺼같아").
+   ★본인·전 매장 권한('*') 계정은 여기서 못 지운다★ — 관리자를 지우면 이 화면에 다시 못 들어온다.
+   ★행 번호는 시트에서 다시 찾는다★ — getAccount 의 캐시(60초)에 든 row 는 그 사이 다른 행이
+   지워졌으면 한 줄 밀려 있다. 엉뚱한 매장을 지우는 사고를 그 한 줄이 만든다. */
+function fnAccountDelete(ctx, payload) {
+  const id = normId(payload && payload.id);
+  if (!id || !validId(id)) return err('BAD_REQUEST', '아이디가 올바르지 않습니다.');
+  if (id === ctx.id) return err('BAD_REQUEST', '본인 계정은 지울 수 없습니다.');
+  const acct = getAccount(id);
+  if (!acct) return err('NOT_FOUND', '계정을 찾지 못했습니다: ' + id);
+  if (String(acct.scope || '').trim() === '*') {
+    return err('BAD_REQUEST', '전 매장 권한 계정은 여기서 지울 수 없습니다 — 관리자 시트의 「계정」 탭에서 정리하십시오.');
+  }
+  const ss = authSS();
+  if (!ss) return err('SERVER_ERROR', '인증 시트를 열지 못했습니다.');
+  const sh = ss.getSheetByName(AUTH_ACCOUNT_SHEET);
+  if (!sh) return err('SERVER_ERROR', '계정 탭이 없습니다.');
+  const fresh = readAccounts().filter(function (a) { return a.id === id; });
+  if (fresh.length !== 1 || fresh[0].dup) {
+    return err('CONFLICT', '같은 아이디 행이 둘 이상이라 지우지 않았습니다 — 시트에서 정리하십시오: ' + id);
+  }
+  sh.deleteRow(fresh[0].row);
+  try { pwStashClear(id); } catch (e) { }
+  dropAccountCache(id);
+  auditLog(ctx, 'account.delete', '', '성공', '',
+    '대상: ' + id + (acct.hash ? ' (비밀번호 있던 계정)' : ' (비밀번호 미설정)') +
+    (acct.lastSeen ? ' · 최근접속 ' + acct.lastSeen : ''));
+  return { ok: true, deleted: id };
+}
+
+/* [계정 이름 변경] — admin.renameStore(계정·지난 기록·제출 코드·NA프리셋·매장파일맵을 한 번에)를
+   계정 화면에서 부르는 문. 개명 도구의 안전검사(새 이름은 통합시트에 있고 옛 이름은 없어야 함)는
+   그대로 탄다. 여기서 더 하는 일 하나 — ★동기화가 먼저 만들어 버린 빈 계정 정리★:
+   담당자가 [동기화]를 먼저 눌러 새 이름 계정(비밀번호 없음·접속 없음)이 생겨 있으면, 이름을
+   바꿀 때 아이디가 겹치므로 그 빈 행을 먼저 지운다. 비밀번호나 접속 기록이 있는 계정이면
+   ★합치지 않고 멈춘다★ — 어느 쪽이 진짜인지 코드가 정할 일이 아니다. */
+function fnAccountRename(ctx, payload) {
+  const p = payload || {};
+  const from = normStore(p.from || '');
+  const to = normStore(p.to || '');
+  const apply = (p.apply === true);
+  if (!from || !to) return err('BAD_REQUEST', '옛 이름과 새 이름을 둘 다 적어 주세요.');
+  if (from === to) return err('BAD_REQUEST', '두 이름이 같습니다.');
+  if (normId(from) === ctx.id) return err('BAD_REQUEST', '본인 계정의 이름은 여기서 바꿀 수 없습니다.');
+  const src = getAccount(normId(from));
+  if (!src) return err('NOT_FOUND', '옛 이름의 계정을 찾지 못했습니다: ' + from);
+  const tgt = getAccount(normId(to));
+  let tidy = '';
+  if (tgt) {
+    if (tgt.hash || tgt.lastSeen) {
+      return err('CONFLICT', '새 이름의 계정이 이미 있고 비밀번호나 접속 기록이 있어 합칠 수 없습니다: ' + to +
+        ' — 어느 쪽을 남길지 정한 뒤 다른 쪽을 [삭제]하고 다시 시도하십시오.');
+    }
+    tidy = to;
+  }
+  /* 개명 도구의 안전검사를 ★먼저 미리보기로★ 통과시킨다 — 빈 계정을 지운 뒤에 검사에서
+     막히면 지운 것만 남는다. */
+  const pre = fnRenameStore(ctx, { from: from, to: to, apply: false });
+  if (!pre || !pre.ok) return pre || err('SERVER_ERROR', '개명 도구가 응답하지 않았습니다.');
+  if (apply && tidy) {
+    const ss = authSS();
+    const sh = ss ? ss.getSheetByName(AUTH_ACCOUNT_SHEET) : null;
+    if (!sh) return err('SERVER_ERROR', '계정 탭이 없습니다.');
+    const rows = readAccounts().filter(function (a) { return a.id === normId(to); });
+    if (rows.length !== 1 || rows[0].dup) {
+      return err('CONFLICT', '새 이름의 계정 행이 하나가 아닙니다 — 시트에서 정리하십시오: ' + to);
+    }
+    sh.deleteRow(rows[0].row);
+    dropAccountCache(normId(to));
+    auditLog(ctx, 'account.delete', '', '성공', '', '대상: ' + to + ' (동기화가 만든 빈 계정 · 이름 변경 전 정리)');
+  }
+  const r = apply ? fnRenameStore(ctx, { from: from, to: to, apply: true }) : pre;
+  if (!r || !r.ok) return r || err('SERVER_ERROR', '개명 도구가 응답하지 않았습니다.');
+  r.정리한계정 = tidy;
+  r.상태 = src.status;
+  if (tidy) {
+    r.말 = String(r.말 || '') + (apply
+      ? ' 동기화가 만들어 둔 빈 계정 「' + tidy + '」은 먼저 지웠습니다.'
+      : ' 동기화가 만들어 둔 빈 계정 「' + tidy + '」이 있어 실행 때 먼저 지웁니다.');
+  }
+  if (apply && src.status !== STATUS_ON) {
+    r.말 = String(r.말 || '') + ' 이 계정은 지금 「' + src.status + '」 상태입니다 — 쓰려면 [사용]으로 켜 주십시오.';
+  }
+  return r;
 }
 
 function appBase() {
@@ -8018,7 +8115,7 @@ function auditStoreFiles(stores, page) {
    정해 주는 순간부터 쓸 수 있게 된다.
    ★편집기용 래퍼와 액션용 코어를 나눈다★ — 편집기는 사람이 읽는 문자열을,
    account.sync는 화면이 그릴 배열을 필요로 한다. 로직이 두 벌이 되면 언젠가 갈라진다. */
-function syncStoreAccountsCore() {
+function syncStoreAccountsCore(preview) {
   const ss = authSS();
   if (!ss) return { ok: false, error: 'AUTH_SHEET_ID 속성이 비어 있습니다.', added: [], skipped: [] };
   ensureAuthSheets();
@@ -8036,6 +8133,24 @@ function syncStoreAccountsCore() {
   try { stores = displayStores(); }
   catch (e) { return { ok: false, error: '통합시트를 읽지 못했습니다.', added: [], skipped: [] }; }
 
+  /* ★통합시트에 없는 매장 계정★ (2026-09-11 담당자 — "새로 생기기만 하잖아 … 셋 다 동기화")
+     매장담당자 계정인데 매장범위의 어느 매장도(아이디도) 통합시트에 없으면 「시트에 없는 계정」이다.
+     여기서는 ★보고만 한다★ — 이름만 바뀐 것인지 정말 없어진 것인지는 코드가 알 수 없으므로,
+     지우거나 이름을 바꾸는 것은 담당자가 화면에서 하나씩 고른다(account.rename · account.delete). */
+  const liveKeys = {};
+  stores.forEach(function (n) { liveKeys[normId(n)] = true; });
+  const orphans = [];
+  have.forEach(function (a) {
+    if (a.dup) return;
+    const scope = String(a.scope || '').trim();
+    if (!scope || scope === '*') return;
+    const items = scope.split(',').map(function (s) { return normId(s); }).filter(function (s) { return !!s; });
+    const alive = !!liveKeys[a.id] || items.some(function (k) { return !!liveKeys[k]; });
+    if (alive) return;
+    orphans.push({ id: a.id, name: a.rawId || a.id, role: a.role, status: a.status,
+      hasPw: !!a.hash, lastSeen: a.lastSeen || '' });
+  });
+
   const added = [], skipped = [], conflict = [];
   /* ★'대소문자·공백만 다른 매장'을 '이미 있음'으로 묻지 않는다★
      displayStores()는 normStore로 dedup하므로 '스타벅스 A점'과 '스타벅스 a점'이 둘 다 남는데,
@@ -8047,14 +8162,15 @@ function syncStoreAccountsCore() {
     const key = normId(name);
     if (mine[key]) { conflict.push(name + ' ↔ ' + mine[key]); return; }
     if (taken[key]) { skipped.push(name); return; }
-    /* A~F만 쓴다. G~K(해시~최근접속)는 비워 두어 '비밀번호 미설정'으로 남긴다 */
-    sh.appendRow(safeRow([name, name, '매장담당자', name, STATUS_ON, '']));
+    /* A~F만 쓴다. G~K(해시~최근접속)는 비워 두어 '비밀번호 미설정'으로 남긴다.
+       ★preview 면 쓰지 않고 「추가될 것」 목록만 만든다★ */
+    if (!preview) sh.appendRow(safeRow([name, name, '매장담당자', name, STATUS_ON, '']));
     taken[key] = true;
     mine[key] = name;
     added.push(name);
   });
-  added.forEach(function (n) { dropAccountCache(normId(n)); });
-  return { ok: true, added: added, skipped: skipped, conflict: conflict };
+  if (!preview) added.forEach(function (n) { dropAccountCache(normId(n)); });
+  return { ok: true, added: added, skipped: skipped, conflict: conflict, orphans: orphans };
 }
 
 /* 편집기에서 실행하는 래퍼 */

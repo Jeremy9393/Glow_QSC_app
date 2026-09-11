@@ -272,12 +272,14 @@
     /* 담당 매장이 2곳 이상일 때만 드롭다운을 그린다. 지역담당·관리자가 생기면
        계정 D열에 매장을 더 적는 것만으로 여기가 저절로 나타난다(코드 무변경). */
     const sel = $('#storeSel');
-    scope.list.forEach(function (s) {
+    /* 가나다순 (2026-09-11 담당자 — 목록은 글자순) */
+    const names = scope.list.slice().sort(function (a, b) { return String(a).localeCompare(String(b), 'ko'); });
+    names.forEach(function (s) {
       const o = document.createElement('option');
       o.value = s; o.textContent = s;
       sel.appendChild(o);
     });
-    curStore = (qStore && scope.list.indexOf(qStore) >= 0) ? qStore : scope.list[0];
+    curStore = (qStore && names.indexOf(qStore) >= 0) ? qStore : names[0];
     sel.value = curStore;
     $('#storeBox').style.display = '';
     sel.onchange = function () { curStore = sel.value; load(); };
