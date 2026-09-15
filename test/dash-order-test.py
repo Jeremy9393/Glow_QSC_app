@@ -126,11 +126,11 @@ ok('[5-5] 「몇 분 전」은 상단에 그대로', "$('#freshInfo').textConten
 ok('[5-6] 「아직 점수가 입력되지 않은 매장이 N곳」 줄은 없앴다 (주석에 남은 설명은 뺀다)',
    '아직 점수가 입력되지 않은 매장이' in nocomment(APP), False)
 
-print('── ⑥ 불러오는 중 표시 (빈 화면이면 덮개 · 볼 게 있으면 작은 표시) ──')
-ok('[6-1] 캐시본이 있으면 작은 표시',
-   "if (staleShown || (shownKey && key === shownKey)) Busy.tiny(true);" in APP, True)
-ok('[6-2] 빈 화면이면 덮개', "else Busy.on('불러오는 중입니다…');" in APP, True)
-ok('[6-3] ★끝나는 자리에서 둘 다 끈다★', APP.count('Busy.off(); Busy.tiny(false);') >= 2, True)
+print('── ⑥ 불러오는 중 표시 (2026-09-15 — 늘 가운데 덮개 · 작은 「갱신 중」은 없앴다) ──')
+ok('[6-1] 캐시본이 있어도 가운데 덮개 — 한 번만 켠다',
+   "if (!busyShown) { Busy.on('불러오는 중입니다…'); busyShown = true; }" in APP, True)
+ok('[6-2] 작은 표시는 부르지 않는다', 'Busy.tiny' in APP, False)
+ok('[6-3] ★끝나는 자리에서 끈다★ (예외 길 · 최신 요청 길)', APP.count('busyDone();') >= 2, True)
 
 print('── ⑦ 버전 표기 (사람이 보는 이름) ──')
 ok('[7-1] ★100으로 나눠 보여 준다★ — 112 → 1.12',
