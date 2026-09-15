@@ -20,8 +20,8 @@
 import io, subprocess, sys
 from pathlib import Path
 
-SRC = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\qsc-app\backend\Code.gs')
-NODE = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\_도구\node\node.exe')
+SRC = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
+NODE = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\_도구\node\node.exe')
 OUT = Path(__file__).parent / 't_dashpart.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 

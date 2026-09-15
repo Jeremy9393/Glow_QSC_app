@@ -8,10 +8,24 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=121">
+<link rel="stylesheet" href="css/app.css?v=122">
 </head>
 <body>
 <div class="home">
+  <!-- ★관리자 알림(종)★ (2026-09-15) — 매장이 개선요청을 완료로 올리거나 보완해 다시 올리면 켜진다.
+       ★기본은 숨김(hidden)★ — 계정 관리(accounts) 권한을 확인한 뒤에만 아래 스크립트가 켠다.
+       매장 계정 홈은 지금과 똑같다(매장현황 카드 배지는 그대로). 목록은 서버 notify.admin 이 준다. -->
+  <button type="button" class="bellBtn" id="bellBtn" aria-label="확인할 알림" aria-expanded="false" aria-controls="bellPanel" hidden>
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+      <path d="M12 3.2a5.8 5.8 0 0 0-5.8 5.8v3.5l-1.7 2.9a.9.9 0 0 0 .8 1.4h13.4a.9.9 0 0 0 .8-1.4l-1.7-2.9V9A5.8 5.8 0 0 0 12 3.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="M9.7 19.6a2.4 2.4 0 0 0 4.6 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </svg>
+    <span class="bellCount" id="bellCount" hidden></span>
+  </button>
+  <div class="bellPanel" id="bellPanel" role="region" aria-label="확인할 알림 목록" hidden>
+    <div class="bellHead">확인할 알림</div>
+    <div class="bellList" id="bellList"></div>
+  </div>
   <div class="homeBrand">GLOW SEOUL</div>
   <div class="homeSub">QSC 평가 시스템</div>
   <!-- 점검 모드(스크립트 속성 MAINT) 안내. 서버가 준 문구를 그대로 보여 준다 -->
@@ -83,11 +97,11 @@
      api.js는 이 화면이 직접 부르지는 않지만 계속 싣는다 — window.Api를 붙여
      auth.js가 서버 주소를 자기 폴백 상수가 아니라 CONFIG에서 읽게 하기 위해서다.
      (endpoint()는 호출 시점에 읽으므로 auth.js보다 뒤에 실려도 된다) -->
-<script src="js/maint.js?v=121"></script>
-<script src="js/ui-busy.js?v=121"></script>
-<script src="js/auth.js?v=121"></script>
-<script src="js/menu.js?v=121"></script>
-<script src="js/api.js?v=121"></script>
+<script src="js/maint.js?v=122"></script>
+<script src="js/ui-busy.js?v=122"></script>
+<script src="js/auth.js?v=122"></script>
+<script src="js/menu.js?v=122"></script>
+<script src="js/api.js?v=122"></script>
 <script>
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
@@ -359,6 +373,116 @@
   }
   loadBadge();   // ★await하지 않는다
 
+  // ---------- 관리자 알림(종) — notify.admin ----------
+  /* ★배지와 같은 순서를 따른다★ — 홈을 먼저 그리고, 기기 사본으로 즉시 그린 뒤, 서버 값으로 배경 갱신.
+     실패하면 그려 둔 사본을 그대로 둔다(지난 숫자가 남는 편이 0으로 지워지는 것보다 낫다).
+     ★관리자에게만 켠다★ — 판정은 권한(accounts)이지 역할 이름이 아니다. 서버 notify.admin 이
+       menu:'accounts' 읽기로 열려 있으니 같은 기준이다. 매장 계정에는 버튼이 hidden 그대로다.
+     ★로그인 상태에서만 사본을 쓴다★ — 공용 기기에서 남의 알림이 보이면 안 된다(배지와 같은 이유). */
+  const NKEY = 'qsc-bell-v1';
+  const bellBtn = $('#bellBtn');
+  const bellCount = $('#bellCount');
+  const bellPanel = $('#bellPanel');
+  const bellList = $('#bellList');
+  let bellAsked = false;
+
+  function isBellUser() {
+    try { return !!(hasToken && granted(menusOf(), 'accounts')); } catch (e) { return false; }
+  }
+  function saveBell(v) {
+    try {
+      if (v) localStorage.setItem(NKEY, JSON.stringify(v));
+      else localStorage.removeItem(NKEY);
+    } catch (e) { /* 사생활 모드·용량 초과 — 이번 화면에서만 보이면 그만이다 */ }
+  }
+  let bell = isBellUser() ? (function () {
+    try { return JSON.parse(localStorage.getItem(NKEY) || 'null'); } catch (e) { return null; }
+  })() : null;
+  // 로그아웃 상태이거나, 권한을 알고 보니 관리자가 아니면 남아 있던 사본을 지운다
+  if (!hasToken || (menusOf() && !isBellUser())) saveBell(null);
+
+  // 'yyyy-MM-dd HH:mm:ss' → 'MM-dd HH:mm'. 모양이 다르면 받은 그대로 적는다
+  function bellStamp(at) {
+    const s = String(at || '');
+    return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s) ? s.slice(5, 16) : s;
+  }
+  function openBell() {
+    bellPanel.hidden = false;
+    bellBtn.setAttribute('aria-expanded', 'true');
+  }
+  function closeBell() {
+    if (!bellPanel || bellPanel.hidden) return;
+    bellPanel.hidden = true;
+    bellBtn.setAttribute('aria-expanded', 'false');
+  }
+  function drawBell() {
+    try {
+      if (!bellBtn || !bellPanel) return;
+      if (!isBellUser()) { closeBell(); bellBtn.hidden = true; return; }
+      bellBtn.hidden = false;
+      const n = Math.max(0, Math.floor(Number(bell && bell.count) || 0));
+      bellCount.textContent = n > 99 ? '99+' : String(n);
+      bellCount.hidden = !n;                       // 0이면 숫자를 숨긴다
+      bellBtn.setAttribute('aria-label', n ? ('확인할 알림 ' + n + '건') : '확인할 알림 없음');
+      bellList.textContent = '';
+      const items = (bell && Array.isArray(bell.items)) ? bell.items : [];
+      if (!items.length) {
+        const p = document.createElement('p');
+        p.className = 'bellEmpty';
+        p.textContent = '확인할 알림이 없습니다';
+        bellList.appendChild(p);
+        return;
+      }
+      /* 서버가 최신순으로 준다. 글자는 전부 textContent — 매장명·문구가 시트에서 온 값이다 */
+      items.forEach(function (it) {
+        const a = document.createElement('a');
+        a.className = 'bellItem';
+        a.href = 'store.html?ym=' + encodeURIComponent(String(it.ym || '')) +
+          '&store=' + encodeURIComponent(String(it.store || ''));
+        const s = document.createElement('span');
+        s.className = 'bStore';
+        s.textContent = String(it.store || '');
+        const t = document.createElement('span');
+        t.className = 'bAt';
+        t.textContent = bellStamp(it.at);
+        a.appendChild(s);
+        a.appendChild(document.createTextNode(' · ' + String(it.text || '') + ' · '));
+        a.appendChild(t);
+        bellList.appendChild(a);
+      });
+    } catch (e) { /* 종은 없어도 그만이다 — 홈이 깨지는 쪽이 비교할 수 없이 나쁘다 */ }
+  }
+  if (bellBtn && bellPanel) {
+    bellBtn.addEventListener('click', function () {
+      if (bellPanel.hidden) openBell(); else closeBell();
+    });
+    // 바깥을 누르면 닫는다 (버튼·패널 안쪽은 제외 — 항목 링크는 그대로 이동한다)
+    document.addEventListener('click', function (e) {
+      if (bellPanel.hidden) return;
+      if (bellPanel.contains(e.target) || bellBtn.contains(e.target)) return;
+      closeBell();
+    });
+    document.addEventListener('keydown', function (e) {
+      if ((e.key === 'Escape' || e.key === 'Esc') && !bellPanel.hidden) { closeBell(); bellBtn.focus(); }
+    });
+  }
+  drawBell();   // 사본이 있으면 왕복 0회로 먼저 그린다
+
+  async function loadBell() {
+    try {
+      if (!isBellUser()) return;
+      if (navigator.onLine === false) return;
+      if (typeof Api === 'undefined' || !Api || typeof Api.call !== 'function') return;
+      bellAsked = true;
+      const r = await Api.call('notify.admin', {});
+      if (!r || !r.ok) return;
+      bell = { count: Number(r.count) || 0, items: Array.isArray(r.items) ? r.items : [] };
+      saveBell(bell);
+      drawBell();
+    } catch (e) { /* 조용히 — 그려 둔 사본이 그대로 남는다 */ }
+  }
+  loadBell();   // ★await하지 않는다
+
   $('#pwBtn').onclick = function () {
     location.href = 'login.html?mode=changepw&next=index.html';
   };
@@ -369,6 +493,7 @@
          구버전 auth.js가 캐시에 남아 logout()이 없을 때만 clear()로 내려간다. */
     // 남의 매장 건수가 다음 사람 화면에 남지 않게, 세션보다 먼저 배지 사본을 지운다
     saveBadge(null);
+    saveBell(null);
     appBadge(0);
     try {
       if (hasAuth && typeof Auth.logout === 'function') { Auth.logout(); return; }
@@ -391,6 +516,9 @@
         drawFoot();
         // applyMenus가 카드를 다시 세우면 먼저 붙어 있던 배지가 사라진다. 받아 둔 값으로 되붙인다
         drawBadge();
+        // 권한이 바뀌었을 수 있다 — 종을 다시 판정하고, 아직 안 물어봤으면 이제 묻는다
+        drawBell();
+        if (!bellAsked) loadBell();
         /* ★sync가 성공했다고 점검이 아닌 것은 아니다★ — 관리자 역할은 점검 중에도 통과한다.
            서버가 세션 응답에 maint 칸을 실어 주면 여기서 그 문구가 뜨고, 담당자는 자기 화면에서
            "내가 점검을 켜 둔 채였구나"를 즉시 안다. 칸이 없는 지금은 ''이라 종전처럼 안내가 내려간다. */

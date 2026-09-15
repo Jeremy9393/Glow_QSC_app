@@ -9,7 +9,7 @@
 """
 import io, sys
 from pathlib import Path
-SRC = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\qsc-app\backend\Code.gs')
+SRC = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).parent) / 'codes_test.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 

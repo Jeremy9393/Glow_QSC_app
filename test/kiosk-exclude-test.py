@@ -26,7 +26,7 @@
 import io, json, re, sys
 from pathlib import Path
 
-ROOT = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\qsc-app')
+ROOT = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app')
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 CORE = (ROOT / 'js' / 'shopper-core.js').read_text(encoding='utf-8')
