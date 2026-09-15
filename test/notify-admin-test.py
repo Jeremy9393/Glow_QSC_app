@@ -107,6 +107,9 @@ var Utilities = { formatDate: function (d, tz, fmt) {
 } };
 function epoch() { return '1'; }
 function fileTz() { return 'Asia/Seoul'; }
+/* fnStoreSave 의 fileId 시험 경로가 관리자 권한을 본다 (2026-09-15 · store-testpath-test.py) */
+var ADMIN_MENU = 'accounts';
+function can(role, menu, act) { return { allow: role === '관리자' && menu === ADMIN_MENU }; }
 
 // 시트 한 장 = 행 배열 (1행이 머리글)
 function mkSheet(name) {
@@ -303,7 +306,9 @@ ok('점수 제외도 ok', r.ok, true);
 // ── ⑧ 사본 시험 경로 ───────────────────────────────────────
 console.log('\n⑧ fileId 시험 경로');
 reset();
-r = save('2610', 1, '끝', { fileId: 'TEST1' });
+// fileId 경로는 관리자만 (2026-09-15) — 그래서 여기만 save() 대신 관리자 ctx 로 직접 부른다
+r = fnStoreSave({ id: 'admin', role: '관리자' },
+  { ym: '2610', no: 1, rev: 'R', dept: '주방', owner: '김', plan: '10/15', doneNote: '끝', fileId: 'TEST1' }, '금종제과');
 ok('저장 ok', r.ok, true);
 ok('알림 없음', dataRows().length, 0);
 

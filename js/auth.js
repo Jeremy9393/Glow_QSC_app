@@ -22,6 +22,7 @@
    ─ '로드 순서 독립'과 '주소 단일 출처'를 둘 다 지키는 방법이 이것뿐이었다. */
 const Auth = (function () {
   const SKEY = 'qsc-auth-v1';        // 세션(토큰 + 화면 조립용 사본). 앱이 보관하는 유일한 인증 흔적
+  const PKEY = 'qsc-device-pass';    // 기기 통행증 {아이디: 통행증}. 로그아웃해도 남긴다 — passOf·keepPass 설명
   const EXP_SKEW = 60;               // 만료 60초 전부터 만료로 본다 (요청 도중 죽는 것을 막는다)
 
   const NHIDE = 'qsc-notice-hide';   // 사용자가 ✕로 닫은 공지 id (계약: 문구가 바뀌면 id가 달라져 다시 뜬다)
@@ -140,6 +141,7 @@ const Auth = (function () {
          그대로 쓰면 t가 undefined가 되고 JSON.stringify가 키를 버려 로그아웃된다
          (홈이 진입할 때마다 Auth.save(세션응답)을 부른다). 갱신 용도는 sync()가 정본이지만,
          호출부가 save()를 쓰더라도 토큰을 잃지 않도록 여기서 막아 둔다. */
+    keepPass(r);
     const prev = session();
     const s = {
       t: r.token || (prev && prev.t) || '',
@@ -160,6 +162,29 @@ const Auth = (function () {
   function clear() {
     try { localStorage.removeItem(SKEY); } catch (e) { /* 무시 */ }
     cache = null;
+  }
+
+  /* ★기기 통행증 (2026-09-15)★ — 서버가 로그인·세션 응답에 싣는 device 를 아이디별로 둔다.
+     로그아웃(clear)은 세션만 버리고 이것은 남긴다 — 그래야 로그아웃 뒤 같은 기기로 다시 들어갈 때
+     남이 만든 잠금(아이디 admin 으로 틀린 비밀번호 10번 등)에 막히지 않는다. 비밀번호를 대신하지는 않는다
+     (서버가 잠금을 어느 몫으로 셀지만 정한다 — Code.gs devicePass). */
+  /* ★열쇠는 서버 normId 와 같은 규칙으로★ (Code.gs normId — NFC·공백 하나로·소문자)
+     이 파일의 normId 는 소문자로 바꾸지 않아서, 그대로 쓰면 「admin」으로 받은 통행증을
+     「Admin」으로 입력했을 때 못 찾는다(서버는 같은 계정으로 본다). 못 찾아도 종전대로일 뿐이지만 맞춰 둔다. */
+  function passKey(id) {
+    return String(id == null ? '' : id).normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+  function passOf(id) {
+    try { return String((JSON.parse(localStorage.getItem(PKEY) || '{}') || {})[passKey(id)] || ''); } catch (e) { return ''; }
+  }
+  function keepPass(r) {
+    const id = r && r.user && r.user.id;
+    if (!id || !r.device) return;
+    try {
+      const m = JSON.parse(localStorage.getItem(PKEY) || '{}') || {};
+      m[passKey(id)] = String(r.device);   // 늘 새것으로 — 서버 키가 바뀌어 옛 통행증이 죽었어도 다음 응답에서 되살아난다
+      localStorage.setItem(PKEY, JSON.stringify(m));
+    } catch (e) { /* 사생활 모드 등 — 통행증 없이 종전대로 */ }
   }
 
   /* 기기 시계와 서버 시계의 차이(초). 응답의 serverTime을 기준으로 잡는다.
@@ -238,7 +263,8 @@ const Auth = (function () {
      정규화를 이 안에서 한 번 더 하는 이유: 호출부(로그인 화면·계정 관리 화면)가 늘어나도
      서버에 닿는 아이디 형태는 언제나 한 가지여야 하기 때문이다. */
   async function login(id, pw) {
-    const r = await post('auth.login', { id: normId(id), pw: String(pw == null ? '' : pw) });
+    const nid = normId(id);
+    const r = await post('auth.login', { id: nid, pw: String(pw == null ? '' : pw), dp: passOf(nid) });
     if (r && r.ok && r.token) save(r);
     return r;
   }
@@ -297,6 +323,7 @@ const Auth = (function () {
     }
     const r = await post('auth.session', null, s.t);
     if (!r || !r.ok) return false;
+    keepPass(r);   // 이미 로그인돼 있던 기기도 여기서 통행증을 받는다
     s.user = r.user || s.user;
     s.stores = r.stores || s.stores;
     s.menus = r.menus || s.menus;
@@ -656,7 +683,7 @@ const Auth = (function () {
    "앱 화면 제일 하단에 버전정보 및 업데이트 날짜 표기"
 
    ★손으로 적는 자리를 만들지 않는다★ — 손으로 적는 버전은 반드시 낡는다.
-     · 버전 숫자: 이 파일이 불러와진 주소(js/auth.js?v=122)에서 뽑는다.
+     · 버전 숫자: 이 파일이 불러와진 주소(js/auth.js?v=123)에서 뽑는다.
        그 숫자는 tools/release.py 가 배포마다 자동으로 올리는 값이고,
        ★지금 이 화면이 실제로 불러온 것★ 이라 캐시에 묶인 폰은 옛 숫자를 보여 준다 —
        매장이 낡은 화면을 붙들고 있는지 그 자리에서 알 수 있다.
@@ -671,7 +698,7 @@ var BUILT = '2026-09-15';   /* release.py 가 고쳐 쓴다 — 손으로 고치
   /* ★사람이 보는 이름은 「1.12」다★ (2026-09-08 담당자)
        *"버전이름 사용할때 지금 110 막 이런식이잖아 그렇게 쓰지말고 1.10 이런식으로 해줘
          (사람들이 보기에 너무 많이 앱을 수정한거 같아서)"*
-     내부 숫자는 그대로 둔다 — `?v=122` 는 캐시를 갈아 끼우는 열쇠이고 배포 도구가 세는 값이라
+     내부 숫자는 그대로 둔다 — `?v=123` 는 캐시를 갈아 끼우는 열쇠이고 배포 도구가 세는 값이라
      건드리면 도구가 꼬인다. ★보여 줄 때만★ 100으로 나눈다: 112 → 1.12 · 99 → 0.99 · 200 → 2.00.
      그래서 매장 폰이 낡은 화면을 붙들고 있는지도 여전히 이 숫자로 알 수 있다. */
   var ver = '';
