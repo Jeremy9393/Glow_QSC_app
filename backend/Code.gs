@@ -188,7 +188,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v130', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v131', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -1526,6 +1526,36 @@ function lockClear(id) {
   try { CacheService.getScriptCache().remove('lf:' + id); } catch (e) { }
 }
 
+/* ②-2 기기 통행증 (2026-09-15 · 보안 점검 ②) — ★남이 만든 잠금에 진짜 주인이 막히지 않게★
+   위 잠금(LK:·lf:)과 아이디별 해시 예산(hb:)은 ★아이디★에 걸린다. auth.login 은 토큰 없이 부를 수 있으니
+   누구든 아이디 admin 으로 틀린 비밀번호를 10번 보내면 진짜 관리자도 15분(시간당 12번이면 60분) 못 들어온다.
+   그래서 로그인에 성공한 기기에 통행증을 준다(sessionBody 가 싣는다 — 이미 로그인된 기기는 auth.session 으로 받는다).
+   통행증을 들고 오면 잠금·예산을 ★통행증 몫으로 따로★ 센다 — 남이 쌓은 실패에 안 걸리고, 그 기기에서 틀린 횟수는
+   그대로 10회 → 15분이라 무차별 대입 속도는 종전과 같다.
+     ·★아이디에 묶인다★ — 제주당 통행증을 들고 admin 으로 시도하면 서명이 안 맞아 종전처럼 아이디 몫으로 센다.
+     ·서명만 보므로 서버에 저장할 것이 없다. 통행증은 비밀번호를 대신하지 않는다(잠금을 어디에 셀지만 정한다).
+     ·TOKEN_KEY 를 바꾸면 통행증도 전부 무효 → 종전과 같이 아이디 몫으로 센다(안전한 쪽).
+     ·처음 쓰는 기기는 통행증이 없어 여전히 막힐 수 있다 (담당자가 알고 고른 것). */
+function devicePass(id) {
+  const key = prop('TOKEN_KEY', '');
+  if (!key || !id) return '';
+  try {
+    const n = Utilities.getUuid().replace(/-/g, '').toLowerCase().slice(0, 16);
+    return n + '.' + hmacB64('dp:' + normId(id) + ':' + n, key).slice(0, 32);
+  } catch (e) { return ''; }   // 통행증 때문에 로그인·세션 응답이 깨지면 안 된다
+}
+/* 맞는 통행증이면 잠금·예산에 쓸 키('dp:<16자>')를, 아니면 ''를 준다.
+   키에 아이디를 넣지 않는다 — 통행증 번호가 이미 기기마다 다르고, 넣으면 hbIdKey 의 60자 자르기에 걸린다. */
+function devicePassKey(id, dp) {
+  const key = prop('TOKEN_KEY', '');
+  const s = String(dp || '');
+  if (!key || !id || s.length !== 49) return '';
+  const n = s.slice(0, 16);
+  if (s.charAt(16) !== '.' || !/^[0-9a-f]{16}$/.test(n)) return '';
+  if (!ctEq(s.slice(17), hmacB64('dp:' + normId(id) + ':' + n, key).slice(0, 32))) return '';
+  return 'dp:' + n;
+}
+
 /* ③ 전역 실패 카운터.
    ★"아이디를 바꿔가며 ②를 우회하는 공격을 막는다"고 적혀 있었지만 사실이 아니다★ —
    globalBlocked()는 loginFail 안에서만 읽히므로, 이 값이 하는 일은 ★이미 실패한 사람의 응답
@@ -1737,7 +1767,8 @@ function fnLogin(ctx, payload) {
   if (!prop('TOKEN_KEY', '')) return err('SERVER_ERROR', '서버 설정이 끝나지 않았습니다. 담당자에게 문의해 주세요.');
   return loginByPassword(
     String(payload && payload.id ? payload.id : ''),
-    String(payload && payload.pw ? payload.pw : ''));
+    String(payload && payload.pw ? payload.pw : ''),
+    String(payload && payload.dp ? payload.dp : ''));
 }
 
 const DUMMY_SALT = '00000000-0000-0000-0000-000000000000';
@@ -1763,21 +1794,24 @@ function validId(id) {
   return true;
 }
 
-function loginByPassword(rawId, pw) {
+function loginByPassword(rawId, pw, dp) {
   const id = normId(rawId);
   if (!id || !pw) return err('AUTH_INVALID', '아이디 또는 비밀번호가 올바르지 않습니다.');
   /* 형식이 틀린 아이디는 '없는 계정'과 완전히 같은 경로를 탄다 — 더미 해시까지 동일하게 돌려
      응답 시간으로 구분되지 않게 하고, 잠금 키만 고정 문자열로 바꿔 키 폭증을 막는다. */
   const idOk = validId(id);
   const lockId = idOk ? id : '(형식오류)';
+  /* ★잠금·예산은 lockKey 로 센다★ — 맞는 기기 통행증을 들고 왔으면 통행증 몫, 아니면 종전대로 아이디 몫.
+     감사로그에 적는 이름은 계속 lockId 다(loginFail 첫 인자). devicePass 설명 참조 */
+  const lockKey = (idOk && devicePassKey(id, dp)) || lockId;
 
   // ★잠금·예산 확인이 게이트의 가장 앞이다. 잠금 중이면 해시 계산 자체를 하지 않는다★
-  const lk = lockCheck(lockId);
+  const lk = lockCheck(lockKey);
   if (lk.locked) {
     return { ok: false, code: 'LOCKED', retryAfterMin: lk.retryAfterMin, error: '로그인 시도가 많아 잠겼습니다. ' + lk.retryAfterMin + '분 후 다시 시도해 주세요.' };
   }
   /* ★예산은 아이디별로 본다★ — 인자를 빼면 남이 태운 전역 예산 때문에 이 사람이 못 들어간다 */
-  if (!hashBudgetOk(lockId)) {
+  if (!hashBudgetOk(lockKey)) {
     auditLog(anonCtx(), 'auth.login', '', '거부', 'HASH_BUDGET', '');
     return { ok: false, code: 'LOCKED', retryAfterMin: 60, error: '로그인이 일시적으로 제한되었습니다. 잠시 후 다시 시도해 주세요.' };
   }
@@ -1789,15 +1823,15 @@ function loginByPassword(rawId, pw) {
   /* 존재하지 않는 아이디도 동일하게 카운트하고, 고정 더미 솔트로 동일한 N회 해시를 돌린 뒤
      실패를 반환한다. 빼면 응답 시간으로 유효 아이디를 뽑아낼 수 있다. */
   if (!acct || acct.status !== STATUS_ON) {
-    hashBudgetUse(lockId);
+    hashBudgetUse(lockKey);
     pwHash(DUMMY_SALT, pw, iter);
     /* ★없는 아이디의 원문은 감사로그에 남기지 않는다★ (loginFail 세 번째 인자) */
-    return loginFail(lockId, acct ? 'ACCOUNT_DISABLED' : (idOk ? 'NO_ACCOUNT' : 'BAD_ID'), !!acct);
+    return loginFail(lockId, acct ? 'ACCOUNT_DISABLED' : (idOk ? 'NO_ACCOUNT' : 'BAD_ID'), !!acct, lockKey);
   }
 
   /* 해시가 비어 있어도 같은 시간을 쓴다 — 여기서 빨리 돌아가면 응답 시간만으로
      "존재하지만 비밀번호가 없는 계정"을 알아낼 수 있다. */
-  hashBudgetUse(lockId);
+  hashBudgetUse(lockKey);
   if (!acct.hash) {
     pwHash(acct.salt || DUMMY_SALT, pw, iter);
   } else {
@@ -1808,7 +1842,7 @@ function loginByPassword(rawId, pw) {
       if ((acct.iter || 0) < iter || acct.pepperV !== prop('PW_PEPPER_V', '1')) {
         try { writeCredential(acct, pw, iter); } catch (e) { /* 승급 실패가 로그인을 막으면 안 된다 */ }
       }
-      return loginSuccess(getAccount(id) || acct, '비밀번호');
+      return loginSuccess(getAccount(id) || acct, '비밀번호', lockKey);
     }
   }
 
@@ -1822,7 +1856,7 @@ function loginByPassword(rawId, pw) {
     auditLog({ id: acct.id, role: acct.role }, 'auth.login', '', '성공', 'SET_PW', '설정코드 확인');
     return { ok: false, code: 'SET_PW', error: '최초 로그인입니다. 새 비밀번호를 정해 주세요.' };
   }
-  return loginFail(lockId, 'BAD_PASSWORD', true);
+  return loginFail(lockId, 'BAD_PASSWORD', true, lockKey);
 }
 
 /* 실패 문구는 항상 동일하다 — 아이디 없음 / 비번 틀림 / 계정 중지를 구분하지 않는다.
@@ -1834,9 +1868,9 @@ function loginByPassword(rawId, pw) {
    평문으로 남고, audit.list를 통해 계정 관리 화면에 그대로 표시된다. 존재하지 않는 아이디의
    원문은 감사 가치가 거의 없으므로 해시 앞 8자만 남긴다(같은 값이 반복되는지는 여전히 보인다).
    ※잠금 키(lockFail)에는 원문을 그대로 쓴다 — 그쪽은 사람이 읽는 값이 아니다. */
-function loginFail(id, reason, known) {
+function loginFail(id, reason, known, lockKey) {
   globalFail();
-  const locked = lockFail(id);
+  const locked = lockFail(lockKey || id);   // 통행증 기기면 통행증 몫으로 센다 · 감사로그 이름은 id 그대로
   const logId = known ? id : ('(미상:' + sha256Hex(String(id)).slice(0, 8) + ')');
   auditLog({ id: logId, role: '' }, 'auth.login', '', '실패', reason, locked ? '잠금 발동' : '');
   if (locked) {
@@ -1848,8 +1882,9 @@ function loginFail(id, reason, known) {
   return err('AUTH_INVALID', '아이디 또는 비밀번호가 올바르지 않습니다.');
 }
 
-function loginSuccess(acct, how) {
+function loginSuccess(acct, how, lockKey) {
   lockClear(acct.id);
+  if (lockKey && lockKey !== acct.id) lockClear(lockKey);   // 통행증 몫 실패 카운터도 함께 비운다
   writeLastSeen(acct);
   dropAccountCache(acct.id);
   const fresh = getAccount(acct.id) || acct;
@@ -2251,7 +2286,8 @@ function sessionBody(acct) {
     user: { id: acct.id, name: acct.name, role: acct.role },
     stores: { all: st.all, list: st.list },
     menus: menusOf(acct.role),
-    maint: maintMsg()
+    maint: maintMsg(),
+    device: devicePass(acct.id)   // 기기 통행증 — 로그인·세션·비밀번호 설정 응답이 모두 여기를 지난다
   });
 }
 
@@ -5246,9 +5282,14 @@ function dropStoreCache(store, ym) {
 function fnStoreSave(ctx, payload, target) {
   /* ★사본(_연동테스트)으로 미리 돌려 볼 수 있게 열어 둔 자리★ — 실매장을 건드리지 않고
      이 경로를 시험하기 위한 것이다. 안 그러면 10/1에 처음으로 돌려 보게 된다.
-     fileId는 관리자만 보낼 수 있고(이 액션은 menu:'store' 쓰기 권한이 필요하다),
-     이름에 _연동테스트가 없으면 곧바로 거절한다. */
+     이름에 _연동테스트가 없으면 곧바로 거절한다.
+     ★fileId 는 계정관리 쓰기 권한(관리자)이 있어야 받는다 (2026-09-15)★ — 종전 주석은 「관리자만 보낼 수
+     있다」였지만 이 액션의 등록 권한(menu:'store' 쓰기)은 ★매장도 가진다★. 그래서 매장 계정이 아무 파일 ID나
+     보내면 서버가 그 파일을 열어 거절 문구에 ★파일 이름을 적어 돌려줬다★(보안 점검 ③). 열기 전에 막는다. */
   const testId = String((payload && payload.fileId) || '');
+  if (testId && !can(ctx && ctx.role, ADMIN_MENU, '쓰기').allow) {
+    return err('FORBIDDEN', '권한이 없습니다.');   // 감사로그는 doPost 가 쓰기 결과로 남긴다(실패 · FORBIDDEN)
+  }
   const store = target;
   const ym = String(payload.ym || '').trim();
   if (!validYm(ym)) return err('BAD_REQUEST', '월이 올바르지 않습니다.');
