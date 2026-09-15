@@ -496,6 +496,10 @@
     $('#freshInfo').textContent = '';
   }
 
+  /* 가운데 덮개를 켰는가 — load 가 겹쳐도 한 번만 켜고 한 번만 끈다 (load 안 주석) */
+  let busyShown = false;
+  function busyDone() { if (busyShown) { Busy.off(); busyShown = false; } }
+
   async function load(key) {
     /* ★같은 기간을 겹쳐 부르지만 않는다★ — 시트 읽기를 두 번 하지 않으려는 장치다.
        (새로고침 버튼은 도는 동안 비활성이라 여기 걸릴 일이 드물지만 남겨 둔다.)
@@ -518,11 +522,12 @@
        ★오류·점검 화면 위에도 그리지 않는다★(noStale) — 표를 비운 이유가 그것이었다.
        staleShown은 '이 화면의 숫자가 캐시본이다'라는 표식이라, 아래 non-ok 분기에서 지울 근거가 된다. */
     staleShown = (!noStale && key !== shownKey) ? showStale(key) : false;
-    /* ★볼 것이 있으면 덮지 않는다★ (2026-09-08 담당자 결정 — 「로딩중인 모든 순간에 표시」를
-       둘로 갈랐다). 캐시본이 떠 있거나(staleShown) 같은 달을 새로고침하는 중이면
-       화면에 이미 표가 있다 — 그때 가운데를 덮으면 읽던 것을 가린다. 구석에서 조용히 알린다. */
-    if (staleShown || (shownKey && key === shownKey)) Busy.tiny(true);
-    else Busy.on('불러오는 중입니다…');
+    /* ★불러오는 동안은 늘 가운데 덮개★ (2026-09-15 담당자 — *"모든 상황에서 가운데에 동그라미 돌면서
+       불러오는중이라고 뜨는걸로 통일해"*). 종전(09-08)에는 캐시본이 떠 있거나 같은 달을 새로고침할 때
+       오른쪽 위 작은 「갱신 중」으로 갈랐다.
+       ★한 번만 켠다★ — 덮개는 부른 만큼 꺼야 걷히는데, 지나간 요청은 아래에서 끄지 않고 return 한다.
+       겹쳐 켜면 최신 요청이 한 번 꺼도 덮개가 60초 남는다(busyDone). */
+    if (!busyShown) { Busy.on('불러오는 중입니다…'); busyShown = true; }
     if (!staleShown) {
       /* ★다른 달을 기다리는 동안 지난 달 표를 남겨 두지 않는다★ — select는 새 달을 가리키는데
          숫자는 지난 달 그대로면, 점장은 자기가 고른 달의 숫자라고 믿고 다른 달 숫자를 읽는다.
@@ -546,7 +551,7 @@
       if (staleShown) clearStale();
       showSnapshot(OFFMSG, key);
       loading = false; $('#reloadBtn').disabled = false;
-      Busy.off(); Busy.tiny(false);
+      busyDone();
       return;
     }
 
@@ -558,7 +563,7 @@
     $('#reloadBtn').disabled = false;
     /* ★어느 길로 끝나든 끈다★ — 아래에 ok/non-ok 갈래가 여럿이라 각각에 넣으면 하나를 빠뜨린다.
        (지나간 요청은 바로 위에서 return 하므로 여기에 닿지 않는다 — 최신 요청이 정리한다) */
-    Busy.off(); Busy.tiny(false);
+    busyDone();
 
     if (res && res.ok) {
       setNote($('#stateNote'), '');
