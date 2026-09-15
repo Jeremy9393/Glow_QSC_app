@@ -188,7 +188,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v132', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v133', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -4884,14 +4884,10 @@ function readStoreTab(ss, sh, store, ym) {
     const m = String(at(v, g.plan) == null ? '' : at(v, g.plan)).trim();
     const n = String(at(v, g.done) == null ? '' : at(v, g.done)).trim();
     const state = stateOf(m, n);
-    /* 지연 = 예정일(M)이 오늘보다 이전인데 완료일(N)이 비어 있음.
-       ★날짜를 못 읽으면 지연이 아니다★ — M열은 '예정일 + 진행 내용'이 한 칸에 섞여 있어
-       파싱이 빗나갈 수 있고, 틀린 빨강은 없는 빨강보다 나쁘다(매장이 이미 한 일에
-       '지연'이 붙으면 그다음부터 배지를 아무도 믿지 않는다). */
-    const due = dueDateOf(at(v, g.plan), tz, ym);
-    const overdue = !!(due && !n && due < today);
-    /* ★서버 판정★ — 시트 수식이 못 읽는 예정일까지 읽어 한 단계 더 가른다(impJudge 주석).
-       final=false이므로 '미조치'는 아직 나오지 않는다 — 그것은 월 채점 확정의 몫이다. */
+    /* ★서버 판정★ — 기한만 본다(impJudge 주석 · 시트 수식과 같은 순서).
+       final=false이므로 '미조치'는 아직 나오지 않는다 — 그것은 월 채점 확정의 몫이다.
+       ★옛 서식(~2609)은 판정하지 않는다★ — 기한 칸이 없고, 매장이 진행 내용에 적는 예정일은
+       보지 않는다(2026-09-15 담당자). 그래서 옛 달 카드에는 빨간 표시가 붙지 않는다. */
     const frz = frozen ? String(at(v, g.state) == null ? '' : at(v, g.state)).trim() : '';
     const jd = !g.isNew ? null
       : (frz ? { state: frz, why: '' }
@@ -4900,12 +4896,7 @@ function readStoreTab(ss, sh, store, ym) {
                  planRaw: at(v, g.plan), due: at(v, g.due),
                }, today, tz, ym, false));
     if (g.isNew) {
-      judged.push({
-        state: jd.state, planDate: jd.planDate || null,
-        due: dateOfCell(at(v, g.due), tz) || null,
-        waive: at(v, g.waive) === true,
-        rolledOnce: Number(at(v, g.roll) || 0) >= 1,
-      });
+      judged.push({ state: jd.state, waive: at(v, g.waive) === true });
     }
     cReq++;
     if (state === '완료') cDone++;
@@ -4936,11 +4927,9 @@ function readStoreTab(ss, sh, store, ym) {
          어느 건을 뺐는지 알 수 없었다 — 「미조치」로만 보였다. */
       waive: (g.isNew && g.waive) ? (at(v, g.waive) === true) : false,   // ★점수 계산(3960행)과 같은 판정이어야 한다★
       redo: g.isNew ? (dateOfCell(at(v, g.redo), tz) || null) : null,
-      due: due || null,       // 화면이 '10/15까지'를 그릴 수 있게. 못 읽었으면 null
-      overdue: overdue,
-      /* '5일 지남'을 화면이 그릴 수 있게. 날짜 계산도 서버 몫이다 — 화면이 M열을 다시 파싱하면
-         타임존이 두 개가 되고, 두 곳의 판정이 갈라지는 날 아무도 원인을 못 찾는다. */
-      overdueDays: overdue ? daysBetween(due, today) : 0,
+      /* 기한이 지난 미완료 건 — 요약·하단바 「기한 지남 N건」과 홈 배지(notify.badge)가 센다.
+         화면은 다시 판정하지 않는다. 카드 글자는 status(statusLabel)가 맡는다. */
+      overdue: !!(jd && (jd.state === '기한 지남' || jd.state === '재제출기한 지남' || jd.state === '미조치')),
       /* isNew는 여기서 붙이지 않는다 — 이 응답은 매장·월 단위로 캐시되는데(store:v…),
          NEW 여부는 '보는 사람의 최근접속'에 달려 있다. 캐시에 담으면 먼저 연 사람의
          기준선이 다음 사람에게 그대로 간다. fnStoreGet이 캐시 뒤에 붙인다(readOnly와 같은 이유). */
@@ -4958,9 +4947,8 @@ function readStoreTab(ss, sh, store, ym) {
   }
   if (todo === null) todo = Math.max(0, req - done - prog);
   let rate = req > 0 ? Math.round((done / req) * 100) / 100 : null;
-  /* ★새 서식에서는 개선율을 서버가 계산한다★ (§1-8) — 분모에서 감점제외·재작성 중·연장
-     진행중을 뺀다. 시트 수식으로는 이월 때문에 지난 달 탭을 건너다녀야 하고, 그런 수식은
-     26곳 × 12개월에서 깨진다. 적힌 값은 본사가 손으로 고칠 수 있다(보호는 매장만 막는다). */
+  /* ★새 서식에서는 개선율을 서버가 계산한다★ (§1-8) — 분모에서 감점제외를 뺀다(impRate).
+     적힌 값은 본사가 손으로 고칠 수 있다(보호는 매장만 막는다). */
   let calc = null;
   if (g.isNew && !frozen) {
     calc = impRate(judged);
@@ -4996,58 +4984,6 @@ function readStoreTab(ss, sh, store, ym) {
     items: items,
     updatedAt: Utilities.formatDate(new Date(), tz, "yyyy-MM-dd'T'HH:mm:ssXXX")
   };
-}
-
-/* M열(예정일)에서 날짜만 뽑아 'yyyy-MM-dd'로. 못 읽으면 '' — 부르는 쪽은 ''를 '지연 아님'으로 본다.
-
-   M열은 한 칸에 '예정일 + 진행 내용'이 같이 들어 있는 경우가 많다("10/15 매대 교체 예정").
-   그래서 셀 전체가 아니라 ★맨 앞에서만★ 날짜를 찾는다.
-
-   ★Date 객체 경로를 먼저 본다★ — 매장이 '10/15'만 입력해도 시트가 Date로 강제 변환하고,
-   그 Date를 문자열로 만들면 UTC로 밀려 하루가 어긋난다(§9-4). 반드시 시트 타임존으로 포맷한다.
-
-   ★연도 없는 표기는 '탭 월 언저리'가 아니면 버린다★ — 이것이 이 함수에서 가장 중요한 줄이다.
-   "3/4 정도 진행", "2/3 완료" 처럼 날짜가 아닌 분수·비율로 시작하는 칸이 실제로 있는데,
-   그것을 3월 4일로 읽으면 이미 조치가 진행 중인 항목에 '지연' 빨강이 붙는다. 예정일은
-   그 달 앞뒤 몇 달 안에 있게 마련이므로(전월 ~ 익익월), 그 창을 벗어나면 날짜가 아니라고 본다.
-   같은 계산이 12월 탭의 '1/5'를 이듬해 1월로 옮기는 일도 함께 해 준다 — 그러지 않으면
-   갓 적은 예정일이 11개월 전 날짜가 되어 즉시 '지연'으로 뜬다. */
-function dueDateOf(v, tz, ym) {
-  if (v instanceof Date) return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
-  const s = String(v == null ? '' : v).trim();
-  if (!s) return '';
-  const ok = function (y, mo, d) {
-    if (mo < 1 || mo > 12 || d < 1 || d > 31) return '';
-    return y + '-' + pad2(mo) + '-' + pad2(d);
-  };
-  // 연도가 적혀 있으면 그대로 믿는다 (2026-10-15 · 2026.10.15 · 2026년 10월 15일)
-  let m = s.match(/^(\d{4})\s*[-.\/년]\s*(\d{1,2})\s*[-.\/월]\s*(\d{1,2})/);
-  if (m) return ok(Number(m[1]), Number(m[2]), Number(m[3]));
-
-  m = s.match(/^(\d{1,2})\s*[-.\/월]\s*(\d{1,2})/);
-  if (!m) return '';
-  const mo = Number(m[1]), d = Number(m[2]);
-  if (mo < 1 || mo > 12) return '';
-  const tabY = 2000 + Number(String(ym).slice(0, 2));
-  const tabM = Number(String(ym).slice(2, 4));
-  let delta = mo - tabM;               // 탭 월에서 몇 달 떨어져 있나 (-5 ~ +6으로 접는다)
-  if (delta > 6) delta -= 12;
-  if (delta < -6) delta += 12;
-  if (delta < -1 || delta > 2) return '';   // 날짜로 보기 어렵다 — 붙이지 않는다
-  const idx = tabY * 12 + (tabM - 1) + delta;
-  return ok(Math.floor(idx / 12), (idx % 12) + 1, d);
-}
-
-/* 'yyyy-MM-dd' 두 개의 날짜 차이(일). ★Date.UTC로만 센다★ — 둘 다 이미 시트 타임존으로
-   포맷이 끝난 순수 날짜 문자열이라, 여기서 지역 시각을 다시 개입시키면 서머타임·오프셋이
-   끼어들 자리만 생긴다. 형식이 아니면 0(= 화면이 '며칠 지남'을 안 그린다). */
-function daysBetween(fromYmd, toYmd) {
-  const re = /^(\d{4})-(\d{2})-(\d{2})$/;
-  const a = re.exec(String(fromYmd || '')), b = re.exec(String(toYmd || ''));
-  if (!a || !b) return 0;
-  const ta = Date.UTC(Number(a[1]), Number(a[2]) - 1, Number(a[3]));
-  const tb = Date.UTC(Number(b[1]), Number(b[2]) - 1, Number(b[3]));
-  return Math.round((tb - ta) / 86400000);
 }
 
 /* 상태 판정을 한 함수에 모은다: N열 있음 → 완료 / M열만 → 진행 / 둘 다 없음 → 미조치 */
@@ -5333,12 +5269,12 @@ function fnStoreSave(ctx, payload, target) {
     if (!found.ok) return err(found.code, found.error);
     const r = found.row;
 
-    /* ★확정된 달은 이월된 줄만 받는다★ (2026-08-21)
+    /* ★확정된 달은 받지 않는다★ (2026-08-21 · 이월 표시가 있는 줄만 예외였는데 2026-09-15 부터 이월을 만들지 않는다)
        시트 잠금은 ★사람★을 막는다. 앱은 스크립트 계정으로 쓰므로 그 잠금을 그냥 통과한다
        (스크립트가 보호 편집자여야 애초에 기록을 할 수 있기 때문이다).
        그래서 여기서 한 번 더 막는다 — 안 그러면 확정 뒤에도 앱으로 고칠 수 있고,
        §1-7⑪ '확정 후 점수 불변'이 말뿐이 된다. ★검수에서 실제로 뚫렸다.★
-       이월된 줄만 여는 이유는 그 건이 다음 달로 넘어가 아직 답할 것이 남았기 때문이다(§1-8). */
+       (종전: 이월된 줄만 열었다 — 그 건이 다음 달로 넘어가 아직 답할 것이 남았기 때문이었다 §1-8) */
     if (g.isNew && monthClosedAt(ss, ym)) {
       const rc = grid(sh, r, g.roll, 1, 1);
       const rolled = rc ? Number(rc.getValue() || 0) : 0;
@@ -5439,14 +5375,13 @@ function capText(v) { return String(v == null ? '' : v); }
    빠졌고, 화면이 저장 성공 후 이 객체로 카드를 다시 그리면서 ①아직 기한이 지난 항목인데
    '지연 ⚠'과 빨간 선이 사라지고 ②요약·하단바의 '지연 n건'이 실제보다 적게 나왔다.
    (완료 처리한 경우에만 우연히 맞았다.)
-   ym이 필요한 이유는 dueDateOf가 '연도 없는 예정일'을 탭 월 기준으로 해석하기 때문이다.
+   ★2026-09-15 due·overdue·overdueDays 는 뺐다★ — 예정일을 안 보게 되어 overdue 는 상태(기한)로만
+   정해지는데 이 함수는 상태를 판정하지 않는다. 빠진 칸은 화면이 직전 값을 유지하고,
+   완료로 저장되면 화면이 overdue 를 내린다(store-app.js mergeItem).
    ★cat·text·beforePhotos(B~D열)는 담지 않는다★ — 이 함수가 받는 것은 J~O 6칸이고, 그 칸들은
    본사 몫이라 저장으로 바뀌지 않는다. 화면이 '서버가 보낸 칸만' 덮어쓰므로 직전 값이 남는다. */
 function itemOf(no, v /* J~O */, f, tz, ym) {
   const doneNote = String(cell(v[4], tz) == null ? '' : cell(v[4], tz)).trim();
-  const due = dueDateOf(v[3], tz, ym);
-  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
-  const overdue = !!(due && !doneNote && due < today);
   return {
     no: no,
     text: String(v[0] == null ? '' : v[0]).trim(),   // J열 — 이 6칸 안에 있으므로 함께 준다
@@ -5456,9 +5391,6 @@ function itemOf(no, v /* J~O */, f, tz, ym) {
     doneNote: doneNote,
     afterPhoto: (function () { const u = photoUrlsOf(v[5], f[5]); return u.length ? u[0] : null; })(),
     state: stateOf(v[3], v[4]),
-    due: due || null,
-    overdue: overdue,
-    overdueDays: overdue ? daysBetween(due, today) : 0,
     /* ★isNew는 항상 false★ — 방금 자기가 저장한 항목이 'NEW'일 리 없고, 남겨 두면 화면이
        직전 값(true)을 그대로 유지해 저장 후에도 NEW 뱃지가 계속 붙는다. */
     isNew: false,
@@ -5489,12 +5421,7 @@ function recountSummary(sh, tz) {
         audit: at(v, g.audit), redo: at(v, g.redo), doneNote: n, plan: m,
         planRaw: at(v, g.plan), due: at(v, g.due),
       }, today, tz, ym, false);
-      judged.push({
-        state: jd.state, planDate: jd.planDate || null,
-        due: dateOfCell(at(v, g.due), tz) || null,
-        waive: at(v, g.waive) === true,
-        rolledOnce: Number(at(v, g.roll) || 0) >= 1,
-      });
+      judged.push({ state: jd.state, waive: at(v, g.waive) === true });
       if (jd.state === '확정' || jd.state === '완료(검수 전)') done++;
       else if (jd.state === '진행중' || jd.state === '반려' || jd.state === '재제출기한 지남') prog++;
     } else {
@@ -5511,8 +5438,8 @@ function recountSummary(sh, tz) {
   writeCount(sh, lm, ['미조치', '미이행'], todo);
 
   /* ★새 서식에서는 개선율을 서버가 값으로 적는다★ (§1-8) — 수식을 덮어쓴다.
-     writeCount는 수식이면 건드리지 않지만 여기서는 일부러 덮는다: 이월 때문에 지난 달 탭을
-     건너다니는 수식은 26곳 × 12개월에서 깨지기 때문이다. 적힌 값은 본사가 고칠 수 있다. */
+     writeCount는 수식이면 건드리지 않지만 여기서는 일부러 덮는다: 화면·확정과 같은 impRate 한 곳에서
+     세야 세 곳(화면·시트·확정)이 갈라지지 않는다. 적힌 값은 본사가 고칠 수 있다. */
   let calc = null;
   if (g.isNew) {
     calc = impRate(judged);
@@ -8706,14 +8633,17 @@ function impFindRow(sh, g, no) {
 
 /* 상태 판정 — ★서버판★.
 
-   시트의 수식(impStateFormula)은 ★눈에 보이는 것만★ 본다. 예정일 칸은 "10/15 매대 교체"처럼
-   날짜와 글이 한 칸에 섞여 있어서(dueDateOf 주석) 수식이 못 읽기 때문이다.
-   여기서는 dueDateOf로 그 날짜를 읽어 한 단계 더 가른다.
+   ★기한만 본다★ — 시트 수식(impStateFormula)과 같은 순서다.
+   (2026-09-15 담당자 *"예정일 적으나마나 그건 관리자입장에서 알빠 아니야 … 그냥 기한을 넘냐
+   안넘느냐만 보면 되잖아"*) 종전에는 진행 내용 맨 앞의 날짜를 '예정일'로 읽어 빨간 표시를
+   따로 붙이고, 진행 내용이 적혀 있으면 조치기한이 지나도 '진행중'으로 두었다.
 
-   ★'미조치'는 살아 있는 상태가 아니라 확정된 판정이다★ — 달이 끝나기 전에는 '기한 지남'·
-   '예정일 지남'으로만 적는다. 사람을 탓하는 말이 아니라 날짜를 말하는 말이고, 아직 시간이
-   남아 있는데 '미조치'라고 못박으면 매장이 그 뒤로 아무것도 하지 않는다.
-   final=true(월 채점 확정)일 때만 미조치가 된다. */
+   ★'미조치'는 살아 있는 상태가 아니라 확정된 판정이다★ — 달이 끝나기 전에는 '기한 지남'으로만
+   적는다. 사람을 탓하는 말이 아니라 날짜를 말하는 말이고, 아직 시간이 남아 있는데 '미조치'라고
+   못박으면 매장이 그 뒤로 아무것도 하지 않는다.
+   final=true(월 채점 확정)일 때만 미조치가 된다 — ★그때는 완료가 아닌 건이 전부 미조치다★.
+   다음 달로 넘기는 이월은 없다(2026-09-15 담당자 — 월별 평가). 기한이 남은 건이 있으면
+   fnMonthClose 가 먼저 멈춰 묻고, 담당자가 그래도 마감하면(force) 그 건도 미조치로 친다. */
 function impJudge(r, today, tz, ym, final) {
   const S = function (v) { return String(v == null ? '' : v).trim(); };
   const audit = S(r.audit);
@@ -8726,56 +8656,49 @@ function impJudge(r, today, tz, ym, final) {
     if (redo && redo < today) {
       return { state: final ? '미조치' : '재제출기한 지남', why: '재제출기한 ' + redo + ' 이 지났습니다', redo: redo };
     }
+    if (final) return { state: '미조치', why: '보완 기한 전에 마감했습니다', redo: redo || null };
     return { state: '반려', why: '', redo: redo || null };
   }
   if (audit === '확정') return { state: '확정', why: '' };
   if (doneNote) return { state: '완료(검수 전)', why: '' };
 
-  if (plan) {
-    const pd = dueDateOf(r.planRaw, tz, ym);
-    if (pd && pd < today) {
-      return { state: final ? '미조치' : '예정일 지남', why: '예정일 ' + pd + ' 이 지났는데 완료 보고가 없습니다', planDate: pd };
-    }
-    return { state: '진행중', why: '', planDate: pd || null };
-  }
+  /* ★기한이 먼저다★ — 진행 내용을 적었어도 조치기한이 지났으면 '기한 지남'이다 (2026-09-15 담당자) */
   const due = r.due ? dateOfCell(r.due, tz) : '';
   if (due && due < today) {
     return { state: final ? '미조치' : '기한 지남', why: '조치기한 ' + due + ' 이 지났습니다', due: due };
   }
+  if (final) return { state: '미조치', why: '조치기한 전에 마감했습니다', due: due || null };
+  if (plan) return { state: '진행중', why: '', due: due || null };
   return { state: '미착수', why: '', due: due || null };
 }
 
-/* 개선율 — §1-7 ⑥ 「분모에서 세 가지를 뺀다」
+/* 개선율 — 분모에서 감점제외만 뺀다 (2026-09-15 · 종전 §1-7 ⑥ 「세 가지를 뺀다」)
 
-     분모 = 발행 − 감점제외 − 재작성 중(반려) − 연장 진행중(예정일이 이 달 기한을 넘는 건)
+     분모 = 발행 − 감점제외
      분자 = 완료(검수 전) + 확정
 
    ★발행이 0건이면 1(100%)이다★ — 개선할 것이 없었다는 뜻이므로 만점이 맞다.
      0으로 치면 지적이 하나도 없는 매장이 종합점수 10%를 통째로 못 받아 오히려 손해를 본다.
      (월 탭의 종합 수식·통합시트 CA열도 같은 규칙이다 — 세 곳이 갈라지면 안 된다)
 
-   ★분모에서 뺀 건은 사라지는 것이 아니라 다음 달로 넘어간다★ — 이월(T)로 표시한다. */
+   ★이월은 없다★ (2026-09-15 담당자 — 월별 평가) — 종전에는 진행중·보완 요청을 그 달 분모에서
+     빼고 다음 달로 넘겼다(이월 T열). 이제 완료가 아닌 건은 그 달 분모에 그대로 남고, 월 채점
+     확정 때 impJudge 가 전부 '미조치'로 굳힌다. 달 중간의 잠정 개선율도 같은 분모로 센다 —
+     확정하는 순간 숫자가 뚝 떨어지지 않게. */
 function impRate(recs) {
-  let issued = 0, done = 0, waived = 0, rolled = 0;
+  let issued = 0, done = 0, waived = 0;
   recs.forEach(function (r) {
     issued++;
     if (r.waive) { waived++; return; }
-    if (r.state === '확정' || r.state === '완료(검수 전)') { done++; return; }
-    /* ★진행중·보완 요청은 그 달 분모에서 빼고 다음 달로 넘긴다★ (설계 §4 · §1-7 ⑥)
-       ★단 한 사이클만이다★ — 이미 한 번 이월된 건(T열≥1)은 더 미루지 않고 분모에 남긴다.
-       그러지 않으면 '진행중'이라고만 적어 두면 영원히 점수에서 빠지는 길이 생긴다.
-       (예정일이 지나면 impJudge가 이미 '미조치'로 가르므로 여기까지 오지 않는다) */
-    if (r.rolledOnce) return;                       // 두 번째부터는 분모에 남는다
-    if (r.state === '반려' || r.state === '재제출기한 지남') { rolled++; return; }
-    if (r.state === '진행중') { rolled++; return; }
+    if (r.state === '확정' || r.state === '완료(검수 전)') done++;
   });
-  const denom = issued - waived - rolled;
+  const denom = issued - waived;
   return {
-    issued: issued, done: done, waived: waived, rolled: rolled, denom: denom,
+    issued: issued, done: done, waived: waived, denom: denom,
     /* ★발행이 0건이면 null이다★ — '100%'가 아니라 '—'로 보여야 한다. 아직 점검하지 않은 달에
        개선율 100%가 뜨면 매장은 그것을 성적으로 읽는다. 점수를 낼 때만 1로 친다
        (월 탭 종합 수식·통합시트 CA열이 이미 `IF(개선율="",1,…)`로 그렇게 한다 — 세 곳이 같아야 한다).
-       분모가 0이면(발행은 있는데 전부 제외·이월) 이 달에 따질 것이 없으므로 만점이 맞다. */
+       분모가 0이면(발행은 있는데 전부 감점제외) 이 달에 따질 것이 없으므로 만점이 맞다. */
     rate: issued === 0 ? null : (denom > 0 ? Math.round((done / denom) * 100) / 100 : 1),
   };
 }
@@ -8865,9 +8788,10 @@ function impCols(sh) {
   };
 }
 
-/* 상태 수식. ★수식은 눈으로 보이는 것만 판정한다★ — 예정일 칸은 "10/15 매대 교체"처럼
-   날짜와 글이 한 칸에 섞여 있어(dueDateOf 주석) 수식이 못 읽는다. 그래서 예정일이 적혀
-   있으면 그냥 '진행중'이고, ★'미조치' 판정은 서버가 한다★(그때 이 칸을 값으로 덮어쓴다).
+/* 상태 수식. ★서버 판정(impJudge)과 같은 순서다★ — 완료가 없고 기한이 지났으면 진행 내용을
+   적었어도 '기한 지남'이다. 매장이 진행 내용에 적는 예정일은 보지 않는다
+   (2026-09-15 담당자 *"그냥 기한을 넘냐 안넘느냐만 보면 되잖아"*).
+   ★'미조치' 판정은 서버가 한다★(월 채점 확정 때 이 칸을 값으로 덮어쓴다).
    기한만 지난 건은 '기한 지남'으로 적는다 — 사람을 탓하는 말이 아니라 날짜를 말하는 말이다. */
 function impStateFormula(c, r) {
   const A = function (col) { return '$' + colLetter(col) + r; };
@@ -8878,8 +8802,8 @@ function impStateFormula(c, r) {
     'IF(' + Q + '="반려",IF(AND(ISNUMBER(' + R + '),TODAY()>' + R + '),"미조치","반려"),' +
     'IF(' + Q + '="확정","확정",' +
     'IF(' + N + '<>"","완료(검수 전)",' +
-    'IF(' + M + '<>"","진행중",' +
-    'IF(AND(ISNUMBER(' + B + '),TODAY()>' + B + '),"기한 지남","미착수")))))))';
+    'IF(AND(ISNUMBER(' + B + '),TODAY()>' + B + '),"기한 지남",' +
+    'IF(' + M + '<>"","진행중","미착수")))))))';
 }
 
 /* ★표 서식을 끝 줄까지 편다★ (2026-09-08 · 2026-09-07 담당자 지적을 뒤늦게 처리)
@@ -9432,11 +9356,10 @@ function templateTabIn(ss, dry, rebuild) {
      ① 미검수 건 일괄 자동확정   — 완료 보고가 있는데 검수를 안 한 건은 '확정'으로 본다
                                    (설계 §4: 검수는 의무가 아니다. 안 누른 건은 확정으로 친다)
      ② 상태를 ★값으로 굳힌다★   — 수식은 TODAY()를 보므로 그냥 두면 지난 달을 열 때마다 바뀐다
-     ③ 미조치 확정               — '기한 지남'·'예정일 지남'이 이때 '미조치'가 된다
-     ④ 이월 표시(T열)            — 분모에서 뺀 건은 다음 달로 넘어간다. ★한 사이클만★
+     ③ 미조치 확정               — 완료가 아닌 건은 전부 '미조치'가 된다 (2026-09-15 · 이월 없음)
+     ④ 기한이 남은 미완료        — 있으면 멈추고 보여 준다. 담당자가 그래도 마감하면(force) 미조치
      ⑤ 개선율 계산 → 요약에 기입
-     ⑥ 잠금                      — ★이월된 줄의 매장 칸만 열어 둔다★
-                                   안 그러면 이월 건은 영원히 답할 수 없다(§1-8)
+     ⑥ 잠금                      — 매장 칸을 모두 잠근다 (종전: 이월된 줄만 열어 두었다 — §1-8)
 
    ★확정 후 점수는 불변이다★ (§1-7 ⑪) — 늦은 완료 보고는 점수에 반영되지 않고,
    그 건은 다음 점검에서 확인한다.
@@ -9457,7 +9380,7 @@ function monthClosedAt(ss, ym) {
   } catch (e) { return ''; }
 }
 
-/* 그 달 탭을 잠근다. openRows = 열어 둘 본문 행 번호(이월된 줄).
+/* 그 달 탭을 잠근다. openRows = 열어 둘 본문 행 번호 (지금은 늘 빈 목록 — 이월 없음 · 2026-09-15).
    ★protectMonthTabsIn과 같은 규율을 따른다★ — 자리를 모르면 손대지 않고, 옛 보호를 못 지우면
    새로 걸지 않고, 걸고 나서 다시 읽어 확인한다. 반쯤 걸린 보호는 되돌린다. */
 function lockMonthTab(sh, openRows) {
@@ -9470,7 +9393,7 @@ function lockMonthTab(sh, openRows) {
   const rows = (openRows || []).filter(function (r) { return r >= box.row0 && r <= box.endRow; });
   let pr = null;
   try {
-    pr = sh.protect().setDescription('QSC — 월 채점 확정 (이월 ' + rows.length + '건만 열림)');
+    pr = sh.protect().setDescription('QSC — 월 채점 확정' + (rows.length ? ' (' + rows.length + '줄 열림)' : ''));
     pr.setUnprotectedRanges(rows.map(function (r) { return sh.getRange(r, box.col0, 1, box.cols); }));
     try { pr.setWarningOnly(false); } catch (e) { }
     try { pr.setDomainEdit(false); } catch (e) { }
@@ -9545,48 +9468,61 @@ function fnMonthClose(ctx, payload) {
   const vals = rng.getValues();
   const at = function (row, col) { return row[col - 2]; };
 
-  const judged = [], plan = [], openRows = [];
-  const auditCol = [], stateCol = [], rollCol = [];
+  const judged = [], plan = [], pending = [];
+  const auditCol = [], stateCol = [];
   for (let i = 0; i < vals.length; i++) {
     const v = vals[i];
     const row = g.row0 + i;
     const body = String(at(v, g.body) == null ? '' : at(v, g.body)).trim();
-    if (!body) { auditCol.push([at(v, g.audit)]); stateCol.push(['']); rollCol.push([at(v, g.roll)]); continue; }
+    if (!body) { auditCol.push([at(v, g.audit)]); stateCol.push(['']); continue; }
 
     let audit = String(at(v, g.audit) == null ? '' : at(v, g.audit)).trim();
     const doneNote = String(at(v, g.done) == null ? '' : at(v, g.done)).trim();
     /* ① 미검수 자동확정 — 완료 보고가 있는데 검수를 안 한 건 */
     if (!audit && doneNote) { audit = '확정'; plan.push(row + '행 자동확정'); }
 
-    const jd = impJudge({
+    const cellIn = {
       audit: audit, redo: at(v, g.redo), doneNote: doneNote,
-      plan: at(v, g.plan), planRaw: at(v, g.plan), due: at(v, g.due),
-    }, today, tz, ym, true);
-
-    const rolledOnce = Number(at(v, g.roll) || 0) >= 1;
-    const rec = {
-      state: jd.state, planDate: jd.planDate || null,
-      due: dateOfCell(at(v, g.due), tz) || null,
-      waive: at(v, g.waive) === true, rolledOnce: rolledOnce,
+      plan: at(v, g.plan), due: at(v, g.due),
     };
-    judged.push(rec);
+    const jd = impJudge(cellIn, today, tz, ym, true);
 
-    /* ④ 이월 — 분모에서 빠지는 건만. 한 사이클만이므로 이미 이월된 건은 더 늘리지 않는다 */
-    const rolls = !rec.waive && !rolledOnce &&
-      (jd.state === '반려' || jd.state === '재제출기한 지남' || jd.state === '진행중');
-    rollCol.push([rolls ? 1 : (rolledOnce ? Number(at(v, g.roll)) : '')]);
-    if (rolls || rolledOnce) { openRows.push(row); plan.push(row + '행 이월 — 매장 칸을 열어 둡니다'); }
+    const waive = at(v, g.waive) === true;
+    judged.push({ state: jd.state, waive: waive });
+
+    /* ④ 기한이 남은 미완료 — 오늘 기준(final=false)으로 반려·진행중·미착수면 아직 기한 안이다.
+       ★확정하면 이 건도 미조치다★ — 그래서 먼저 보여 주고 force 로만 마감한다(아래) */
+    if (!waive) {
+      const live = impJudge(cellIn, today, tz, ym, false);
+      const left = live.state === '반려' ? live.redo
+        : (live.state === '진행중' || live.state === '미착수') ? live.due : null;
+      if (left) pending.push({ no: i + 1, row: row, state: live.state, due: left });
+    }
 
     auditCol.push([audit]);
     stateCol.push([jd.state]);   // ② 상태를 값으로
   }
 
   const calc = impRate(judged);
+  const lastDue = pending.reduce(function (a, x) { return x.due > a ? x.due : a; }, '');
   plan.push('개선율 ' + (calc.rate == null ? '—' : Math.round(calc.rate * 100) + '%') +
-    ' (발행 ' + calc.issued + ' · 완료 ' + calc.done + ' · 제외 ' + calc.waived + ' · 이월 ' + calc.rolled + ' · 분모 ' + calc.denom + ')');
-  plan.push('이월 ' + openRows.length + '건의 매장 칸만 열고 나머지는 잠급니다');
+    ' (발행 ' + calc.issued + ' · 완료 ' + calc.done + ' · 제외 ' + calc.waived + ' · 분모 ' + calc.denom + ')');
+  if (pending.length) {
+    plan.push('★기한이 남은 미완료 ' + pending.length + '건 (마지막 기한 ' + lastDue + ') — 지금 확정하면 미조치로 칩니다★');
+  }
+  plan.push('매장 칸을 모두 잠급니다 (다음 달로 넘기는 이월은 없습니다)');
 
-  if (!apply) return { ok: true, dry: true, store: key, ym: ym, plan: plan, rate: calc, closedAt: already || null };
+  if (!apply) {
+    return { ok: true, dry: true, store: key, ym: ym, plan: plan, rate: calc,
+      pending: pending, lastDue: lastDue || null, closedAt: already || null };
+  }
+  /* ★기한이 남은 미완료가 있으면 force 없이는 확정하지 않는다★ (2026-09-15 담당자)
+     기다릴지 마감할지는 사람이 고른다 — 점장이 없어 기다려도 소용없는 매장은 그대로 마감한다.
+     화면(store-app.js)이 미리보기의 pending 을 보여 한 번 더 묻고 force:true 로 다시 부른다. */
+  if (pending.length && p.force !== true) {
+    return err('CONFLICT', '기한이 남은 미완료 ' + pending.length + '건이 있습니다 (마지막 기한 ' + lastDue +
+      '). 기다리시거나, 그래도 마감하시려면 확정을 다시 눌러 주세요.');
+  }
 
   const lock = LockService.getScriptLock();
   let got = false;
@@ -9598,7 +9534,6 @@ function fnMonthClose(ctx, payload) {
        그 매장만 조용히 빈 채로 확정된다) */
     grid(sh, g.row0, g.audit, n, 1).setValues(auditCol);
     grid(sh, g.row0, g.state, n, 1).setValues(stateCol);
-    grid(sh, g.row0, g.roll, n, 1).setValues(rollCol);
 
     const lm = labelMap(sh);
     const pr = labelValue(lm, L_RATE);
@@ -9607,13 +9542,13 @@ function fnMonthClose(ctx, payload) {
     }
     SpreadsheetApp.flush();
 
-    const lk = lockMonthTab(sh, openRows);
+    const lk = lockMonthTab(sh, []);   // 이월이 없으므로 매장 칸을 모두 잠근다
     PROPS.setProperty(MC_PREFIX + ss.getId() + ':' + ym, today);
     if (!p.fileId) dropStoreCache(key, ym);
 
     return {
       ok: true, dry: false, store: key, ym: ym, closedAt: today,
-      rate: calc, rolled: openRows.length, plan: plan,
+      rate: calc, forced: pending.length, plan: plan,
       lock: lk.ok ? '잠금 ✓' : ('★잠그지 못했습니다 — ' + lk.why + '★'),
     };
   } finally {
