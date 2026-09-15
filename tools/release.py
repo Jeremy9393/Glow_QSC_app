@@ -42,7 +42,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 ROOT = Path(__file__).resolve().parents[1]
 LIVE = 'https://jeremy9393.github.io/Glow_QSC_app'
-XLSX = ROOT.parent / 'QSC·MS 평가표.xlsx'
+XLSX = ROOT.parents[1] / '3. 평가표' / 'QSC·MS 평가표.xlsx'
 
 CHECK_ONLY = len(sys.argv) > 1 and sys.argv[1] in ('check', '점검', '-c')
 
@@ -118,9 +118,10 @@ else:
     #   2026-08-26: 그 옛 파일을 작업 폴더에서 치웠다(담당자 요청) —
     #   `_보관/지난자료/(안 씀) …` 로 옮겨 두어 나란히 놓고 헷갈릴 일이 없게 했다.
     #   그래도 감시는 남긴다: 옮긴 자리에서 열어 고치는 경우가 있을 수 있다.
-    _old = ROOT.parent / '_보관' / '지난자료' / '(안 씀) 참고용자료_QSC 평가 체계 개편_v3.xlsx'
+    #   2026-09-15: 폴더를 일별로 나눠 qsc-app 이 `1. 앱\` 아래로 갔다 — 1. QSC 는 ROOT.parents[1] 이다.
+    _old = ROOT.parents[1] / '_보관' / '지난자료' / '(안 씀) 참고용자료_QSC 평가 체계 개편_v3.xlsx'
     if not _old.exists():
-        _old = ROOT.parent / '참고용자료_QSC 평가 체계 개편_v3.xlsx'   # 되돌려 놓은 경우
+        _old = XLSX.parent / '참고용자료_QSC 평가 체계 개편_v3.xlsx'   # 정본 옆으로 되돌려 놓은 경우
     if _old.exists() and _old.stat().st_mtime > XLSX.stat().st_mtime + 1:
         warn('★옛 엑셀이 더 최신입니다★ — 혹시 이쪽을 고치셨나요?\n'
              '        앱이 읽는 것은  %s\n'

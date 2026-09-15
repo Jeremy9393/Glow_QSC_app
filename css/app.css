@@ -265,7 +265,7 @@ input.why { border-color: #3a3a3a; font-size: 13px; }
 .offRow.na { color: var(--sub); font-size: 11.5px; background: transparent; cursor: default; padding-left: 4px; }
 
 /* ---------- 홈 (런처) ---------- */
-.home { min-height: 100vh; display: flex; flex-direction: column; padding: 76px 22px 34px; max-width: 520px; margin: 0 auto; }
+.home { position: relative; min-height: 100vh; display: flex; flex-direction: column; padding: 76px 22px 34px; max-width: 520px; margin: 0 auto; }
 .homeBrand { text-align: center; font-size: 27px; font-weight: 300; letter-spacing: .19em; line-height: 1.2; color: #fff; text-indent: .19em; }
 .homeSub { text-align: center; font-size: 11px; font-weight: 400; color: var(--sub); letter-spacing: .32em; margin-top: 14px; text-indent: .32em; }
 .menu { margin-top: 52px; display: flex; flex-direction: column; gap: 11px; }
@@ -282,6 +282,26 @@ input.why { border-color: #3a3a3a; font-size: 13px; }
 .menuCard .tag.guest { background: var(--ink); border-color: var(--ink); color: #111; font-weight: 700; }
 .menuCard .arrow { flex: 0 0 auto; color: #4f4f4f; font-size: 17px; line-height: 1; }
 .homeFoot { text-align: center; color: #555; font-size: 10.5px; margin-top: auto; padding-top: 52px; letter-spacing: .1em; }
+
+/* ★관리자 알림(종)★ (2026-09-15) — 홈 오른쪽 위. 관리자에게만 보인다(index.html 이 hidden 을 푼다).
+   브랜드 문구가 76px 아래에서 시작하므로 그 위 빈 자리에 둔다 — 카드·문구를 밀지 않는다.
+   패널 폭은 min()으로 묶어 400px 폰에서도 화면 밖으로 나가지 않는다. */
+.bellBtn { position: absolute; top: 16px; right: 14px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+  padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); cursor: pointer; }
+.bellBtn:active { background: #222; }
+.bellBtn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.bellCount { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: #b33a3a; color: #fff; font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.bellPanel { position: absolute; top: 68px; right: 14px; z-index: 30; width: min(340px, calc(100% - 28px)); max-height: 60vh; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 28px rgba(0, 0, 0, .55); }
+.bellHead { font-size: 11.5px; color: var(--sub); letter-spacing: .04em; padding: 12px 14px 9px; border-bottom: 1px solid var(--line); }
+.bellItem { display: block; padding: 11px 14px; font-size: 13px; line-height: 1.5; color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.bellItem:last-child { border-bottom: 0; }
+.bellItem:active { background: #222; }
+.bellItem .bStore { font-weight: 700; }
+.bellItem .bAt { color: var(--sub); font-size: 11.5px; white-space: nowrap; }
+.bellEmpty { font-size: 12.5px; color: var(--sub); padding: 18px 14px; text-align: center; }
+.bellBtn[hidden], .bellCount[hidden], .bellPanel[hidden] { display: none; }
 
 /* ★좁은 폰에서 카드 제목이 두 줄로 접히는 것을 막는다★ (2026-08-28)
    가장 긴 제목 「[감사총무팀_QSC]통합시트」가 15.5px에서 175px이다. 카드 안 여유 폭은

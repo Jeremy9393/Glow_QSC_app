@@ -20,7 +20,7 @@ import openpyxl
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 warnings.filterwarnings('ignore')
 
-SRC = r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\QSC·MS 평가표.xlsx'
+SRC = r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\3. 평가표\QSC·MS 평가표.xlsx'
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'data' / 'master.json'
 

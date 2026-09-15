@@ -18,7 +18,12 @@
   const $ = function (s, el) { return (el || document).querySelector(s); };
 
   const DRAFT_KEY = 'qsc-store-draft-v1';
-  const SNAP_KEY = 'qsc-store-snap-v1';
+  /* ★사본은 계정별로 나눈다★ (2026-09-15) — v1 은 「매장|월」 열쇠라, 같은 브라우저에서 관리자로 본
+     사본(관리자에게만 오는 MS 잠정 점수)을 매장 계정이 인증보다 먼저 그렸다가 서버 응답이 덮어써
+     잠정 점수가 잠깐 보였다. 열쇠에 계정 아이디를 넣고(snapKey), 저장 전에 관리자 전용 값을 뺀다(snapPut).
+     v1 은 지운다 — 옛 사본을 계속 읽으면 같은 일이 한 번 더 난다. */
+  const SNAP_KEY = 'qsc-store-snap-v2';
+  try { localStorage.removeItem('qsc-store-snap-v1'); } catch (e) { /* 저장소가 막힌 브라우저 — 무시 */ }
   const SNAP_MAX = 6;                     // 매장 여러 곳을 오가도 스냅샷이 무한히 쌓이지 않도록
 
   /* ★상태 이름표는 맨 위에 둔다★ (2026-08-27) — 화면에 들어오자마자 저장해 둔 사본을
@@ -345,11 +350,18 @@
 
   // ---------- 오프라인 스냅샷 ----------
   function snapAll() { try { return JSON.parse(localStorage.getItem(SNAP_KEY) || '{}'); } catch (e) { return {}; } }
-  function snapKey() { return (curStore || '-') + '|' + curYm; }
+  function snapWho() {
+    try { const u = Auth.user && Auth.user(); return (u && u.id) ? String(u.id) : '-'; } catch (e) { return '-'; }
+  }
+  function snapKey() { return snapWho() + '|' + (curStore || '-') + '|' + curYm; }
   function snapGet() { return snapAll()[snapKey()] || null; }
   function snapPut(res) {
     const a = snapAll();
     const copy = JSON.parse(JSON.stringify(res));
+    /* ★관리자에게만 오는 값은 사본에 담지 않는다★ (2026-09-15) — 열쇠를 계정별로 나눴어도 한 겹 더
+       (아이디를 못 읽어 '-' 로 모이는 경우). 관리자는 사본이 먼저 그려지는 동안만 잠정 표시가 빠지고
+       서버 응답이 오면 곧 채워진다(attachAdminLive 가 매번 붙인다). */
+    if (copy && copy.summary) { delete copy.summary.msLive; delete copy.summary.totalLive; delete copy.summary.admin; }
     copy._at = Date.now();
     a[snapKey()] = copy;
     const keys = Object.keys(a);

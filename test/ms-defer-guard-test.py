@@ -22,7 +22,7 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else \
-    Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\qsc-app\backend\Code.gs')
+    Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
 src = io.open(SRC, 'r', encoding='utf-8', newline='').read()
 
 

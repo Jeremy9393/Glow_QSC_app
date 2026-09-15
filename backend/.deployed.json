@@ -1,6 +1,6 @@
 {
- "sha256": "c9babfb284c49bf11e32bdc10169ec1f95e9e3e1a74c087d47dfca426bcc1e3d",
- "version": 129,
- "when": "2026-09-11 18:17:31",
- "description": "2026-09-11 계정 관리 — 동기화 미리보기(추가·이름 변경·삭제) · account.delete · account.rename · 목록 가나다순"
+ "sha256": "a15cb050bf444e0cbb61c8d2a6b8b197adef1b61d43ecc2dae373e9165f59e9c",
+ "version": 130,
+ "when": "2026-09-15 12:43:29",
+ "description": "관리자 알림(종) · 매장 배지 보완요청 포함 · 상태등 확인 읽기로"
 }

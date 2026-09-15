@@ -8,7 +8,7 @@
 import io, re, sys, subprocess
 from pathlib import Path
 
-ROOT = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC')
+ROOT = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱')
 NODE = ROOT / '_도구' / 'node' / 'node.exe'
 OUT = Path(__file__).parent / '_nawhy.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')

@@ -102,6 +102,8 @@ const PHOTO_EMBED = true;    // true면 개선요청 표에 사진을 =IMAGE()�
 const AUTH_ACCOUNT_SHEET = '계정';
 const AUTH_ROLE_SHEET = '역할';
 const AUTH_LOG_SHEET = '감사로그';
+/* 관리자 알림(홈 오른쪽 위 종)의 원장 — 열·규칙은 「알림 원장」 절(fnNotifyBadge 아래) 참조 */
+const AUTH_NOTIFY_SHEET = '알림';
 
 /* ★`계정` 탭 스키마 — 열 번호를 코드 곳곳에 숫자로 적지 않는다★
    종전에는 F열이 '링크키'였고 서버가 H~L을 썼다. 링크키를 없애면서 F 이후가 한 칸씩 앞으로
@@ -186,7 +188,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v129', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v130', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -338,7 +340,10 @@ function actionTable() {
     /* [점검 모드] 매장을 잠그고 푼다. {}=상태만 · {on:true,msg,min}=켠다 · {off:true}=끈다.
        ★점검 중에도 이 액션은 통과한다★ (maintBlock 이 계정관리 권한자를 통과시킨다) —
        그렇지 않으면 켠 사람이 스스로 끄지 못한다. */
-    'admin.maint':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnAdminMaint },
+    /* ★등록은 「읽기」다★ (2026-09-15) — 관리 화면 상태등이 20초마다 {} 로 상태만 묻는데, 「쓰기」면
+       doPost 가 그때마다 감사로그에 한 줄을 적어(1주 109줄) 시트만 무거워졌다. 켜기·끄기는
+       fnAdminMaint 안에서 쓰기 권한을 따로 확인하고, 스스로 「점검 시작/해제」 줄을 적는다. */
+    'admin.maint':        { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnAdminMaint },
     /* 사진 공유를 폴더 한 번으로 걸어도 되는지 실제로 해 보는 시험 (2026-08-27).
        임시 폴더에 1x1 그림 하나를 만들었다 지우기만 한다 — 실매장 자료는 건드리지 않는다. */
     'admin.photoShareTest': { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnPhotoShareTest },
@@ -393,6 +398,9 @@ function actionTable() {
        배지를 위한 새 권한 어휘를 만들지 않는다(개선요청 표를 읽는 것이 곧 배지의 재료다).
        scope:'none'이라 payload.store는 읽지도 않는다. 대상 매장은 ctx.stores 하나가 정한다. */
     'notify.badge':       { menu: 'store', act: '읽기', scope: 'none', max: 1 * KB, fn: fnNotifyBadge },
+    /* 관리자 홈 오른쪽 위 종 — 「알림」 탭의 열린 줄. menu:ADMIN_MENU라 `역할` 탭 수정 없이
+       관리자에게만 열린다. 읽기라 감사로그를 남기지 않는다(홈을 열 때마다 불린다). */
+    'notify.admin':       { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnNotifyAdmin },
     /* 미제출 현황판·감사로그 열람 — 둘 다 menu:'accounts'라 `역할` 탭이 관리자에게만 열어 준다.
        ★코드에 `role === '관리자'`를 적지 않는다★ */
     'status.month':       { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnStatusMonth },
@@ -720,6 +728,13 @@ function ensureAuthSheets() {
     sh.appendRow(['매장명', '매장 파일 ID']);
     sh.setFrozenRows(1);
     made.push(STORE_MAP_SHEET);
+  }
+  /* 관리자 알림(종) 원장. 서버가 처음 적을 때도 없으면 만든다(notifySheet) — 여기는 편집기 실행용 */
+  if (!ss.getSheetByName(AUTH_NOTIFY_SHEET)) {
+    const sh = ss.insertSheet(AUTH_NOTIFY_SHEET);
+    sh.appendRow(NOTIFY_HEADER.slice(0));
+    sh.setFrozenRows(1);
+    made.push(AUTH_NOTIFY_SHEET);
   }
   const sec = initSecrets();
   /* 세션은 무기한 설계다(확정사항 4). 옛 값(720=30일)이 속성에 남아 있으면 30일마다
@@ -2588,9 +2603,12 @@ function fnNotifyBadge(ctx) {
       if (!body || !body.ok || !body.items || !body.items.length) continue;
       const items = body.items;
       markNewItems(items, store, ym, since);
+      /* 보완 요청 건이 있을 때만 알림 원장을 본다 — 평소에는 왕복이 한 번도 늘지 않는다 */
+      const needResub = items.some(function (it) { return it.status === '반려' || it.status === '재제출기한 지남'; });
+      const resub = needResub ? notifyResubNos(store, ym) : null;
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
-        if (it.state !== '완료') todo++;      // 완료일(N열)이 빈 것
+        if (badgeTodo(it, resub)) todo++;     // 기준은 badgeTodo 주석
         if (it.isNew) fresh++;
         if (it.overdue) late++;
       }
@@ -2602,6 +2620,234 @@ function fnNotifyBadge(ctx) {
     return out;
   } catch (e) {
     Logger.log('notify.badge 실패: ' + String(e));
+    return err('SERVER_ERROR', '알림을 불러오지 못했습니다.');
+  }
+}
+
+/* 매장 배지 「남은 개선요청」 한 건 판정 (2026-09-15 기준 수정)
+   ★종전★ — 완료 칸(N)이 비었는지만 봤다. 보완 요청(반려)을 받은 건은 완료 칸이 이미 차 있어
+     ★다시 셀 수 없었다★ — 매장이 해야 할 일이 생겼는데 배지는 조용했다.
+   ★지금★ — 새 서식(2610~)은 서버 판정(impJudge → it.status)을 따른다. 매장 화면이 쓰는 그 값이다.
+     · 점수 제외 · 확정 → 할 일이 아니다
+     · 반려(보완 요청) · 재제출기한 지남 → 할 일이다. ★다만 이미 다시 올려 검수를 기다리면 아니다★ —
+       매장 저장은 검수 칸을 안 바꿔 impJudge만으로는 가를 수 없다. 그 사실은 알림 원장의
+       열린 「재제출」 줄이 갖고 있다(resub[번호]). 원장을 못 읽으면 종전처럼 센다.
+     · 나머지 → 종전 그대로(완료 칸이 비었으면 할 일)
+   옛 서식(status 없음)은 종전 그대로다. */
+function badgeTodo(it, resub) {
+  if (!it) return false;
+  const st = String(it.status == null ? '' : it.status);
+  if (!st) return it.state !== '완료';
+  if (it.waive === true || st === '확정') return false;
+  if (st === '반려' || st === '재제출기한 지남') return !(resub && resub[it.no]);
+  return it.state !== '완료';
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ★알림 원장 — 관리자 시트 「알림」 탭★ (2026-09-15 담당자 승인)
+
+   ★무엇을 적나★ — 매장이 개선요청을 처음 완료로 올렸을 때(검수대기)와, 보완 요청(반려)을
+     받은 뒤 다시 올렸을 때(재제출) 두 가지뿐이다. 관리자 홈 종이 「열림」 줄을 센다(notify.admin).
+   ★언제 닫나★ — 검수(개선확정·보완 요청·다시 보완 요청·점수 제외)를 하거나 매장이 완료를
+     취소하면 그 줄을 「처리」로 바꾼다. 지우지 않고 바꾸는 이유는 「언제 올렸고 언제 봤나」가
+     시트에 남게 하려는 것이다.
+   ★10월 탭(2610)부터만★ — 9월 이전은 수기·옛 서식이라 검수 칸이 없어 닫을 길이 없다.
+   ★저장·검수를 절대 막지 않는다★ — 부르는 쪽이 전부 try/catch로 감싸고 Logger.log만 남긴다.
+     알림 한 줄이 빠지는 것과 매장 저장이 실패하는 것은 비교할 일이 아니다.
+   ★정리★ — 「처리」 줄만 40일 뒤 지운다(감사로그와 같은 방식 · 하루 한 번 · 쓰는 김에 ·
+     트리거 안 만듦). 열린 줄은 지우지 않는다 — 아직 아무도 안 본 것이다.
+   ⚠부르는 쪽(fnStoreSave·fnImproveAudit)이 스크립트 락을 쥔 채 부른다 — 같은 번호에 두 줄이
+     동시에 생기지 않는 것은 그 락 덕분이다.
+   ══════════════════════════════════════════════════════════════ */
+const NOTIFY_HEADER = ['시각', '종류', '매장', '월', '번호', '내용', '상태', '처리시각', '처리사유'];
+const NOTIFY_COLS = NOTIFY_HEADER.length;   // 9
+const NOTIFY_FROM_YM = '2610';     // 이 달 탭부터 적는다 (yyMM 글자 비교)
+const NOTIFY_KEEP_DAYS = 40;       // 「처리」 줄 보관 기간
+const NOTIFY_SCAN = 3000;          // 읽는 줄 수 상한(최신 쪽) — 응답 속도·6분 한도 보호
+const NOTIFY_LIST_MAX = 50;        // 종 목록에 싣는 최대 개수
+
+function notifyCacheKey() {
+  return 'notify:v' + epoch() + ':open';
+}
+
+/* 같은 건인지 가르는 열쇠 — 매장명은 normStore로 맞춘다(시트가 월 칸을 숫자로 바꿔 둬도 같게) */
+function notifyKey(store, ym, no) {
+  return normStore(store) + '|' + auditTxt(ym) + '|' + Number(no);
+}
+
+/* 알림 탭을 연다. make=true면 없을 때 만든다(머리글 + 첫 줄 고정은 sheet()가 한다). */
+function notifySheet(ss, make) {
+  const sh = ss.getSheetByName(AUTH_NOTIFY_SHEET);
+  if (sh || !make) return sh || null;
+  return sheet(ss, AUTH_NOTIFY_SHEET, NOTIFY_HEADER.slice(0));
+}
+
+/* 최신 쪽 NOTIFY_SCAN 줄을 읽는다. start = vals[0]의 시트 행 번호 */
+function notifyScan(sh) {
+  const last = sh.getLastRow();
+  if (last < 2) return { start: 2, vals: [] };
+  const n = Math.min(NOTIFY_SCAN, last - 1);
+  const start = last - n + 1;
+  const rng = grid(sh, start, 1, n, NOTIFY_COLS);
+  return { start: start, vals: rng ? rng.getValues() : [] };
+}
+
+/* 한 줄 적는다. ★같은 매장·월·번호에 열린 알림이 있으면 적지 않는다★(종류와 무관) —
+   매장이 완료 문구를 몇 번 고쳐 저장해도 종에는 한 건만 뜬다. 적었으면 true. */
+function notifyAdd(kind, store, ym, no, text) {
+  const ss = authSS();
+  if (!ss) return false;
+  const sh = notifySheet(ss, true);
+  if (!sh) return false;
+  const key = notifyKey(store, ym, no);
+  const vals = notifyScan(sh).vals;
+  for (let i = 0; i < vals.length; i++) {
+    if (auditTxt(vals[i][6]) === '열림' && notifyKey(vals[i][2], vals[i][3], vals[i][4]) === key) return false;
+  }
+  const tz = ss.getSpreadsheetTimeZone();
+  sh.appendRow(safeRow([
+    Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss'),
+    auditCut(kind, 20), normStore(store), auditTxt(ym), Number(no), auditCut(text, 200), '열림', '', ''
+  ]));
+  notifyTouched(sh, ss);
+  return true;
+}
+
+/* 그 매장·월·번호의 열린 알림을 「처리」로 바꾼다. 바꾼 줄 수를 돌려준다. */
+function notifyResolve(store, ym, no, why) {
+  if (!(auditTxt(ym) >= NOTIFY_FROM_YM)) return 0;
+  const ss = authSS();
+  if (!ss) return 0;
+  const sh = notifySheet(ss, false);
+  if (!sh) return 0;
+  const key = notifyKey(store, ym, no);
+  const scan = notifyScan(sh);
+  const at = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+  let cnt = 0;
+  for (let i = 0; i < scan.vals.length; i++) {
+    const v = scan.vals[i];
+    if (auditTxt(v[6]) !== '열림' || notifyKey(v[2], v[3], v[4]) !== key) continue;
+    grid(sh, scan.start + i, 7, 1, 3).setValues([safeRow(['처리', at, auditCut(why, 40)])]);
+    cnt++;
+  }
+  if (cnt) notifyTouched(sh, ss);
+  return cnt;
+}
+
+/* 적거나 바꾼 뒤 — 종 목록 캐시를 지우고, 하루 한 번 오래된 「처리」 줄을 정리한다 */
+function notifyTouched(sh, ss) {
+  try { CacheService.getScriptCache().remove(notifyCacheKey()); } catch (e) { }
+  maybeTidyNotify(sh, ss);
+}
+
+function maybeTidyNotify(sh, ss) {
+  try {
+    const today = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'yyyyMMdd');
+    if (PROPS.getProperty('NOTIFY_TIDY_DAY') === today) return 0;
+    PROPS.setProperty('NOTIFY_TIDY_DAY', today);   // ★먼저 찍는다★ — 실패해도 오늘 또 시도하지 않는다
+    return tidyNotify(sh, ss);
+  } catch (e) {
+    Logger.log('알림 정리 실패: ' + String(e));
+    return 0;
+  }
+}
+
+/* 40일 지난 「처리」 줄을 지운다. ★열린 줄은 날짜와 상관없이 남긴다★.
+   감사로그와 달리 오래된 줄이 앞쪽에 몰려 있지 않다(열린 줄이 사이사이 남는다) — 그래서 골라서
+   delRows로 덩어리째 아래에서 위로 지운다. 처리시각 모양이 아닌 줄은 건드리지 않는다. */
+function tidyNotify(sh, ss) {
+  const last = sh.getLastRow();
+  if (last < 2) return 0;
+  const tz = ss.getSpreadsheetTimeZone();
+  const cut = Utilities.formatDate(new Date(Date.now() - NOTIFY_KEEP_DAYS * 86400000), tz, 'yyyy-MM-dd HH:mm:ss');
+  const rng = grid(sh, 2, 1, Math.min(5000, last - 1), NOTIFY_COLS);   // 한 번에 5,000줄까지 (6분 한도 보호)
+  if (!rng) return 0;
+  const vals = rng.getValues();
+  const rows = [];
+  for (let i = 0; i < vals.length; i++) {
+    if (auditTxt(vals[i][6]) !== '처리') continue;
+    const t = stampFull(vals[i][7], tz);
+    if (!/^\d{4}-\d{2}-\d{2} /.test(t)) continue;
+    if (t < cut) rows.push(2 + i);
+  }
+  if (!rows.length) return 0;
+  delRows(sh, rows);
+  try { CacheService.getScriptCache().remove(notifyCacheKey()); } catch (e) { }
+  return rows.length;
+}
+
+/* 열린 알림 전부 — 최신이 먼저. 60초 캐시(적거나 바꾸면 notifyTouched가 지운다).
+   ★줄 순서가 곧 시간 순서다★ — appendRow로만 붙이므로 아래쪽이 최신이다. 시각 칸으로 다시
+   정렬하지 않는 이유: 시트가 그 칸을 Date로 바꿔 두는 경우가 있다(stampFull 주석). */
+function notifyOpenAll() {
+  const cache = CacheService.getScriptCache();
+  const ck = notifyCacheKey();
+  const hit = cache.get(ck);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { } }
+  const ss = authSS();
+  if (!ss) return [];
+  const sh = notifySheet(ss, false);
+  const out = [];
+  if (sh) {
+    const tz = ss.getSpreadsheetTimeZone();
+    const vals = notifyScan(sh).vals;
+    for (let i = vals.length - 1; i >= 0; i--) {
+      const v = vals[i];
+      if (auditTxt(v[6]) !== '열림') continue;
+      out.push({
+        at: stampFull(v[0], tz), kind: auditTxt(v[1]), store: auditTxt(v[2]),
+        ym: auditTxt(v[3]), no: Number(v[4]) || 0, text: auditTxt(v[5])
+      });
+    }
+  }
+  const packed = JSON.stringify(out);
+  if (packed.length <= 90000) cache.put(ck, packed, 60);   // 100KB를 넘으면 put이 조용히 안 담는다
+  return out;
+}
+
+/* 그 매장·월에 열린 「재제출」 알림의 번호표 {번호: true}. 실패하면 빈 표(= 배지는 종전처럼 센다). */
+function notifyResubNos(store, ym) {
+  const out = {};
+  try {
+    const head = normStore(store) + '|' + auditTxt(ym) + '|';
+    notifyOpenAll().forEach(function (it) {
+      if (it.kind === '재제출' && notifyKey(it.store, it.ym, it.no).indexOf(head) === 0) out[it.no] = true;
+    });
+  } catch (e) { }
+  return out;
+}
+
+/* 매장 저장 한 번을 보고 알림을 적거나 닫는다 — fnStoreSave가 ★저장이 끝난 뒤★ 부른다.
+     before/after = 저장 전·후 완료 칸(N) 글 · audit = 저장 전 검수 칸 값 · photo = 개선 후 사진을 바꿨나
+   ① 채워져 있던 완료 칸이 비었다 → 열린 알림 처리(매장이 완료 취소)
+   ② 반려·재반려였고 완료 칸이 채워져 있으며 글이나 사진이 바뀌었다 → 재제출
+   ③ 비어 있던 완료 칸이 채워졌다 → 검수대기
+   ★②를 ③보다 먼저 본다★ — 보완 요청 뒤 완료 칸을 비웠다가 다시 채운 것도 「다시 올린 것」이다.
+   돌려주는 값은 한 일의 이름('' = 아무것도 안 함). */
+function notifyOnSave(store, ym, no, before, after, audit, photo) {
+  if (!(auditTxt(ym) >= NOTIFY_FROM_YM)) return '';
+  const b = auditTxt(before), a = auditTxt(after), au = auditTxt(audit);
+  if (b && !a) return notifyResolve(store, ym, no, '매장이 완료 취소') ? '처리' : '';
+  if (!a) return '';
+  const head = Number(auditTxt(ym).slice(2, 4)) + '월 ' + no + '번 개선요청을 ';
+  if ((au === '반려' || au === '재반려') && (b !== a || photo)) {
+    return notifyAdd('재제출', store, ym, no, head + '보완해 다시 제출했습니다') ? '재제출' : '';
+  }
+  if (!b) return notifyAdd('검수대기', store, ym, no, head + '완료로 제출했습니다') ? '검수대기' : '';
+  return '';
+}
+
+/* ---------- 기능층: notify.admin — 관리자 홈의 종 ---------- */
+
+/* ★fnNotifyBadge와 같은 규칙★ — 홈은 이미 그려져 있고 이것은 비동기로 온다. 실패는 ok:false를
+   조용히 돌려준다(예외를 밖으로 내면 doPost가 감사로그에 SERVER_ERROR를 한 줄씩 쌓는다).
+   count는 열린 알림 전부, items는 최신 NOTIFY_LIST_MAX개. */
+function fnNotifyAdmin(ctx) {
+  try {
+    const all = notifyOpenAll();
+    return { ok: true, count: all.length, items: all.slice(0, NOTIFY_LIST_MAX) };
+  } catch (e) {
+    Logger.log('notify.admin 실패: ' + String(e));
     return err('SERVER_ERROR', '알림을 불러오지 못했습니다.');
   }
 }
@@ -5075,6 +5321,18 @@ function fnStoreSave(ctx, payload, target) {
       };
     }
 
+    /* ★관리자 알림(종) 판정에 쓸 저장 전 검수 값★ — 검수 칸은 새 서식(2610~)에만 있다.
+       사본 시험(fileId)·옛 서식·9월 이전 탭은 알림을 아예 보지 않는다(noteAudit=null).
+       읽기가 실패해도 저장은 계속한다 — 검수 값만 빈 것으로 본다. */
+    let noteAudit = null;
+    if (!testId && g.isNew && g.audit && ym >= NOTIFY_FROM_YM) {
+      noteAudit = '';
+      try {
+        const ac = grid(sh, r, g.audit, 1, 1);
+        if (ac) noteAudit = ac.getValue();
+      } catch (e) { Logger.log('알림용 검수 칸 읽기 실패: ' + String(e)); }
+    }
+
     /* 사진 — 교체·삭제면 이전 드라이브 파일을 실제로 지운다 (안 하면 고아 파일이 쌓인다).
        ★새 사진 저장이 성공한 뒤에 옛 파일을 지운다★ — 순서를 반대로 두면, 400KB를 넘는 사진을
        올렸을 때 옛 파일은 이미 휴지통에 있는데 저장은 BAD_REQUEST로 되돌아가고 O열에는 그
@@ -5119,6 +5377,14 @@ function fnStoreSave(ctx, payload, target) {
       CacheService.getScriptCache().remove('store:v' + epoch() + ':' + store + ':' + ym);
     } catch (e) { }
     dropStoreCache(store, ym);   // 저장 직후 조회가 직전 값을 보여주지 않게
+
+    /* ★관리자 알림(종)★ — 저장은 이미 끝났다. 무엇이 터져도 저장 결과는 그대로 돌려준다.
+       판정은 notifyOnSave 주석(처음 완료 → 검수대기 · 보완 요청 뒤 다시 올림 → 재제출 · 완료 취소 → 처리). */
+    if (noteAudit !== null) {
+      try {
+        notifyOnSave(store, ym, no, cell(curV[4], tz), item.doneNote, noteAudit, photoCell !== null);
+      } catch (e) { Logger.log('알림 기록 실패: ' + String(e)); }
+    }
     return { ok: true, item: item, summary: summary };
   } finally {
     try { lock.releaseLock(); } catch (e) { }
@@ -8292,6 +8558,13 @@ const MAINT_DEFAULT_MSG =
 function fnAdminMaint(ctx, payload) {
   const p = payload || {};
 
+  /* 등록은 「읽기」다(상태등 20초 확인이 감사로그를 채우지 않게 · 2026-09-15). 그래서 켜기·끄기는
+     여기서 쓰기 권한을 따로 본다 — 계정관리 읽기만 가진 역할이 생겨도 점검 모드를 못 건드린다. */
+  if ((p.on || p.off) && !can(ctx.role, ADMIN_MENU, '쓰기').allow) {
+    auditLog(ctx, 'admin.maint', '', '거부', 'FORBIDDEN', p.on ? '점검 시작 시도' : '점검 해제 시도');
+    return err('FORBIDDEN', '권한이 없습니다.');
+  }
+
   if (p.on) {
     const msg = String(p.msg == null ? '' : p.msg).trim().slice(0, 300) || MAINT_DEFAULT_MSG;
     const min = Math.max(0, Math.min(600, Number(p.min) || 0));
@@ -9755,6 +10028,11 @@ function fnImproveAudit(ctx, payload) {
       if (!p.fileId) dropStoreCache(label, ym);
       auditLog(ctx, 'improve.audit', label, '성공', '',
         ym + ' ' + no + '번 ' + (p.waive === true ? '점수 제외' : '점수 제외 해제'));
+      /* 점수에서 뺀 건은 더 볼 것이 없다 — 종의 열린 알림을 닫는다(실패해도 검수는 끝났다).
+         해제는 닫지 않는다: 다시 볼 것이 생긴 쪽이다. */
+      if (!p.fileId && p.waive === true) {
+        try { notifyResolve(label, ym, no, '점수 제외'); } catch (e) { Logger.log('알림 처리 실패: ' + String(e)); }
+      }
       return { ok: true, store: label, ym: ym, no: no, waive: p.waive === true };
     }
 
@@ -9782,6 +10060,14 @@ function fnImproveAudit(ctx, payload) {
     }, today, tz, ym, false);
 
     if (!p.fileId) dropStoreCache(label, ym);   // 매장이 바로 보게
+
+    /* ★검수를 했으면 종의 열린 알림을 닫는다★ — 사유는 화면 버튼 이름으로 적는다.
+       검수 취소('')는 닫지 않는다: 다시 볼 것이 생긴 쪽이다. 실패해도 검수는 이미 끝났다. */
+    if (!p.fileId && put) {
+      try {
+        notifyResolve(label, ym, no, put === '확정' ? '개선확정' : (put === '재반려' ? '다시 보완 요청' : '보완 요청'));
+      } catch (e) { Logger.log('알림 처리 실패: ' + String(e)); }
+    }
 
     return {
       ok: true, store: label, ym: ym, no: no,
