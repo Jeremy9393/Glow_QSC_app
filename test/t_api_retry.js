@@ -1,3 +1,16 @@
+
+global.window = {};
+let sent = [];
+let queue = [];
+global.fetch = async function (url, init) {
+  sent.push(JSON.parse(init.body));
+  const next = queue.shift();
+  if (!next) throw new Error('보낼 답이 없습니다 — 요청이 예상보다 많습니다');
+  if (next.offline) throw new Error('offline');
+  return { text: async function () { return next.body; } };
+};
+global.localStorage = { getItem: function () { return null; }, setItem: function () { } };
+const HTML = '<!DOCTYPE html><html><body>페이지를 찾을 수 없음</body></html>';
 /* 저장 연동 계층.
    APPS_SCRIPT_URL이 비어 있으면 모의 저장(브라우저 localStorage) — 개발·데모용.
    구글 앱스 스크립트 배포 후 URL을 넣으면 실제 스프레드시트/드라이브에 저장된다.
@@ -294,3 +307,49 @@ const Api = (function () {
    자동으로 붙지 않아 지금은 항상 auth.js의 폴백 상수가 쓰이고 있다 — 두 주소가 같은 지금은
    증상이 없지만, 배포 주소를 옮기는 날 로그인만 옛 주소를 때린다. 여기서 명시적으로 노출한다. */
 try { window.Api = Api; } catch (e) { /* 무시 */ }
+
+
+let pass = 0, fail = 0;
+function ok(name, cond, info) {
+  if (cond) { pass++; console.log('  ✓ ' + name); }
+  else { fail++; console.log('  ✗ ' + name + (info !== undefined ? '  ← ' + JSON.stringify(info) : '')); }
+}
+
+(async function () {
+  // ① 조회 — 깨진 응답 뒤 한 번 더
+  sent = []; queue = [{ body: HTML }, { body: '{"ok":true,"items":[]}' }];
+  let r = await Api.call('store.get', { ym: '2610' });
+  ok('① 조회: 깨진 응답이면 한 번 더 묻는다', sent.length === 2 && r.ok === true, { n: sent.length, r: r });
+  ok('① 같은 요청 열쇠(reqId)로 다시 묻는다', sent[0].reqId === sent[1].reqId, sent.map(function (c) { return c.reqId; }));
+  ok('① 같은 action·payload 그대로', sent[1].action === 'store.get' && sent[1].payload.ym === '2610', sent[1]);
+
+  // ② 두 번 다 깨지면 종전 오류 그대로
+  sent = []; queue = [{ body: HTML }, { body: HTML }];
+  r = await Api.call('dashboard.get', { period: '2610' });
+  ok('② 두 번 다 깨지면 요청은 두 번까지', sent.length === 2, sent.length);
+  ok('② 종전과 같은 오류를 돌려준다', r.ok === false && r.code === 'SERVER_ERROR' && r.error.indexOf('서버 응답을 읽지 못했습니다') === 0, r);
+
+  // ③ 쓰기는 다시 묻지 않는다
+  sent = []; queue = [{ body: HTML }];
+  r = await Api.call('qsc.submit', { store: '샘플매장' });
+  ok('③ 제출은 다시 묻지 않는다', sent.length === 1 && r.code === 'SERVER_ERROR', { n: sent.length, r: r });
+  sent = []; queue = [{ body: HTML }];
+  r = await Api.call('month.close', { store: '샘플매장', ym: '2610', apply: true });
+  ok('③ 월 채점 확정도 다시 묻지 않는다', sent.length === 1, sent.length);
+  sent = []; queue = [{ body: HTML }];
+  r = await Api.call('store.saveImprove', { no: 1 });
+  ok('③ 개선요청 저장도 다시 묻지 않는다', sent.length === 1, sent.length);
+
+  // ④ 서버가 JSON 으로 보낸 오류는 그대로
+  sent = []; queue = [{ body: '{"ok":false,"code":"SERVER_ERROR","error":"시트를 읽지 못했습니다."}' }];
+  r = await Api.call('store.get', { ym: '2610' });
+  ok('④ JSON 오류는 다시 묻지 않는다', sent.length === 1 && r.error === '시트를 읽지 못했습니다.', { n: sent.length, r: r });
+
+  // ⑤ 오프라인은 그대로
+  sent = []; queue = [{ offline: true }];
+  r = await Api.call('store.get', { ym: '2610' });
+  ok('⑤ 오프라인은 다시 묻지 않는다 (NETWORK)', sent.length === 1 && r.code === 'NETWORK', { n: sent.length, r: r });
+
+  console.log('JS ' + pass + ' 통과 · ' + fail + ' 실패');
+  process.exit(fail ? 1 : 0);
+})();
