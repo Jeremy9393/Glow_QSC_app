@@ -82,7 +82,7 @@ function fnStoreSave(ctx, payload, target) {
       const rolled = rc ? Number(rc.getValue() || 0) : 0;
       if (!(rolled >= 1)) {
         return err('FORBIDDEN', ym.slice(0, 2) + '/' + ym.slice(2) +
-          ' 채점이 확정되어 이 항목은 더 고칠 수 없습니다. 다음 점검에서 확인합니다.');
+          ' 채점이 확정되어 이 항목은 더 고칠 수 없습니다.');   // 「다음 점검에서 확인」은 봐주는 말로 읽혀 뺐다 (2026-09-15 담당자)
       }
     }
 

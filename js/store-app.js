@@ -44,7 +44,7 @@
 
      ★말을 고르는 규칙★ (2026-08-21 확정)
        · '반려' → **보완 요청** — 무엇을 해야 하는지가 말 안에 있고, 잘못했다는 느낌이 없다
-       · '미조치' → **다음 점검 시 확인** — 끝난 일이 아니라 이어진다는 뜻이 들어간다
+       · '미조치' → **다음 점검 시 확인** — ★본사 화면에서만★ (아래 STORE_STATUS_LABEL)
        · '기한 지남'은 그대로 쓴다 — 사람을 탓하는 말이 아니라 날짜를 말하는 말이다
      ★여기 없는 값은 받은 그대로 적는다★ — 서버에 새 상태가 생겨도 화면이 빈칸이 되지 않는다. */
   const STATUS_LABEL = {
@@ -56,6 +56,17 @@
     '재제출기한 지남': '보완 기한 지남',
     '미조치': '다음 점검 시 확인',
   };
+  /* ★매장에게는 「다음 점검 시 확인」·「보완 기한 지남」을 쓰지 않는다 — 둘 다 「기한 지남」★ (2026-09-15 담당자)
+     *"다음 점검시 확인이라고 해두면 다음 점검때 확인되면 봐주는거처럼 보여서 … 나만(점검자) 알고있으면"*
+     본사(계정관리 쓰기 — canAudit·서버 improve.audit 과 같은 어휘)는 원래 말 그대로 본다.
+     canAudit() 을 쓰지 않는 이유: 사본(fromSnap)을 그리는 동안 false 라 본사 화면에서도 말이 잠깐 바뀐다.
+     글자만 바꾼다 — 색·빨간 선(STATUS_CLASS·URGENT)과 집계는 원래 status 로 판정한다. */
+  const STORE_STATUS_LABEL = { '재제출기한 지남': '기한 지남', '미조치': '기한 지남' };
+  function statusLabel(sv) {
+    let hq = false;
+    try { hq = !!Auth.can('accounts', '쓰기'); } catch (e) { hq = false; }
+    return (!hq && STORE_STATUS_LABEL[sv]) || STATUS_LABEL[sv] || sv;
+  }
   const STATUS_CLASS = {
     '미착수': '',            // 아직 기한 안이다 — 빨강을 붙일 이유가 없다
     '진행중': 'prog',
@@ -847,7 +858,7 @@
          여기서 'lateItem'을 붙이면 왼쪽 빨간 선이 영영 안 그려진다(그동안 그랬다). */
       el.className = 'item storeItem' + (late ? ' late' : '');
       /* 뱃지 글자도 상태에 맞춘다 — '예정일 지남'으로 굳어 있으면 기한이 지난 건에도 그 말이 붙는다 */
-      lateTag.textContent = st ? (STATUS_LABEL[st] || st) : '예정일 지남';
+      lateTag.textContent = st ? statusLabel(st) : '예정일 지남';
       lateTag.style.display = late ? '' : 'none';
       newTag.style.display = it.isNew ? '' : 'none';
 
@@ -979,7 +990,7 @@
          옛 달에는 status가 null이라 종전 그대로 그린다. */
       const sv = str(it.status);
       if (sv) {
-        stEl.textContent = STATUS_LABEL[sv] || sv;
+        stEl.textContent = statusLabel(sv);
         const cls = STATUS_CLASS[sv];
         stEl.className = 'stTag' + (cls ? ' ' + cls : '');
       } else {
