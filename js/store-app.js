@@ -74,12 +74,11 @@
     '확정': 'done',
     '반려': 'prog',          // 할 일이 남았다는 뜻이지 잘못했다는 뜻이 아니다 → 주황
     '기한 지남': 'todo',
-    '예정일 지남': 'todo',
     '재제출기한 지남': 'todo',
     '미조치': 'todo',
   };
   /* 카드 왼쪽 빨간 선을 붙일 상태 — 날짜가 지난 것만이다 */
-  const URGENT = { '기한 지남': 1, '예정일 지남': 1, '재제출기한 지남': 1, '미조치': 1 };
+  const URGENT = { '기한 지남': 1, '재제출기한 지남': 1, '미조치': 1 };
 
   /* codes-app.js:15의 cycle()을 그대로 옮겨 왔다(§12-3-5).
      공용 파일을 새로 만들면 sw.js 캐시 목록·로드 순서가 늘어나므로 복사가 더 싸다. */
@@ -91,7 +90,7 @@
     if (!/^\d{4}$/.test(String(ym))) return String(ym || '');
     return '20' + ym.slice(0, 2) + '년 ' + Number(ym.slice(2, 4)) + '월';
   }
-  /* 서버(store.get)는 예정일을 'yyyy-MM-dd'로 준다 — 스프레드시트 타임존으로 계산된 값이다.
+  /* 서버(store.get)는 기한·보완 기한을 'yyyy-MM-dd'로 준다 — 스프레드시트 타임존으로 계산된 값이다.
      폰 한 줄에 연도까지 들어갈 자리가 없고 어차피 보고 있는 달과 같은 해라 '10/15'로 줄인다.
      ★자르기만 한다. 여기서 날짜를 다시 계산하면 기기 시계·시간대가 끼어들어
        §5가 막으려던 '월초에 하루 어긋남'이 그대로 돌아온다. 못 읽으면 받은 문자열 그대로 적는다. */
@@ -308,7 +307,7 @@
 
   /* ---------- [월 채점 확정] — ★본사에게만 만들어진다★ ----------
      매장 화면에는 이 버튼이 존재하지 않는다(감추는 것이 아니라 만들지 않는다).
-     ★반드시 미리보기를 먼저 보여 준다★ — 무엇이 확정되고 무엇이 이월되는지 읽고 누르게 한다.
+     ★반드시 미리보기를 먼저 보여 준다★ — 무엇이 확정되고 무엇이 미조치가 되는지 읽고 누르게 한다.
      한 번 누르면 점수가 굳고 시트가 잠긴다. */
   function paintClose() {
     const box = $('#closeBox');
@@ -318,7 +317,7 @@
     const done = closedAt();
     $('#closeNote').textContent = done
       ? (curYm.slice(0,2) + '/' + curYm.slice(2) + ' 채점이 ' + done + '에 확정되었습니다')
-      : '확정하면 점수가 굳고 시트가 잠깁니다 (이월 건의 매장 칸만 열립니다)';
+      : '확정하면 점수가 굳고 시트가 잠깁니다 (완료가 아닌 건은 미조치로 칩니다)';
     $('#closeBtn').disabled = !!done;
     $('#closeBtn').textContent = done ? '확정됨' : '월 채점 확정';
   }
@@ -333,11 +332,22 @@
       return;
     }
     const lines = (pre.plan || []).join('\n');
+    /* ★완료가 아닌데 기한이 남은 건이 있으면 한 번 더 묻는다★ (2026-09-15 담당자)
+       기다릴 매장은 취소하고, 점장이 없어 기다려도 소용없는 매장은 그대로 마감한다.
+       마감하면 그 건도 미조치다 — 서버는 force 없이 오면 멈춘다(fnMonthClose). */
+    const pend = pre.pending || [];
+    let force = false;
+    if (pend.length) {
+      if (!confirm('기한이 남은 미완료 ' + pend.length + '건이 있습니다 (마지막 기한 ' + dueLabel(pre.lastDue) + ').\n\n'
+        + pend.map(function (x) { return '· ' + x.no + '번 ' + statusLabel(x.state) + ' — 기한 ' + dueLabel(x.due); }).join('\n')
+        + '\n\n기다리시려면 [취소]를 누르세요.\n지금 마감하면 이 ' + pend.length + '건은 미완료(미조치)로 칩니다.')) return;
+      force = true;
+    }
     if (!confirm(curStore + ' ' + curYm.slice(0,2) + '/' + curYm.slice(2) + ' 채점을 확정할까요?\n\n'
       + lines + '\n\n★확정하면 점수가 굳고 되돌릴 수 없습니다.★')) return;
     closeBtn.disabled = true;
     closeBtn.textContent = '확정하는 중…';
-    const r = await Api.call('month.close', { store: curStore, ym: curYm, apply: true })
+    const r = await Api.call('month.close', { store: curStore, ym: curYm, apply: true, force: force })
       .catch(function () { return null; });
     if (!(r && r.ok)) {
       closeBtn.disabled = false; closeBtn.textContent = '월 채점 확정';
@@ -345,7 +355,7 @@
       return;
     }
     alert('확정했습니다.\n\n개선율 ' + (r.rate && r.rate.rate != null ? Math.round(r.rate.rate * 100) + '%' : '—')
-      + '\n이월 ' + r.rolled + '건\n' + (r.lock || ''));
+      + '\n' + (r.lock || ''));
     load();
   };
   $('#reloadBtn').onclick = function () { load(); };
@@ -630,16 +640,17 @@
     if (ws) { warn.style.display = ''; warn.textContent = ws.join(' / '); }
     else { warn.style.display = 'none'; warn.textContent = ''; }
 
-    /* 예정일이 지난 건수는 서버가 항목마다 내려준 overdue를 세기만 한다 — 화면에서 예정일을
-       다시 계산하지 않는다(§5 주의). 0건이면 아예 적지 않는다: 늘 붙어 있는 글자는 배경이 되어,
+    /* 기한이 지난 건수는 서버가 항목마다 내려준 overdue를 세기만 한다 — 화면에서 다시
+       판정하지 않는다(§5 주의). 0건이면 아예 적지 않는다: 늘 붙어 있는 글자는 배경이 되어,
        정작 1건이 생긴 달에 눈에 걸리지 않는다.
-       ★'지연'이 아니라 '예정일 지남'으로 적는다★ — 같은 사실인데 앞의 말은 사람을 탓하고
-         뒤의 말은 날짜를 말한다. 매장이 스스로 정한 예정일이라 더욱 그렇다. 색은 그대로 둔다. */
+       ★'지연'이 아니라 '기한 지남'으로 적는다★ — 같은 사실인데 앞의 말은 사람을 탓하고
+         뒤의 말은 날짜를 말한다. 카드 글자(statusLabel)와 같은 말이다. 색은 그대로 둔다.
+       ★매장이 진행 내용에 적는 예정일은 안 본다★ (2026-09-15 담당자 — 기한을 넘었는지만) */
     const late = lateCount();
     if (late > 0) {
       const lc = document.createElement('span');
       lc.className = 'lateCount';
-      lc.textContent = ' · 예정일 지남 ' + late + '건';
+      lc.textContent = ' · 기한 지남 ' + late + '건';
       fin.appendChild(lc);
     }
 
@@ -650,12 +661,12 @@
     if (late > 0) {
       const s = document.createElement('span');
       s.className = 'lateCount';
-      s.textContent = ' · 예정일 지남 ' + late + '건';
+      s.textContent = ' · 기한 지남 ' + late + '건';
       bp.appendChild(s);
     }
   }
 
-  /* 요약·하단바가 함께 쓰는 '예정일 지난 건수'. data.items 하나를 정본으로 삼아야
+  /* 요약·하단바가 함께 쓰는 '기한 지난 건수'. data.items 하나를 정본으로 삼아야
      두 자리에 다른 숫자가 뜨는 일이 없다. */
   function lateCount() {
     const arr = (data && data.items) || [];
@@ -667,14 +678,14 @@
   function has(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
 
   /* 저장·충돌 응답으로 받은 최신 항목을 카드와 원본 배열(data.items) 양쪽에 반영한다.
-     반영하지 않으면 방금 완료 처리한 항목이 data.items에는 예정일이 지난 채로 남아
-     요약의 '예정일 지남 n건'이 실제 카드와 어긋난다.
+     반영하지 않으면 방금 완료 처리한 항목이 data.items에는 기한이 지난 채로 남아
+     요약의 '기한 지남 n건'이 실제 카드와 어긋난다.
 
      ★통째로 갈아끼우지 않고 '서버가 보낸 칸만' 덮어쓴다.
        store.saveImprove 응답의 항목에는 store.get이 주던 칸이 일부 없다
        (구분·본문·본사 사진·예정일·overdue·NEW). 그대로 대입하면 방금 저장한 그 항목만
-       그 칸들을 잃어, ①아직 기한이 지난 항목인데 '예정일 지남'과 빨간 선이 사라지고
-       ②요약·하단바의 '예정일 지남 n건'이 실제보다 적게 나오며 ③나중에 목록을 다시 그리는 코드가
+       그 칸들을 잃어, ①아직 기한이 지난 항목인데 '기한 지남'과 빨간 선이 사라지고
+       ②요약·하단바의 '기한 지남 n건'이 실제보다 적게 나오며 ③나중에 목록을 다시 그리는 코드가
        생기는 순간 본문이 통째로 비어 보인다.
        빠진 칸은 '바뀌지 않았다'는 뜻이므로 직전 값을 그대로 두는 편이 맞다. */
   function mergeItem(next) {
@@ -687,7 +698,7 @@
     Object.keys(prev || {}).forEach(function (k) { out[k] = prev[k]; });
     Object.keys(next || {}).forEach(function (k) { out[k] = next[k]; });
 
-    /* overdue는 '예정일이 지났는데 완료일이 비었다'는 뜻이다. 서버가 이 응답에 overdue를
+    /* overdue는 '기한이 지났는데 완료가 없다'는 뜻이다. 서버가 이 응답에 overdue를
        안 실어 준 경우, 방금 완료로 바뀐 항목까지 직전 값(참)을 물려받으면
        이미 마무리한 항목에 빨강이 남는다 — 확실히 내릴 수 있는 이 한 경우만 손으로 내린다.
        반대로 '완료가 아닌' 항목을 화면에서 새로 판정하지는 않는다(§5 주의). */
@@ -708,7 +719,7 @@
     }
     $('#listNote').textContent = '';
 
-    /* 예정일 지남 → NEW → 나머지 순으로 올린다.
+    /* 기한 지남 → NEW → 나머지 순으로 올린다.
        왜 서버가 준 NO. 순서를 흐트러뜨리면서까지 이렇게 하냐면, 이 화면을 보는 도구가 폰이고
        한 화면에 카드가 두세 개밖에 안 들어가기 때문이다. 매장이 위에서부터 읽다가 스크롤을 멈추면
        정작 기한이 지난 항목을 못 본 채 앱을 닫는다. 급한 순서를 화면 순서로 만들어 둔다.
@@ -742,7 +753,7 @@
     el.innerHTML =
       '<div class="itemTop"><span class="no"></span><span class="stTag"></span>' +
         '<span class="dueTag" style="display:none"></span>' +
-        '<span class="flagTag late" style="display:none">예정일 지남</span>' +
+        '<span class="flagTag late" style="display:none">기한 지남</span>' +
         '<span class="flagTag new" style="display:none">NEW</span></div>' +
       '<p class="hqBody"></p>' +
       '<p class="lateNote" style="display:none"></p>' +
@@ -829,7 +840,7 @@
       }
     }
 
-    /* ----- 예정일 지남 · NEW 표시 -----
+    /* ----- 기한 지남 · NEW 표시 -----
        판정은 전부 서버가 한 것(it.overdue·it.isNew)을 그대로 옮기기만 한다.
        ★화면에서 M열(예정일+진행 내용)을 다시 파싱해 추측하지 않는다. 한 번이라도 멀쩡한 항목에
          빨강이 붙으면 매장은 그다음부터 빨강 전체를 무시한다 — 없는 빨강이 틀린 빨강보다 낫다.
@@ -857,21 +868,16 @@
       /* 클래스 이름은 'late'다 — css/app.css의 선택자가 `.storeItem.late`라서,
          여기서 'lateItem'을 붙이면 왼쪽 빨간 선이 영영 안 그려진다(그동안 그랬다). */
       el.className = 'item storeItem' + (late ? ' late' : '');
-      /* 뱃지 글자도 상태에 맞춘다 — '예정일 지남'으로 굳어 있으면 기한이 지난 건에도 그 말이 붙는다 */
-      lateTag.textContent = st ? statusLabel(st) : '예정일 지남';
+      /* 뱃지 글자도 상태에 맞춘다 — 한 말로 굳어 있으면 보완 기한이 지난 건에도 같은 말이 붙는다 */
+      lateTag.textContent = st ? statusLabel(st) : '기한 지남';
       lateTag.style.display = late ? '' : 'none';
       newTag.style.display = it.isNew ? '' : 'none';
 
-      /* '며칠 지났는지'는 날짜가 있어야 쓸 수 있는데, 그 계산도 서버 몫이다(스프레드시트 타임존).
-         서버가 예정일(due)이나 지난 일수(overdueDays)를 함께 주면 적고, 없으면 뱃지만 남긴다. */
       const seg = [];
       /* ★왜 그런 상태인지 서버가 한 줄로 말해 준다★ — 화면이 다시 판정하지 않는다.
-         "기한이 지났다는데 왜?"에 답이 없으면 매장은 담당자에게 전화한다. */
+         "기한이 지났다는데 왜?"에 답이 없으면 매장은 담당자에게 전화한다.
+         (옛 서식 달은 판정이 없어 이 줄이 뜨지 않는다 — 예정일은 안 본다 · 2026-09-15) */
       if (st && str(it.statusWhy)) seg.push(str(it.statusWhy));
-      else {
-        if (late && str(it.due)) seg.push('예정일 ' + dueLabel(it.due));
-        if (late && typeof it.overdueDays === 'number' && it.overdueDays > 0) seg.push(it.overdueDays + '일 지남');
-      }
       lateNote.textContent = seg.join(' · ');   // 서버 문구가 섞이므로 textContent
       lateNote.style.display = seg.length ? '' : 'none';
       paintDue();
@@ -1109,7 +1115,7 @@
           data.summary = merged;
           renderSummary(merged);
         } else if (res.item) {
-          // summary가 안 왔어도 '예정일 지남' 건수는 방금 바뀌었을 수 있다 — 요약을 같은 값으로 다시 그린다
+          // summary가 안 왔어도 '기한 지남' 건수는 방금 바뀌었을 수 있다 — 요약을 같은 값으로 다시 그린다
           renderSummary(data.summary || {});
         }
         noteEl.className = 'itemNote ok';
