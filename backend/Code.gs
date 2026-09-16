@@ -188,7 +188,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v133', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v134', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -360,6 +360,9 @@ function actionTable() {
        2026-09-04 에 실제로 헷갈려 fnMonthClose 를 두 번 선언했고, 뒤엣것이 이겨
        이 액션이 엉뚱한 함수를 불렀다(그래서 msOpen 으로 갈랐다). */
     'admin.msOpen':       { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMsMonthOpen },
+    /* 통합시트 10·11·12월 종합 수식(CA·CH·CO 204칸) 갈아 끼우기 — 기본이 미리보기다.
+       매장 파일 쪽은 admin.msOpen {formulaOnly:true} 가 한다. 둘은 ★짝★이라 함께 돌린다. */
+    'admin.fixDashTotal': { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnFixDashTotal },
     /* 매장 파일·통합시트가 지금 누구에게 열려 있는지 ★읽기만★ 한다 (아무것도 안 바꾼다) */
     'admin.shareProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnShareProbe },
     /* 앱 계정을 매장 파일 편집자로 못 박는다 — ★기본이 미리보기★ */
@@ -4479,20 +4482,24 @@ function fillPeriod(row, v, cols, key, isYear) {
      그래서 월중에는 QSC 96 · MS 빈칸 → 종합 빈칸 → 미점검 판정 → ★QSC 96 이 사라졌다★.
      10월이면 26곳 전부가 월중 내내 「점검 안 한 매장」으로 보였을 것이다.
        none    QSC 도 MS 도 없다 — 정말 아직 아무것도 안 왔다
-       partial 하나라도 있는데 종합이 아직 없다 — ★값을 지우지 않는다★
-       done    둘 다 있고 종합도 나왔다 */
+       partial 하나만 왔다 — ★값을 지우지 않는다★ · 종합은 「지금까지 들어온 몫」으로 보여 준다
+       done    둘 다 왔다
+     ★판정 기준을 종합 칸에서 QSC·MS 유무로 옮겼다★ (2026-09-16) — 종합 수식이 「채워진 것부터
+     더해 가는」 것으로 바뀌어(setTotalFormula) QSC 만 있어도 종합이 숫자로 나온다. 종전처럼
+     `typeof t !== 'number'` 로 보면 partial 이 영영 안 잡혀 ★월중 내내 등급이 뜬다★. */
   if (!hasQ && !hasC) row.status = 'none';
-  else if (typeof t !== 'number') row.status = 'partial';
+  else if (!(hasQ && hasC)) row.status = 'partial';
   else row.status = 'done';
   /* 아무것도 안 온 매장만 숫자를 내리지 않는다. 0을 내려보내면 화면이 그것을 점수로 그리고
      그 매장은 26위가 된다 — 설계가 피하려던 "우리가 꼴찌" 신호가 정확히 발생한다.
      ★partial 은 지우지 않는다★ — 점검을 한 매장이고, 실제로 받은 점수는 보여야 한다.
-     다만 ★종합·등급은 아직 없는 것이 맞다★(MS 가 안 열렸으므로) — 그 둘만 비운다. */
+     ★종합점수도 지우지 않는다★ (2026-09-16 담당자) — 「지금까지 들어온 몫」이 맞는 값이다.
+     다만 ★등급은 비운다★ — 등급은 말이라 「미흡」이 미완성으로 안 읽힌다. 셋이 다 나와야 붙인다. */
   if (row.status === 'none') {
     row.qsc = null; row.qscGrade = null; row.cs = null; row.csGrade = null;
     row.improve = null; row.total = null; row.grade = null;
   } else if (row.status === 'partial') {
-    row.total = null; row.grade = null;
+    row.grade = null;
   }
 }
 
@@ -4952,7 +4959,8 @@ function readStoreTab(ss, sh, store, ym) {
   let calc = null;
   if (g.isNew && !frozen) {
     calc = impRate(judged);
-    rate = calc.rate;
+    /* 0건이어도 점검을 한 달이면 100%다 — 시트에 적는 값(recountSummary)과 같아야 한다 */
+    rate = rateShown(sh, lm, calc.rate);
   }
   /* 확정된 달의 개선율은 ★시트에 적힌 값 그대로★다 — 다시 세지 않는다 */
   if (frozen) {
@@ -4973,7 +4981,13 @@ function readStoreTab(ss, sh, store, ym) {
       /* ★그 달 시트가 실제로 쓰는 이름★ — 9월은 '위생점수·CS점수', 10월부터 'QSC점수·MS점수'.
          화면이 이것을 그대로 적는다(끝의 '점수'만 떼고). 못 찾았으면 화면이 옛 이름으로 버틴다. */
       hygieneLabel: str(vHyg.name || ''), csLabel: str(vCs.name || ''),
-      total: scorePct(vTot.v), totalGrade: str(vTotG.v),
+      /* ★등급은 셋이 다 나와야 붙인다★ (2026-09-16 담당자) — 종합점수는 월중에도 「지금까지
+         들어온 몫」으로 뜨지만(setTotalFormula), 등급은 숫자가 아니라 ★말★이라 「미흡」이
+         미완성으로 안 읽힌다. MS가 아직 안 열린 달은 ★등급 빈칸이 그대로 '집계 중' 표시★다.
+         ★시트의 등급 수식은 손대지 않는다★ — 26곳 원본 탭을 건드리지 않으려고 여기서 가린다.
+         개선율은 따로 안 본다 — QSC 점수가 있으면 개선율도 반드시 값이 있다(rateShown). */
+      total: scorePct(vTot.v),
+      totalGrade: (typeof vHyg.v === 'number' && typeof vCs.v === 'number') ? str(vTotG.v) : null,
       provisional: isProvisional(ym, tz),
       req: req, prog: prog, done: done, todo: todo, rate: rate,
       /* 개선율을 어떻게 냈는지 화면이 그대로 보여줄 수 있게 — '왜 90%인가'에 답이 있어야 한다 */
@@ -5445,7 +5459,7 @@ function recountSummary(sh, tz) {
     calc = impRate(judged);
     const pr = labelValue(lm, ['개선율']);
     if (pr.found && pr.row) {
-      try { grid(sh, pr.row, pr.col, 1, 1).setValue(calc.rate); } catch (e) { }
+      try { grid(sh, pr.row, pr.col, 1, 1).setValue(rateShown(sh, lm, calc.rate)); } catch (e) { }
     }
   }
   return {
@@ -6540,6 +6554,99 @@ function fixTotalFormulaRun(stores, apply) {
   }
   lines.push('매장 ' + done + '곳 · 고친 탭 ' + tabs + '개');
   return { ok: true, apply: !!apply, stores: done, tabs: tabs, lines: lines };
+}
+
+/* ★통합시트 종합 수식 갈아 끼우기★ — 매장 파일 쪽 fixTotalFormulaRun 의 형제 (2026-09-16)
+
+   대상은 통합시트 [데이터] 탭의 10·11·12월 ★종합점수 열★ 6~39행 — CA·CH·CO 204칸이다.
+   (열은 MONTH_COL 블록 +5 · 10월 74+5=79=CA · 11월 81+5=86=CH · 12월 88+5=93=CO)
+   ★1~9월은 손대지 않는다★ — 끝났거나 수기로 운영 중인 달이고 옛 산식이 맞다.
+   ★숨김 행도 그대로 쓴다★ — 2026-08-25 판이 CA6:CA39 전 행 동일이었다. 빈 행은 QSC가
+   비어 있어 새 수식이 알아서 빈칸을 낸다.
+
+   ★손으로 하지 말 것★ — 2026-08-25에 손으로 넣다 세 번 막혔다: ㉠숨은 열이라 화면에서 안
+   보이고 ㉡이름 상자로 가면 엉뚱한 행으로 튕기고 ㉢클립보드를 사람과 나눠 쓰다 `<`·`"`·`*`가
+   빠진 채 들어가 #ERROR! 가 났다. ★눈으로는 빠진 글자를 못 본다★.
+
+   ★한 열씩 setFormulas 로 쓴다★ — 칸마다 부르면 204번 왕복이라 45초에 끊긴다. 쓰는 범위가
+   ★종합점수 한 열뿐★이라 옆 칸 값을 지울 염려가 없다(여러 열을 한 범위로 쓰면 그렇게 된다).
+   쓴 뒤 ★다시 읽어 전수 대조한다★ — 방금 만든 객체에게 묻지 않는다. */
+function fixDashTotalRun(apply) {
+  if (!DASHBOARD_ID) return err('BAD_REQUEST', '통합시트 ID가 설정되어 있지 않습니다');
+  let sh;
+  try { sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET); }
+  catch (e) { return err('SERVER_ERROR', '통합시트를 열지 못했습니다: ' + String(e).slice(0, 60)); }
+  if (!sh) return err('NOT_FOUND', '통합시트 [' + DASHBOARD_SHEET + '] 탭을 찾지 못했습니다');
+
+  const ROW0 = 6, ROWN = 34;              // 6~39행
+  const MONTHS = [10, 11, 12];
+  const colA1 = function (n) {
+    let s = '';
+    while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+    return s;
+  };
+  /* 오프셋: +0 QSC점수 · +2 MS점수 · +4 개선현황(%) — MONTH_COL 주석과 같은 자리다 */
+  const want = function (row, base) {
+    const q = colA1(base) + row, m = colA1(base + 2) + row, r = colA1(base + 4) + row;
+    return '=IF(NOT(ISNUMBER(' + q + ')),"",' + q + '*0.6+IF(ISNUMBER(' + m + '),' + m +
+      ',0)*0.3+IF(ISNUMBER(' + r + '),' + r + ',1)*0.1)';
+  };
+  /* 빈칸·띄어쓰기 차이로 「다르다」고 세지 않는다 — 구글이 수식을 되돌려줄 때 공백을 넣는다 */
+  const norm = function (f) { return String(f == null ? '' : f).replace(/\s+/g, ''); };
+
+  const lines = ['=== 통합시트 종합 수식 ' + (apply ? '★적용★' : '미리보기') + ' ==='];
+  let diff = 0, same = 0, wrote = 0, bad = 0;
+
+  for (let k = 0; k < MONTHS.length; k++) {
+    const m = MONTHS[k];
+    const base = MONTH_COL[m];
+    const totCol = base + 5;
+    const a1 = colA1(totCol) + ROW0 + ':' + colA1(totCol) + (ROW0 + ROWN - 1);
+    const rng = sh.getRange(ROW0, totCol, ROWN, 1);
+    const now = rng.getFormulas();
+    const next = [];
+    let d = 0;
+    for (let i = 0; i < ROWN; i++) {
+      const w = want(ROW0 + i, base);
+      next.push([w]);
+      if (norm(now[i][0]) !== norm(w)) d++;
+    }
+    diff += d; same += (ROWN - d);
+    if (!apply) {
+      lines.push('· ' + m + '월 ' + a1 + ' — 고칠 칸 ' + d + ' / 이미 맞는 칸 ' + (ROWN - d));
+      if (k === 0) lines.push('   새 수식(첫 줄): ' + want(ROW0, base));
+      continue;
+    }
+    rng.setFormulas(next);
+    SpreadsheetApp.flush();
+    /* ★다시 읽어 34칸을 전수 대조★ */
+    const back = sh.getRange(ROW0, totCol, ROWN, 1).getFormulas();
+    let okc = 0;
+    for (let i = 0; i < ROWN; i++) if (norm(back[i][0]) === norm(next[i][0])) okc++;
+    wrote += ROWN; bad += (ROWN - okc);
+    lines.push((okc === ROWN ? '✓ ' : '★ ') + m + '월 ' + a1 + ' — 썼다 ' + ROWN +
+      ' · 대조 ' + okc + '/' + ROWN + (okc === ROWN ? '' : ' ★어긋난 칸이 있습니다★'));
+  }
+
+  if (!apply) {
+    lines.push('고칠 칸 ' + diff + ' / 이미 맞는 칸 ' + same + ' (합 ' + (diff + same) + ')');
+    lines.push('실제로 하려면 {apply:true} 를 붙여 다시 부르십시오 (지금은 아무것도 안 바꿨습니다)');
+  } else {
+    lines.push('쓴 칸 ' + wrote + ' · 어긋난 칸 ' + bad);
+    if (bad) lines.push('★어긋난 칸이 있습니다 — 시트를 직접 확인하십시오★');
+  }
+  return { ok: true, apply: !!apply, changed: diff, wrote: wrote, mismatch: bad, lines: lines };
+}
+
+function fnFixDashTotal(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+  const out = fixDashTotalRun(apply);
+  if (apply && out && out.ok) {
+    auditLog(ctx, 'admin.fixDashTotal', '', '성공', '',
+      '통합시트 종합 수식 ' + out.wrote + '칸 · 어긋남 ' + out.mismatch);
+  }
+  return out;
 }
 
 /* ★이름이 fnMonthClose 가 아니다★ (2026-09-04) — 그 이름은 이미 「그 달 개선요청 확정」
@@ -8695,12 +8802,31 @@ function impRate(recs) {
   const denom = issued - waived;
   return {
     issued: issued, done: done, waived: waived, denom: denom,
-    /* ★발행이 0건이면 null이다★ — '100%'가 아니라 '—'로 보여야 한다. 아직 점검하지 않은 달에
-       개선율 100%가 뜨면 매장은 그것을 성적으로 읽는다. 점수를 낼 때만 1로 친다
-       (월 탭 종합 수식·통합시트 CA열이 이미 `IF(개선율="",1,…)`로 그렇게 한다 — 세 곳이 같아야 한다).
+    /* ★발행이 0건이면 null이다★ — 여기서는 '아직 모른다'는 뜻일 뿐이다. 그것을 '—'로 보일지
+       '100%'로 보일지는 ★rateShown 이 QSC 점수를 보고 가른다★ (2026-09-16).
        분모가 0이면(발행은 있는데 전부 감점제외) 이 달에 따질 것이 없으므로 만점이 맞다. */
     rate: issued === 0 ? null : (denom > 0 ? Math.round((done / denom) * 100) / 100 : 1),
   };
+}
+
+/* 개선율 칸에 무엇을 보일 것인가 — ★빈칸의 두 가지 뜻을 가른다★ (2026-09-16 담당자 결정)
+
+     개선요청 0건인데 ★QSC 점수가 있다★  →  점검을 했고 지적이 없었다  →  ★100%★
+     개선요청 0건이고  QSC 점수도 없다    →  아직 점검을 안 한 달       →  빈칸('—')
+
+   종전에는 이 둘을 가를 방법이 없어 ★둘 다 빈칸★이었다. 그래서 계산은 만점(1)으로 치면서
+   표기만 '—'인 어긋남이 있었고, 2026-09-16에 「등급은 셋이 다 나와야」 규칙이 생기면서
+   ★지적이 하나도 없던 매장만 등급이 영영 안 뜨는★ 구멍이 됐다. QSC 점수가 있으면 점검을
+   한 것이라는 판별이 생겨 이제 가를 수 있다.
+
+   ⚠'아직 점검 안 한 달에 100%가 뜨면 매장이 그것을 성적으로 읽는다'는 종전 우려는 그대로
+     살아 있다 — 그래서 ★QSC 점수가 있을 때만★ 100%로 적는다. 이 조건을 빼지 말 것. */
+function rateShown(sh, lm, rate) {
+  if (rate != null) return rate;
+  try {
+    const q = labelValue(lm || labelMap(sh), L_QSC);
+    return (typeof q.v === 'number') ? 1 : null;
+  } catch (e) { return null; }
 }
 
 /* ---------- 개선요청 서식 (2610~) ----------  ★작업재개.md §1-8 확정 (2026-08-21)★
@@ -9164,9 +9290,30 @@ function renameScoreLabels(sh) {
 
 /* 종합점수 = QSC×0.6 + MS×0.3 + 개선율×0.1  (2026-08-21 사용자 확인)
 
-   ★개선율이 비면 1(100%)로 본다★ — 개선율은 완료÷요청이라 요청이 0건이면 빈칸이다.
-   그때 0으로 치면 지적이 하나도 없는 매장이 10%를 통째로 못 받아 오히려 손해를 본다.
-   (통합시트 CA열·impRate도 같은 규칙이다 — 세 곳이 갈라지면 안 된다)
+   ★2026-09-16 담당자 결정 — 「채워진 것부터 더해 간다」★ (종전은 QSC·MS 둘 다 있어야 떴다)
+     매장이 월중에 보는 종합은 60+30+10 중 ★지금까지 들어온 몫★이다. MS가 비면 그 30점이
+     아직 안 들어온 것이지 0점을 받은 것이 아니다 — 숫자는 54 → 64 → 82 로 올라가기만 한다.
+     종전처럼 빈칸으로 두면 매장은 QSC 90점만 보고 그것을 제 성적으로 기억했다가, 말일에
+     종합 82가 뜨면 「90인데 왜 82냐」고 묻는다. 기대치를 애초에 만들지 않는 쪽으로 바꿨다.
+
+   ★★2026-09-04에 「사고」로 보고 막았던 바로 그 자리다 — 되돌리지 말 것★★
+     그때 문제 삼은 숫자(QSC 90점에 종합 64점)를 이제는 ★일부러★ 띄운다. 달라진 것은
+     숫자가 아니라 ①등급을 안 붙여 미완성임을 말하고 ②매장이 배점(60/30/10)을 안다는 것이다.
+     「MS가 비면 종합이 틀린다」는 종전 주석을 보고 COUNT 판정으로 되돌리면 이 결정이 깨진다.
+
+   ★등급은 셋이 다 나와야 붙인다★ — 등급은 숫자가 아니라 말이라 「미흡」이 미완성으로 안
+     읽힌다. 등급 빈칸이 그대로 「아직 집계 중」이라는 표시가 된다. 등급 수식은 시트에 있어
+     손대지 않고 ★화면에서 가린다★ (store.get 의 totalGrade · dashboard 의 partial).
+
+   칸마다 대접이 다르다 — 한 줄로 요약하면:
+     QSC 가 없으면   ★종합도 빈칸★   점검을 안 한 달이다. 여기서 막지 않으면 아래 「개선율이
+                                    비면 1」이 그대로 먹혀 ★점검도 안 한 매장에 종합 10점★이 뜬다
+     MS 가 없으면    0 으로 친다      아직 안 들어온 몫이다
+     개선율이 없으면  1(100%)로 친다   완료÷요청이라 요청이 0건이면 빈칸인데, 0으로 치면 지적이
+                                    하나도 없는 매장이 10%를 통째로 못 받아 오히려 손해를 본다
+                                    (2026-09-16부터 점검한 달은 개선율 칸에 100%를 적으므로
+                                     이 분기는 안전망이다 — rateShown 참조)
+   (통합시트 CA·CH·CO 열·impRate도 같은 규칙이다 — 세 곳이 갈라지면 안 된다)
 
    ★칸을 라벨로 찾는다★ — 파일마다 열이 다를 수 있다. 하나라도 못 찾으면 손대지 않는다. */
 function setTotalFormula(sh) {
@@ -9178,15 +9325,13 @@ function setTotalFormula(sh) {
     const cR = labelValue(lmF, L_RATE);
     if (!(cH.found && cC.found && cT.found && cR.found)) return false;
     const a1 = function (pv) { return grid(sh, pv.row, pv.col, 1, 1).getA1Notation(); };
-    /* ★QSC·MS 둘 다 있어야 계산한다★ (2026-09-04) — 종전은 `=0`, 즉 ★둘 다 비었을 때만★
-       빈칸이었다. MS만 비면 빈칸이 산술에서 0으로 취급돼 그 30%가 통째로 0이 된 값이
-       매장 화면에 뜬다(QSC 90점이면 종합 64점). MS를 월말에 여는 규칙과 겹치면
-       그 틀린 숫자가 ★한 달 내내★ 보인다.
-       ★개선율은 빈칸이어도 계산한다★ — 개선요청 0건이면 rate 가 null 이라 칸이 비는데
-       (recountSummary), 그건 잘한 매장이다. 빈칸은 만점으로 친다.
-       통합시트(CA·CH·CO)가 이미 쓰는 규칙과 같아진다. */
-    const f = '=IF(COUNT(' + a1(cH) + ',' + a1(cC) + ')<2,"",' +
-      a1(cH) + '*0.6+' + a1(cC) + '*0.3+IF(' + a1(cR) + '="",1,' + a1(cR) + ')*0.1)';
+    /* ★COUNT 로 한꺼번에 세지 않는다★ — 세 칸을 서로 다르게 대접해야 하기 때문이다
+       (QSC 없으면 빈칸 · MS 없으면 0 · 개선율 없으면 1). ISNUMBER 로 하나씩 본다.
+       ★빈칸을 `=""` 로 보지 않고 ISNUMBER 로 보는 이유★ — 이 칸들은 수식이 낳은 빈칸일 수
+       있고, 그때 `=""` 는 참이지만 글자가 들어 있어도 참이다. 숫자인지를 직접 묻는 편이 맞다. */
+    const f = '=IF(NOT(ISNUMBER(' + a1(cH) + ')),"",' +
+      a1(cH) + '*0.6+IF(ISNUMBER(' + a1(cC) + '),' + a1(cC) + ',0)*0.3+' +
+      'IF(ISNUMBER(' + a1(cR) + '),' + a1(cR) + ',1)*0.1)';
     grid(sh, cT.row, cT.col, 1, 1).setFormula(f);
     return true;
   } catch (e) { return false; }
@@ -9504,6 +9649,9 @@ function fnMonthClose(ctx, payload) {
   }
 
   const calc = impRate(judged);
+  /* 0건이어도 점검을 한 달이면 100%다 — 시트·화면·확정이 ★같은 값★을 써야 한다 (rateShown).
+     여기서 한 번 갈아 두면 아래의 안내문·시트 기록·응답이 전부 같은 값을 쓴다. */
+  calc.rate = rateShown(sh, null, calc.rate);
   const lastDue = pending.reduce(function (a, x) { return x.due > a ? x.due : a; }, '');
   plan.push('개선율 ' + (calc.rate == null ? '—' : Math.round(calc.rate * 100) + '%') +
     ' (발행 ' + calc.issued + ' · 완료 ' + calc.done + ' · 제외 ' + calc.waived + ' · 분모 ' + calc.denom + ')');

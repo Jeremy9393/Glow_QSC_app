@@ -72,7 +72,10 @@ const SpreadsheetApp = { openById: function () { return ss; }, flush: function (
 const Utilities = { formatDate: function () { return T; } };
 const LockService = { getScriptLock: function () { return { tryLock: function () { return true; }, releaseLock: function () {} }; } };
 const PROPS = { setProperty: function (k, v) { props[k] = v; } };
-const MC_PREFIX = 'MC:', L_RATE = ['개선율'];
+/* L_QSC 는 rateShown 이 쓴다 — ★이 harness 의 labelValue 는 .v 를 안 주므로★ 0건일 때
+   100%로 올리는 갈래는 여기서 타지 않는다(그쪽은 test/total-formula-test.py 가 본다).
+   여기서 필요한 것은 fnMonthClose 가 rateShown 을 불러도 ★멈추지 않는다★는 것뿐이다. */
+const MC_PREFIX = 'MC:', L_RATE = ['개선율'], L_QSC = ['QSC점수'];
 function err(code, msg) { return { ok: false, code: code, error: msg }; }
 function validYm(ym) { return /^\d{4}$/.test(ym); }
 function normStore(s) { return String(s || '').trim(); }
@@ -91,7 +94,7 @@ function labelMap() { return {}; }
 function labelValue() { return { found: true, row: 9, col: 9 }; }
 function lockMonthTab(s, rows) { locked = rows; return { ok: true }; }
 function dropStoreCache() {}
-''' + cut('impJudge') + '\n' + cut('impRate') + '\n' + cut('impStateFormula') + '\n' + cut('fnMonthClose') + r'''
+''' + cut('impJudge') + '\n' + cut('impRate') + '\n' + cut('rateShown') + '\n' + cut('impStateFormula') + '\n' + cut('fnMonthClose') + r'''
 
 let pass = 0, fail = 0;
 function ok(name, cond, info) {

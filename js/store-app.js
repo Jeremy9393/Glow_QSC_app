@@ -600,8 +600,12 @@
       const td1 = document.createElement('td');
       td1.className = 'r'; td1.textContent = num1(r[1]);
       /* 아직 안 들어온 점수를 관리자에게만 미리 보여준다. 점수 칸을 채우지 않고 옆에 붙인다 —
-         '확정된 값'과 '아직 아닌 값'이 같은 자리에 같은 모양으로 있으면 구별이 안 된다. */
-      if (r[4] != null && r[1] == null) {
+         '확정된 값'과 '아직 아닌 값'이 같은 자리에 같은 모양으로 있으면 구별이 안 된다.
+         ★`r[1] == null` 조건을 뺐다★ (2026-09-16) — 종합점수가 「지금까지 들어온 몫」으로
+         바뀌어 월중에도 숫자가 있다(54). 종전 조건이면 ★관리자가 MS까지 넣은 82를 못 본다★.
+         두 값이 나란히 보이는 것이 맞다: 왼쪽 54 = 매장이 지금 보는 값 · 오른쪽 82 = MS 반영 후.
+         서버는 달이 아직 안 끝났을 때만 msLive·totalLive 를 보낸다(attachAdminLive). */
+      if (r[4] != null) {
         const lv = document.createElement('span');
         lv.className = 'liveTag';
         lv.textContent = '잠정 ' + num1(r[4]);

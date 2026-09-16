@@ -10,9 +10,16 @@
   실제로 이티에프 베이커리 더현대 2612 가 그 상태였다(시트에는 0.96 인데 화면은 빈칸).
   10월이면 26곳 전부가 월중 내내 「점검 안 한 매장」으로 보였을 것이다.
 
+★2026-09-16 규칙이 바뀌었다 — 종합은 「채워진 것부터 더해 간다」★ (담당자 결정)
+  종합 수식이 =IF(NOT(ISNUMBER(QSC)),"",QSC*0.6+IF(ISNUMBER(MS),MS,0)*0.3+…) 로 바뀌어
+  ★QSC 만 있어도 종합이 숫자로 나온다★. 그래서
+    ① partial 판정을 종합 칸이 아니라 ★QSC·MS 유무★로 한다 (안 그러면 partial 이 영영 안 잡힌다)
+    ② partial 일 때 ★종합점수는 살리고 등급만 가린다★ — 등급은 말이라 「미흡」이 미완성으로
+       안 읽힌다. 등급 빈칸이 그대로 「아직 집계 중」 표시가 된다
+
 보는 것:
-  · QSC 만 있고 종합이 없을 때 ★QSC 가 살아 있는가★ (status=partial)
-  · 그때 종합·등급은 비는가 (MS 가 안 열렸으니 종합은 아직 없는 것이 맞다)
+  · QSC 만 있을 때 ★QSC 가 살아 있는가★ (status=partial)
+  · 그때 ★종합은 살리고 등급만 비우는가★
   · 아무것도 없을 때만 none 이고 그때는 전부 비우는가
   · 둘 다 있고 종합도 있으면 done 인가
   · 0점을 미점검으로 오해하지 않는가 (0도 점수다)
@@ -69,14 +76,16 @@ function ok(name, got, want) {
   else { fail++; console.log('  ✗ ' + name + '\n      나온 값 ' + g + '\n      바란 값 ' + w); }
 }
 
-console.log('── ★월중: QSC 만 있고 MS·종합은 아직★ ──');
-var r = run({ qsc: 0.96, qscGrade: '우수', improve: 0 });
+console.log('── ★월중: QSC 만 있고 MS 는 아직 — 종합은 「들어온 몫」으로 뜬다★ ──');
+/* 시트에는 0.96*0.6 + 0(MS 없음) + 0*0.1 = 0.576 이 들어 있고, 등급 수식은 그것을 보고
+   「미흡」을 낸다. ★그 등급을 화면에 내보내지 않는 것이 이 시험의 핵심★ */
+var r = run({ qsc: 0.96, qscGrade: '우수', improve: 0, total: 0.576, grade: '미흡' });
 ok('[1-1] status = partial', r.status, 'partial');
 ok('[1-2] ★QSC 가 살아 있다★', r.qsc, 96);
 ok('[1-3] QSC 등급도 살아 있다', r.qscGrade, '우수');
 ok('[1-4] MS 는 아직 없다', r.cs, null);
-ok('[1-5] 종합은 비운다 (MS 가 안 열렸다)', r.total, null);
-ok('[1-6] 종합 등급도 비운다', r.grade, null);
+ok('[1-5] ★종합은 살린다 — 60+30+10 중 지금까지 들어온 몫★', r.total, 57.6);
+ok('[1-6] ★종합 등급은 가린다 — 셋이 다 나와야 붙인다★', r.grade, null);
 ok('[1-7] 개선율은 살아 있다', r.improve, 0);
 
 console.log('── 말일 뒤: 둘 다 있고 종합도 나왔다 ──');
@@ -97,6 +106,15 @@ r = run({ cs: 0.9, csGrade: '우수' });
 ok('[4-1] partial', r.status, 'partial');
 ok('[4-2] MS 가 살아 있다', r.cs, 90);
 ok('[4-3] QSC 는 없다', r.qsc, null);
+/* ★QSC 가 없으면 종합도 빈칸이다★ — 점검을 안 한 달이다. 여기서 종합이 뜨면
+   「개선율 빈칸 = 만점」 규칙이 그대로 먹혀 점검도 안 한 매장에 10점이 붙는다 */
+ok('[4-4] 종합도 등급도 없다', [r.total, r.grade], [null, null]);
+
+console.log('── ★QSC·MS 둘 다 있으면 그때 등급이 붙는다★ ──');
+r = run({ qsc: 0.9, qscGrade: '우수', cs: 0.6, csGrade: '미흡', improve: 1, total: 0.82, grade: '양호' });
+ok('[4-5] done', r.status, 'done');
+ok('[4-6] 종합 82', r.total, 82);
+ok('[4-7] ★이때만 등급이 나간다★', r.grade, '양호');
 
 console.log('── ★0점도 점수다★ ──');
 r = run({ qsc: 0, qscGrade: '미흡', cs: 0, csGrade: '미흡', improve: 0, total: 0, grade: '미흡' });
