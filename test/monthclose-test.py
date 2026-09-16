@@ -7,7 +7,9 @@
   · 말일 23시 ★전★에는 안 열리고, 23시가 되면 열리는가 (경계가 정확한가)
   · 지난 달은 즉시 열리는가 (늦게 넣는 자료를 숨길 이유가 없다)
   · 2월·윤년·31일 달의 말일을 맞게 아는가
-  · 종합 수식이 ★QSC·MS 둘 다 있어야★ 계산하게 바뀌었는가 (개선율 빈칸은 만점 유지)
+  · 월말 반영이 고쳐 놓는 종합 수식이 ★옛 규칙으로 되돌아가지 않았는가★
+    (2026-09-16 「채워진 것부터 더해 간다」로 바뀌었다 — 뜻을 실제로 계산해 보는 시험은
+     ★test/total-formula-test.py★ 가 한다. 여기서는 모양만 지킨다)
 """
 import io, re, subprocess, sys
 from pathlib import Path
@@ -129,12 +131,15 @@ ok('prevYm 1월 → 지난해 12월', prevYm('2026-01'), '2025-12');
 ok('prevYm 3월 → 2월', prevYm('2026-03'), '2026-02');
 
 // ── ④ 종합 수식 ─────────────────────────────────────────────
-console.log('\n④ 종합점수 수식 — QSC·MS 둘 다 있어야');
+/* ★2026-09-16 규칙이 바뀌었다★ — 「QSC·MS 둘 다 있어야」에서 「채워진 것부터 더해 간다」로.
+   수식의 뜻을 실제로 계산해 보는 시험은 ★test/total-formula-test.py★ 가 한다.
+   여기서는 월말 반영이 고쳐 놓는 수식이 ★옛 규칙으로 되돌아가지 않았는지★만 지킨다. */
+console.log('\n④ 종합점수 수식 — 채워진 것부터 더해 간다 (뜻은 total-formula-test.py 가 본다)');
 setTotalFormula(SH);
-ok('둘 다 없을 때가 아니라 ★둘 다 있어야★ 계산', /COUNT\(E3,G3\)<2/.test(FORMULA), true);
-ok('옛 규칙(=0)이 남아 있지 않다', /COUNT\([^)]*\)=0/.test(FORMULA), false);
-ok('가중치는 그대로', /E3\*0\.6\+G3\*0\.3/.test(FORMULA), true);
-ok('★개선율 빈칸은 만점★ (0건인 매장을 벌하지 않는다)', /IF\(H9="",1,H9\)\*0\.1/.test(FORMULA), true);
+ok('★옛 COUNT 규칙이 되살아나지 않았다★', /COUNT\(/.test(FORMULA), false);
+ok('QSC 가 없으면 종합도 빈칸', /^=IF\(NOT\(ISNUMBER\(E3\)\),""/.test(FORMULA), true);
+ok('가중치는 그대로 · MS 가 비면 0', /E3\*0\.6\+IF\(ISNUMBER\(G3\),G3,0\)\*0\.3/.test(FORMULA), true);
+ok('★개선율 빈칸은 만점★ (0건인 매장을 벌하지 않는다)', /IF\(ISNUMBER\(H9\),H9,1\)\*0\.1/.test(FORMULA), true);
 
 console.log('\n' + (fail ? '✗ ' + fail + '개 실패 · ' : '✓ 전부 통과 · ') + pass + '개 통과');
 process.exit(fail ? 1 : 0);

@@ -12,7 +12,10 @@ const SpreadsheetApp = { openById: function () { return ss; }, flush: function (
 const Utilities = { formatDate: function () { return T; } };
 const LockService = { getScriptLock: function () { return { tryLock: function () { return true; }, releaseLock: function () {} }; } };
 const PROPS = { setProperty: function (k, v) { props[k] = v; } };
-const MC_PREFIX = 'MC:', L_RATE = ['개선율'];
+/* L_QSC 는 rateShown 이 쓴다 — ★이 harness 의 labelValue 는 .v 를 안 주므로★ 0건일 때
+   100%로 올리는 갈래는 여기서 타지 않는다(그쪽은 test/total-formula-test.py 가 본다).
+   여기서 필요한 것은 fnMonthClose 가 rateShown 을 불러도 ★멈추지 않는다★는 것뿐이다. */
+const MC_PREFIX = 'MC:', L_RATE = ['개선율'], L_QSC = ['QSC점수'];
 function err(code, msg) { return { ok: false, code: code, error: msg }; }
 function validYm(ym) { return /^\d{4}$/.test(ym); }
 function normStore(s) { return String(s || '').trim(); }
@@ -68,12 +71,18 @@ function impRate(recs) {
   const denom = issued - waived;
   return {
     issued: issued, done: done, waived: waived, denom: denom,
-    /* ★발행이 0건이면 null이다★ — '100%'가 아니라 '—'로 보여야 한다. 아직 점검하지 않은 달에
-       개선율 100%가 뜨면 매장은 그것을 성적으로 읽는다. 점수를 낼 때만 1로 친다
-       (월 탭 종합 수식·통합시트 CA열이 이미 `IF(개선율="",1,…)`로 그렇게 한다 — 세 곳이 같아야 한다).
+    /* ★발행이 0건이면 null이다★ — 여기서는 '아직 모른다'는 뜻일 뿐이다. 그것을 '—'로 보일지
+       '100%'로 보일지는 ★rateShown 이 QSC 점수를 보고 가른다★ (2026-09-16).
        분모가 0이면(발행은 있는데 전부 감점제외) 이 달에 따질 것이 없으므로 만점이 맞다. */
     rate: issued === 0 ? null : (denom > 0 ? Math.round((done / denom) * 100) / 100 : 1),
   };
+}
+function rateShown(sh, lm, rate) {
+  if (rate != null) return rate;
+  try {
+    const q = labelValue(lm || labelMap(sh), L_QSC);
+    return (typeof q.v === 'number') ? 1 : null;
+  } catch (e) { return null; }
 }
 function impStateFormula(c, r) {
   const A = function (col) { return '$' + colLetter(col) + r; };
@@ -166,6 +175,9 @@ function fnMonthClose(ctx, payload) {
   }
 
   const calc = impRate(judged);
+  /* 0건이어도 점검을 한 달이면 100%다 — 시트·화면·확정이 ★같은 값★을 써야 한다 (rateShown).
+     여기서 한 번 갈아 두면 아래의 안내문·시트 기록·응답이 전부 같은 값을 쓴다. */
+  calc.rate = rateShown(sh, null, calc.rate);
   const lastDue = pending.reduce(function (a, x) { return x.due > a ? x.due : a; }, '');
   plan.push('개선율 ' + (calc.rate == null ? '—' : Math.round(calc.rate * 100) + '%') +
     ' (발행 ' + calc.issued + ' · 완료 ' + calc.done + ' · 제외 ' + calc.waived + ' · 분모 ' + calc.denom + ')');
