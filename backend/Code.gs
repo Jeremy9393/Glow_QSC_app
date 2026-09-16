@@ -188,7 +188,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v134', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v137', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -373,6 +373,10 @@ function actionTable() {
     'admin.photoProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnPhotoProbe },
     /* 개선요청 표가 몇 줄까지 준비돼 있는지 ★읽기만★ 한다 */
     'admin.impProbe':     { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnImpProbe },
+    /* 2610~ 원본 탭을 통째로 떠서 26곳을 나란히 비교한다 — ★읽기만★ (2026-09-16) */
+    'admin.tplProbe':     { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnTplProbe },
+    /* 원본 탭 통일 — 제목·차기 월 목표·떠 있는 사진·표 길이·옛 탭 이름 (기본 미리보기) */
+    'admin.tplTidy':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnTplTidy },
     'admin.renameStore':  { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnRenameStore },
     /* 관리자 시트 탭별 행 수·머리글 — ★읽기만★ (MS 통합 설계용) */
     'admin.sheetProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnSheetProbe },
@@ -7283,6 +7287,283 @@ function fnRenameStore(ctx, payload) {
   };
 }
 
+/* ═══ 2610~ 원본 탭 훑어보기 (admin.tplProbe · 2026-09-16) ════════════════════════
+   담당자 지적: *"모든 시트에 2610부터 쓸 원본 체크해봐 · 통일이 안됐어 · 어떤건 칸이
+   채워져있고 어떤건 차기월목표칸이 따로 주어져있고 · 빈칸이랑 사용안하는 표 없는지"*
+
+   ★아무것도 바꾸지 않는다★ — 26곳을 나란히 놓고 「어디가 다른가」만 본다.
+   고치는 것은 이미 있는 admin.dropGoal(차기 월 목표)·store.template(원본 다시 뜨기)이 한다.
+
+   ★왜 새로 만들었나★ — 기존 probe 셋은 각자 한 군데만 본다:
+     admin.impProbe    개선요청 표의 줄 수만          admin.rateProbe  개선율 한 줄만
+     admin.sheetProbe  관리자 시트만 (매장 파일이 아니다)
+   「쓰지 않는 표가 남아 있는가」는 ★탭을 통째로 떠 봐야★ 알 수 있다. 그래서 칸을 다 훑는다.
+
+     await Api.call('admin.tplProbe', {page:0})          ← 10곳씩 (0·1·2)
+     await Api.call('admin.tplProbe', {store:'제주당'})    ← 한 곳
+
+   ★훑는 범위를 A1:Z60 으로 묶었다★ — 원본 탭은 머리글 10줄 + 개선요청 표 36줄이 전부다.
+   그 밖에 무엇이 있으면 그것이 곧 「안 쓰는 표」이므로, 시트가 스스로 말하는 맨 끝 줄·열도 함께 낸다
+   (끝이 Z60 밖이면 훑은 범위 밖에 뭔가 있다는 뜻이다).
+   ★값은 40자에서 자른다★ — 26곳을 한 응답에 담아야 해서다. 수식은 앞에 ƒ 를 붙여 값과 가른다. */
+const TPL_SCAN_ROWS = 60;
+const TPL_SCAN_COLS = 26;
+
+function tplScanIn(ss) {
+  const out = { 탭: [] };
+  ss.getSheets().forEach(function (sh) {
+    const nm = sh.getName().trim();
+    if (!TPL_TAB_RE.test(nm)) return;          // 원본·개편안 계열만 (월 탭은 안 본다)
+    const one = {
+      이름: nm, 지금쓰는원본: nm === TPL_NEW, 숨김: sh.isSheetHidden(),
+      크기: sh.getMaxRows() + '×' + sh.getMaxColumns(),
+      끝: (sh.getLastRow() || 0) + '×' + (sh.getLastColumn() || 0),
+    };
+    try {
+      const nR = Math.min(sh.getMaxRows(), TPL_SCAN_ROWS);
+      const nC = Math.min(sh.getMaxColumns(), TPL_SCAN_COLS);
+      const rng = sh.getRange(1, 1, nR, nC);
+      const vs = rng.getDisplayValues();
+      const fs = rng.getFormulas();
+      const cells = [];
+      for (let r = 0; r < nR; r++) {
+        for (let c = 0; c < nC; c++) {
+          const f = String(fs[r][c] == null ? '' : fs[r][c]);
+          const v = String(vs[r][c] == null ? '' : vs[r][c]).trim();
+          if (!f && !v) continue;
+          cells.push(colLetter(c + 1) + (r + 1) + '=' + (f ? ('ƒ' + f) : v).slice(0, 40));
+        }
+      }
+      one.칸 = cells;
+      one.칸수 = cells.length;
+      one.병합 = rng.getMergedRanges().map(function (x) { return x.getA1Notation(); });
+    } catch (e) { one.오류 = String(e).slice(0, 70); }
+    /* ★떠 있는 사진은 칸 값이 아니라 위 훑기에 안 잡힌다★ — clearContent 로 지워지지 않아
+       원본에 남는다(2026-09-10 A② 와 같은 뿌리). 몇 장이 어느 칸에 붙어 있는지만 센다. */
+    try {
+      one.사진 = sh.getImages().map(function (im) {
+        try { const a = im.getAnchorCell(); return colLetter(a.getColumn()) + a.getRow(); }
+        catch (e2) { return '?'; }
+      });
+    } catch (e) { one.사진 = ['못 읽음']; }
+    try { const g = goalBoxIn(sh); one['차기 월 목표'] = g ? (colLetter(g.col) + g.row) : '없음'; }
+    catch (e) { one['차기 월 목표'] = '못 읽음'; }
+    try {
+      const gg = impGeo(sh);
+      one['개선요청 표'] = (gg.isNew ? '새' : '★옛★') + ' ' + gg.row0 + '~' + (gg.endRow || '?');
+    } catch (e) { one['개선요청 표'] = '못 읽음'; }
+    out.탭.push(one);
+  });
+  return out;
+}
+
+/* ═══ 2610~ 원본 탭 통일하기 (admin.tplTidy · 2026-09-16) ═════════════════════════
+   담당자: *"모든 시트에 2610부터 쓸 원본 체크해봐 · 통일이 안됐어 … 원본으로 쓸 수 있도록
+   빈칸이랑 사용안하는 표 없는지 같이 체크해서 수정해"*
+
+   admin.tplProbe 로 26곳을 훑어 보니 네 가지가 제각각이었다(2026-09-16 실측):
+     ① 개선요청 표 길이  23~36줄 — ★유일하게 10월에 실제로 터질 수 있는 것★
+     ② 떠 있는 사진      7곳 22장 (원본에 남아 새 달로 복제된다)
+     ③ 차기 월 목표 표   25곳 (그중 3곳은 지난 달 목표 글까지 들어 있다)
+     ④ D2 제목          「7월」7곳 ·「8월」18곳 (원본인데 달이 박혀 있다)
+   ②③④ 는 makeMonthTabIn 이 새 달을 만들며 알아서 고치므로 10월은 안전하다. 그래도 고치는 이유는
+   ★원본은 사람이 열어 보는 자리★라서다 — 원본이 8월이면 다음 사람이 그것을 원본으로 믿지 못한다.
+
+   ★①만은 자동으로 안 고쳐진다★ — upgradeMonthTab 은 지금 길이 그대로 서식만 편다.
+   그리고 제출 코드는 표보다 많으면 ★늘리지 않고 잘라 버린다★:
+       const room = lastRow - row + 1;  const list = expanded.slice(0, room);
+   그래서 23줄짜리 매장은 24건째부터 조용히 사라진다.
+
+   ★줄이지 않는다 — 늘리기만 한다★ (담당자 *"아무거나 통일해도되지않아?"* → 지금 최대인 36줄에 맞춤)
+   그래서 이 도구로 잃는 기록이 없다. 이미 47행인 금종제과는 건드리지 않는다.
+
+     await Api.call('admin.tplTidy', {page:0})             ← ★미리보기★ (기본 · 아무것도 안 바꾼다)
+     await Api.call('admin.tplTidy', {page:0, apply:true}) ← 10곳 적용 (page 0·1·2)
+     await Api.call('admin.tplTidy', {store:'제주당'})       ← 한 곳
+
+   ★대상은 지금 쓰는 원본 탭(0QSC현황(원본_2610~)) 하나뿐이다★ — 월 탭은 손대지 않는다.
+   옛 원본 탭은 ★지우지 않고 이름만★ 「(구) …」로 바꾼다 (담당자 선택 · 2026-08-25 인증 시트와 같은 방식). */
+const TPL_END_ROW = 47;            // 표 끝 행 = 본문 36줄 (row0 12 기준)
+
+function tplTidyIn(ss, apply) {
+  const lines = [];
+  const sh = ss.getSheetByName(TPL_NEW);
+  if (!sh) {
+    lines.push('✗ ' + TPL_NEW + ' 탭이 없습니다 — 먼저 store.template 을 돌리십시오');
+  } else {
+    /* ④ D2 제목 — 「8월 QSC 현황」 → 「월 QSC 현황」 (makeMonthTabIn 이 이 자리를 찾는 규칙과 같다) */
+    try {
+      const t2 = grid(sh, 2, 4, 1, 1);
+      const cur = t2 ? String(t2.getValue() || '') : '';
+      if (/^\s*\d{1,2}\s*월/.test(cur)) {
+        const want = cur.replace(/^\s*\d{1,2}\s*월/, '월');
+        if (!apply) lines.push('  · D2 제목 「' + cur + '」 → 「' + want + '」');
+        else { t2.setValue(want); lines.push('  ✓ D2 제목 → 「' + want + '」'); }
+      } else {
+        lines.push('  · D2 제목 「' + cur + '」 — 달이 안 박혀 있습니다 (그대로)');
+      }
+    } catch (e) { lines.push('  ✗ D2 제목: ' + String(e).slice(0, 50)); }
+
+    /* ③ 차기 월 목표 — 알맹이는 dropGoalBox 하나뿐이다(두 벌로 만들면 확인한 쪽과 도는 쪽이 갈라진다) */
+    try {
+      const box = goalBoxIn(sh);
+      if (!box) lines.push('  · 차기 월 목표 — 표 없음');
+      else if (!apply) {
+        const val = box.shown.filter(function (s) {
+          const t = s.split('|')[1];
+          return t && t.trim();
+        });
+        lines.push('  · 차기 월 목표 ' + colLetter(box.col) + box.row + ' 표를 지울 예정' +
+          (val.length ? ' ★안에 적힌 글 ' + val.length + '줄이 함께 지워집니다: ' + val.join(' / ').slice(0, 120) + '★' : ' (비어 있음)'));
+      } else {
+        const r = dropGoalBox(sh);
+        lines.push(r.hit ? ('  ✓ 차기 월 목표 ' + r.a1 + ' 비웠습니다') : ('  · 차기 월 목표 — ' + r.why));
+      }
+    } catch (e) { lines.push('  ✗ 차기 월 목표: ' + String(e).slice(0, 50)); }
+
+    /* ② 떠 있는 사진 — ★머리글 행부터 아래만★ 지운다 (머리글 위 로고·안내 그림은 건드리지 않는다.
+       clearMonthBody 와 같은 규칙이되, 거기는 본문 첫 줄(12)부터라 머리글 행(11)에 닻을 내린
+       사진을 놓친다 — 실측에서 이티에프 베이커리 부산역이 O11 이었다). */
+    try {
+      const c0 = impCols(sh);
+      const from = (c0 && c0.ok && c0.hr) ? c0.hr : 11;
+      const imgs = sh.getImages();
+      const hit = [];
+      for (let i = 0; i < imgs.length; i++) {
+        let a = null;
+        try { a = imgs[i].getAnchorCell(); } catch (e) { continue; }   // 모르는 것은 지우지 않는다
+        if (a.getRow() < from) continue;
+        hit.push({ im: imgs[i], at: colLetter(a.getColumn()) + a.getRow() });
+      }
+      if (!hit.length) lines.push('  · 떠 있는 사진 없음');
+      else if (!apply) lines.push('  · 떠 있는 사진 ' + hit.length + '장을 지울 예정 (' +
+        hit.map(function (x) { return x.at; }).join(', ') + ') · ' + from + '행부터만 봅니다');
+      else {
+        let gone = 0;
+        hit.forEach(function (x) { try { x.im.remove(); gone++; } catch (e) { } });
+        lines.push('  ' + (gone === hit.length ? '✓' : '★') + ' 떠 있는 사진 ' + gone + '/' + hit.length + '장 지웠습니다');
+      }
+    } catch (e) { lines.push('  ✗ 떠 있는 사진: ' + String(e).slice(0, 50)); }
+
+    /* ① 표 길이 — 요약의 =COUNTA(J12:J34) 가 표 끝을 정한다(tableEndRow). 그 끝만 갈아 끼우고
+       upgradeMonthTab 으로 서식·상태 수식·검수 목록·체크박스를 새 끝까지 편다.
+       ★수식이 든 칸만 하나씩 setFormula 한다★ — 범위째 setFormulas 하면 수식 없는 칸이 지워진다. */
+    try {
+      const oldEnd = tableEndRow(sh);
+      const c0 = impCols(sh);
+      const hr = (c0 && c0.ok && c0.hr) ? c0.hr : 11;
+      if (!oldEnd) lines.push('  ✗ 표 끝을 못 읽었습니다 (요약의 COUNTA 수식 확인 필요) — 길이는 그대로');
+      else if (oldEnd === TPL_END_ROW) lines.push('  · 표 끝 ' + oldEnd + '행 — 이미 맞습니다');
+      else if (oldEnd > TPL_END_ROW) lines.push('  · 표 끝 ' + oldEnd + '행 — ★이미 더 깁니다. 줄이지 않습니다★');
+      else {
+        /* 머리글 위(요약 구역)에서 끝 행 번호를 물고 있는 수식을 찾는다 */
+        const rng = grid(sh, 1, 1, hr, sh.getMaxColumns());
+        const fs = rng ? rng.getFormulas() : [];
+        const edits = [];
+        for (let r = 0; r < fs.length; r++) {
+          for (let c = 0; c < fs[r].length; c++) {
+            const f = String(fs[r][c] == null ? '' : fs[r][c]);
+            if (!f) continue;
+            const nf = f.replace(/([A-Z]{1,3})(\d{1,4})/g, function (m, col, num) {
+              return (Number(num) === oldEnd) ? (col + TPL_END_ROW) : m;
+            });
+            if (nf !== f) edits.push({ row: r + 1, col: c + 1, from: f, to: nf });
+          }
+        }
+        if (!edits.length) lines.push('  ✗ 표 끝 ' + oldEnd + '행을 가리키는 수식을 못 찾았습니다 — 길이는 그대로');
+        else if (!apply) {
+          lines.push('  · 표 끝 ' + oldEnd + '행 → ' + TPL_END_ROW + '행 (본문 ' + (oldEnd - 11) + '줄 → ' +
+            (TPL_END_ROW - 11) + '줄) · 고칠 수식 ' + edits.length + '칸');
+          edits.forEach(function (e) {
+            lines.push('      ' + colLetter(e.col) + e.row + ': ' + e.to.slice(0, 60));
+          });
+        } else {
+          edits.forEach(function (e) { grid(sh, e.row, e.col, 1, 1).setFormula(e.to); });
+          SpreadsheetApp.flush();
+          const back = tableEndRow(sh);
+          if (back !== TPL_END_ROW) lines.push('  ★수식은 썼는데 표 끝이 ' + back + '행으로 읽힙니다 — 시트를 직접 확인하십시오★');
+          else {
+            const up = upgradeMonthTab(sh);
+            lines.push(up.ok
+              ? ('  ✓ 표 끝 ' + oldEnd + ' → ' + TPL_END_ROW + '행 · 수식 ' + edits.length + '칸 · 서식 폄 ✓')
+              : ('  ★표 끝은 ' + TPL_END_ROW + '로 바꿨는데 서식을 못 폈습니다: ' + up.why + '★'));
+          }
+        }
+      }
+    } catch (e) { lines.push('  ✗ 표 길이: ' + String(e).slice(0, 60)); }
+  }
+
+  /* ⑤ 안 쓰는 옛 원본 탭 — ★지우지 않는다★ (담당자 선택). 이름에 「(구) 」만 붙인다.
+     ★이름을 바꿔도 코드에 걸리는 곳이 없다★ — 이 탭들을 이름으로 콕 집어 찾는 곳은 한 군데도 없고
+     (TPL_TAB_RE = /원본|개편안/ 과 tabSourceFor 의 indexOf('원본') 뿐이라 「(구) …원본」도 그대로 걸린다),
+     tabSourceFor 는 어차피 TPL_NEW 를 먼저 고른다. */
+  try {
+    ss.getSheets().forEach(function (s) {
+      const n = s.getName().trim();
+      if (n === TPL_NEW || !TPL_TAB_RE.test(n) || /^\(구\)/.test(n)) return;
+      if (!apply) lines.push('  · 옛 탭 「' + n + '」 → 「(구) ' + n + '」 (지우지 않습니다)');
+      else {
+        try { s.setName('(구) ' + n); lines.push('  ✓ 옛 탭 → 「(구) ' + n + '」'); }
+        catch (e) { lines.push('  ✗ 옛 탭 이름: ' + String(e).slice(0, 50)); }
+      }
+    });
+  } catch (e) { lines.push('  ✗ 옛 탭 훑기: ' + String(e).slice(0, 50)); }
+
+  return lines;
+}
+
+function fnTplTidy(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+  const list = p.store ? [normStore(String(p.store))]
+    : pickPage(null, (typeof p.page === 'number' && p.page >= 0) ? p.page : 0).list;
+  const t0 = Date.now();
+  const out = ['=== 원본 탭 통일 ' + (apply ? '★적용★' : '미리보기') + ' · ' + list.length + '곳 ==='];
+  let done = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (Date.now() - t0 > 4.5 * 60 * 1000) {
+      out.push('', '★시간이 부족해 ' + i + '곳에서 멈췄습니다★ — 남은 곳: ' + list.slice(i).join(', '));
+      break;
+    }
+    const store = list[i];
+    out.push('', '── ' + store + ' (' + (i + 1) + '/' + list.length + ') ──');
+    try {
+      const id = storeFileId(store);
+      if (!id) { out.push('  ✗ 파일 ID 없음'); continue; }
+      const lines = tplTidyIn(SpreadsheetApp.openById(id), apply);
+      out.push.apply(out, lines);
+      Logger.log(store + '\n' + lines.join('\n'));   // 다음 매장에서 끊겨도 여기까지는 남는다
+      done += 1;
+    } catch (e) { out.push('  ✗ ' + String(e).slice(0, 90)); }
+  }
+  if (apply) auditLog(ctx, 'admin.tplTidy', p.store ? String(p.store) : ('page' + (p.page || 0)),
+    '성공', '', '원본 탭 통일 ' + done + '곳');
+  if (!apply) out.push('', '★apply:true 를 주기 전에는 아무것도 안 바꿉니다★');
+  return { ok: true, apply: apply, stores: done, lines: out };
+}
+
+function fnTplProbe(ctx, payload) {
+  const p = payload || {};
+  const list = p.store ? [normStore(String(p.store))]
+    : pickPage(null, (typeof p.page === 'number' && p.page >= 0) ? p.page : 0).list;
+  const t0 = Date.now();
+  const out = {};
+  for (let i = 0; i < list.length; i++) {
+    /* 파일을 여는 일이라 26곳을 한 번에 하면 6분 한도에 걸린다 (admin.protect·dropGoal 과 같다) */
+    if (Date.now() - t0 > 4.5 * 60 * 1000) {
+      out['★멈춤★'] = i + '곳까지 보고 6분 한도로 멈췄습니다 — 남은 쪽을 다시 부르십시오';
+      break;
+    }
+    const store = list[i];
+    try {
+      const id = storeFileId(store);
+      if (!id) { out[store] = { 오류: '파일 ID 없음' }; continue; }
+      out[store] = tplScanIn(SpreadsheetApp.openById(id));
+    } catch (e) { out[store] = { 오류: String(e).slice(0, 80) }; }
+  }
+  return { ok: true, probe: true, 매장수: list.length, 결과: out };
+}
+
 function fnImpProbe(ctx, payload) {
   const p = payload || {};
   const store = normStore(String(p.store || ''));
@@ -10841,6 +11122,39 @@ function goalBoxIn(sh) {
     for (let c = 0; c < vals[r].length; c++) {
       if (NG(vals[r][c]) !== '차기월목표') continue;
       const box = { row: r + 1, col: c + 1, rows: 6, cols: 2, shown: [], extra: [] };
+      /* ★상자의 진짜 크기는 병합이 알고 있다★ (2026-09-16 실측으로 잡은 버그)
+         실물은 제목이 L2:P2, 값이 M3:P4 · M5:P6 · M7:P9 로 ★L2:M7 밖까지 걸쳐 있다★.
+         그 좁은 범위만 지우면 breakApart 가 실패하고(부분 병합) clearContent 가 병합 칸을
+         못 건드려 ★「비웠습니다」라고 보고하면서 아무것도 안 지운다★ — 예외가 안 나니
+         아무도 모른다. 실제로 admin.dropGoal 도 makeMonthTabIn 도 이 거짓 성공을 받고 있었다.
+         그래서 지울 범위(wipe)는 ★병합을 따라 넓힌다★.
+         ★넓히는 데 울타리를 둔다★ — 위로는 라벨 줄, 아래로는 개선요청 표 머리글 바로 위,
+         왼쪽으로는 라벨 열까지다. 울타리를 넘겠다는 병합이 있으면 그것은 이 상자가 아니므로
+         넓히지 않는다(모르는 것은 건드리지 않는다). */
+      try {
+        let r1 = box.row, r2 = box.row + box.rows - 1;
+        let c1 = box.col, c2 = box.col + box.cols - 1;
+        let hr = 0;
+        try { const ic = impCols(sh); if (ic && ic.ok && ic.hr) hr = ic.hr; } catch (e2) { }
+        const rowCap = (hr > box.row) ? (hr - 1) : (box.row + 10);
+        for (let pass = 0; pass < 4; pass++) {
+          const nR = Math.min(r2, sh.getMaxRows()) - r1 + 1;
+          const nC = Math.min(c2, sh.getMaxColumns()) - c1 + 1;
+          if (nR <= 0 || nC <= 0) break;
+          const ms = sh.getRange(r1, c1, nR, nC).getMergedRanges();
+          let grew = false;
+          for (let k = 0; k < ms.length; k++) {
+            const mr2 = ms[k].getRow() + ms[k].getNumRows() - 1;
+            const mc2 = ms[k].getColumn() + ms[k].getNumColumns() - 1;
+            if (ms[k].getRow() < r1 || ms[k].getColumn() < c1) continue;   // 울타리 밖 — 이 상자가 아니다
+            if (mr2 > rowCap) continue;
+            if (mr2 > r2) { r2 = mr2; grew = true; }
+            if (mc2 > c2) { c2 = mc2; grew = true; }
+          }
+          if (!grew) break;
+        }
+        box.wipe = { row: r1, col: c1, rows: r2 - r1 + 1, cols: c2 - c1 + 1 };
+      } catch (e) { /* 병합을 못 읽으면 종전대로 6줄 × 2칸을 지운다 */ }
       for (let i = 0; i < box.rows; i++) {
         const rr = r + i;
         if (rr >= vals.length) break;
@@ -10869,13 +11183,21 @@ function dropGoalBox(sh) {
   try { box = goalBoxIn(sh); } catch (e) { return { hit: false, why: '못 읽음: ' + String(e).slice(0, 40) }; }
   if (!box) return { hit: false, why: '표 없음' };
   try {
-    const rng = grid(sh, box.row, box.col, box.rows, box.cols);
+    /* ★병합을 따라 넓힌 범위를 지운다★ — 좁게 잡으면 조용히 아무것도 안 지운다(goalBoxIn 주석) */
+    const w = box.wipe || box;
+    const rng = grid(sh, w.row, w.col, w.rows, w.cols);
     if (!rng) return { hit: false, why: '자리가 시트 밖입니다' };
     /* 병합을 먼저 푼다 — 남겨 두면 지운 뒤에도 테두리 상자가 그대로 보인다 */
     try { rng.breakApart(); } catch (e) { }
     rng.clearContent();
     try { rng.clearDataValidations(); } catch (e) { }
     try { rng.clearFormat(); } catch (e) { }
+    /* ★지웠다고 믿지 않고 다시 읽는다★ (2026-09-16) — 2026-09-03부터 이 함수는 범위를 좁게
+       잡아 ★예외 없이 아무것도 안 지우면서 성공을 보고★하고 있었다. 방금 만든 객체에게
+       묻지 않고 시트에 다시 묻는다(admin.fixDashTotal 이 204칸을 되읽는 것과 같은 규칙). */
+    let still = null;
+    try { still = goalBoxIn(sh); } catch (e) { }
+    if (still) return { hit: false, why: '지웠는데 ' + colLetter(still.col) + still.row + ' 에 그대로 남아 있습니다 (범위를 확인하십시오)' };
     return { hit: true, a1: rng.getA1Notation(), extra: box.extra };
   } catch (e) {
     return { hit: false, why: String(e).slice(0, 60) };
