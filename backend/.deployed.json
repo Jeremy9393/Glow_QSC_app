@@ -1,6 +1,6 @@
 {
- "sha256": "eca7dee7d04416fec87478759399f923ad71a935e1d4503f6fa729f002286ece",
- "version": 138,
- "when": "2026-09-17 10:43:16",
- "description": "1.38 최종검수 — 기한 후 완료·보완 요청 한 번·미조치 처리·MS 점수 서버 계산·되돌리기 비고·상태 수식"
+ "sha256": "c5cdce14ce15db8de6490b87ffe785dc4a6c2203f861fc6b21891f28ddafb377",
+ "version": 139,
+ "when": "2026-09-17 11:08:35",
+ "description": "상태 칸 수식만 다시 깔기 store.upgrade formulaOnly"
 }

@@ -188,7 +188,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v138', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v139', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -9508,6 +9508,56 @@ function upgradeMonthTab(sh, dry) {
   return { ok: true, done: true, plan: plan, cols: c };
 }
 
+/* ★상태 칸 수식만 새 판으로 다시 깐다★ (2026-09-17 · store.upgrade {formulaOnly:true})
+   이미 기록이 든 새 서식 탭용이다 — 12월(2612) 베타 13곳 · 호우주의보 이태원 2610.
+   위 upgradeMonthTab 은 ★빈 탭★을 위한 도구라 기록 든 탭에 쓰면 안 된다 —
+     감점제외 칸에 insertCheckboxes() 를 다시 부르는데, 구글 문서상 그 명령은 ★칸 값을 전부 false 로★
+     만든다(체크해 둔 「점수 제외」가 조용히 풀리고 개선율이 바뀐다). 서식·병합도 다시 깐다.
+   여기서는 상태 칸의 수식만 바꾸고 ★다른 칸은 읽지도 쓰지도 않는다★.
+   멈추는 경우: 채점이 확정된 달(상태 칸이 값으로 굳어 있다 — 수식을 다시 깔면 확정이 풀린다) ·
+     옛 서식이거나 새 칸이 덜 붙은 탭 · 상태 칸에 수식 아닌 글자가 든 줄(손으로 적었거나 굳은 흔적).
+   ★쓴 뒤 다시 읽어 확인한다★ — 「바꿨다」는 보고를 믿지 않는다 (2026-09-16 goalBoxIn 교훈). */
+function relayStateFormulas(ss, sh, ym, apply) {
+  if (monthClosedAt(ss, ym)) return { ok: false, why: ymLabel(ym) + ' 채점이 확정된 탭이라 상태 칸을 다시 깔지 않습니다' };
+  const c = impCols(sh);
+  if (!c.ok) return { ok: false, why: c.why };
+  if (!c.isNew || !c.audit || !c.redo || !c.waive || !c.roll) {
+    return { ok: false, why: '새 서식(2610~) 탭이 아닙니다 — 상태 수식만 바꿀 수 없습니다' };
+  }
+  const n = c.endRow - c.row0 + 1;
+  if (n <= 0) return { ok: false, why: '표 본문이 비어 있습니다(끝 ' + c.endRow + '행)' };
+
+  const col = colLetter(c.state);
+  const a1 = col + c.row0 + ':' + col + c.endRow;
+  const rng = sh.getRange(c.row0, c.state, n, 1);
+  const want = [];
+  for (let i = 0; i < n; i++) want.push([impStateFormula(c, c.row0 + i)]);
+  /* 공백을 빼고 견준다 — 시트가 수식을 돌려줄 때 띄어쓰기를 다듬을 수 있다 */
+  const same = function (a, b) { return String(a || '').replace(/\s+/g, '') === String(b || '').replace(/\s+/g, ''); };
+
+  const fm = rng.getFormulas(), vals = rng.getValues();
+  const typed = [];
+  let diff = 0;
+  for (let i = 0; i < n; i++) {
+    if (!fm[i][0] && String(vals[i][0] == null ? '' : vals[i][0]).trim() !== '') typed.push(c.row0 + i);
+    if (!same(fm[i][0], want[i][0])) diff++;
+  }
+  if (typed.length) {
+    return { ok: false, why: '상태 칸에 수식이 아닌 글자가 든 줄이 있어 멈춥니다(' + typed.slice(0, 5).join('·') + '행)' };
+  }
+  const out = { ok: true, formulaOnly: true, dry: !apply, range: a1, rows: n, change: diff };
+  if (!apply || !diff) return out;
+
+  rng.setFormulas(want);
+  SpreadsheetApp.flush();
+  const back = rng.getFormulas();
+  let bad = 0;
+  for (let i = 0; i < n; i++) if (!same(back[i][0], want[i][0])) bad++;
+  if (bad) return { ok: false, why: '다시 읽으니 ' + bad + '칸이 새 수식과 다릅니다(' + a1 + ')' };
+  out.verified = n;
+  return out;
+}
+
 function makeMonthTabIn(ss, ym) {
   if (ss.getSheetByName(ym)) return { mark: '·', msg: '이미 있음' };
   const pick = tabSourceFor(ss, ym);
@@ -10747,6 +10797,14 @@ function fnStoreUpgrade(ctx, payload) {
       }),
       count: (rd.items || []).length,
     };
+  }
+
+  /* ★기록이 든 탭은 상태 수식만★ (2026-09-17) — 아래 upgradeMonthTab 은 빈 탭용이다(relayStateFormulas 주석) */
+  if (p.formulaOnly === true) {
+    const fo = relayStateFormulas(ss, sh, ym, p.apply === true);
+    if (!fo.ok) return err('CONFLICT', fo.why);
+    fo.file = ss.getName(); fo.ym = ym;
+    return fo;
   }
 
   const r = upgradeMonthTab(sh, p.apply !== true);
