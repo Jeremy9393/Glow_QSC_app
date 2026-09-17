@@ -46,7 +46,7 @@ def cutconst(name):
 
 
 body = '\n'.join([cutconst('MS_DETAIL'), cutconst('MS_HEADER'), cutconst('MS_COL'),
-                  cut('msCodeOf'), cut('msConvert'), cut('msKindOf'),
+                  cut('msCodeOf'), cut('msConvert'), cut('msScoreOf'), cut('msKindOf'),
                   cut('msFixHeader'), cut('msTidyRows'), cut('msPrepend'), cut('saveShopper')])
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
@@ -144,8 +144,10 @@ ok('[3-5] 비고가 들어간다', r[1][MS_COL.memo - 1], '다른 곳을 봤어�
 console.log('── 제출 단위 값은 모든 줄에 같이 ──');
 ok('[4-1] 제출시각', r.map(function (x) { return x[MS_COL.at - 1]; }),
    ['2026-10-05T10:00:00Z', '2026-10-05T10:00:00Z', '2026-10-05T10:00:00Z']);
-ok('[4-2] ★제출점수★ — MS 점수 계산이 이 열을 쓴다',
-   r.map(function (x) { return x[MS_COL.total - 1]; }), [83.3, 83.3, 83.3]);
+/* ★제출점수는 서버가 답으로 센다★ (2026-09-17 J51) — 예 1 + 아니오 0 + 4점 0.75 = 1.75 ÷ 3 × 100 = 58.3.
+   mkPayload 가 보내는 p.result.score(83.3)는 ★쓰지 않는다★ */
+ok('[4-2] ★제출점수★ — MS 점수 계산이 이 열을 쓴다 (받은 답으로 계산 · p.result 무시)',
+   r.map(function (x) { return x[MS_COL.total - 1]; }), [58.3, 58.3, 58.3]);
 ok('[4-3] 응답수', r[0][MS_COL.answered - 1], 3);
 ok('[4-4] 총평', r[0][MS_COL.overall - 1], '친절했습니다');
 ok('[4-5] 연령대·성별', r[0][MS_COL.demo - 1], '30대 여성');
@@ -207,6 +209,38 @@ ok('[8-1] 한 줄', n.length, 1);
 ok('[8-2] 응답 빈칸', n[0][MS_COL.answer - 1], '');
 ok('[8-3] 점수 빈칸', n[0][MS_COL.score - 1], '');
 ok('[8-4] 제출점수도 빈칸', n[0][MS_COL.total - 1], '');
+ok('[8-5] ★앱이 점수를 보내도 답이 없으면 빈칸★', run({ score: 95, answers: [
+  { no: 1, text: '1-1. 인사', scale: 'yn', cat: 'A', answer: 'NA', memo: '' }] })[0][MS_COL.total - 1], '');
+
+console.log('── ★제출 점수·응답수는 서버가 받은 답으로 센다★ (2026-09-17 J51) ──');
+var fake = run({ score: 100, answers: [
+  { no: 1, text: '1-1. a', scale: 'yn', cat: 'A', answer: '아니오', memo: '' },
+  { no: 2, text: '1-2. b', scale: 'yn', cat: 'A', answer: null, memo: '' },
+  { no: 3, text: '2-1. c', scale: '1-5', cat: 'B', answer: 2, memo: '' }] });
+ok('[9-1] p.result.score=100 을 보내도 답(아니오·무응답·2점)으로 12.5', fake[0][MS_COL.total - 1], 12.5);
+ok('[9-2] 응답수는 답이 있는 문항만 (2) — p.result.answered 무시', fake[0][MS_COL.answered - 1], 2);
+/* 앱 화면 계산(js/scoring.js shopperScore)과 무작위 대조 — 앱이 보내는 모양 그대로(예/아니오/NA 글자 · 1~5 숫자 · null) */
+var Scoring = require(require('path').join(__dirname, '..', 'js', 'scoring.js'));
+var seed = 11;
+function rnd(n) { seed = (seed * 1103515245 + 12345) % 2147483648; return Math.floor(seed / 65536) % n; }
+var mism = [], cnt = 0;
+for (var k = 0; k < 2000; k++) {
+  var len = 1 + rnd(40), ans = [], raw = [];
+  for (var q = 0; q < len; q++) {
+    var likert = rnd(2) === 0;
+    var v = likert ? [null, 1, 2, 3, 4, 5][rnd(6)] : [null, '예', '아니오', 'NA'][rnd(4)];
+    raw.push(v);
+    ans.push({ no: q + 1, text: (q + 1) + '-1. q', scale: likert ? '1-5' : 'yn', cat: 'A', answer: v, memo: '' });
+  }
+  var app = Scoring.shopperScore(raw);
+  var rows = run({ score: 77.7, answers: ans });
+  var wantTotal = app.score == null ? '' : round1(app.score);
+  cnt++;
+  if (rows[0][MS_COL.total - 1] !== wantTotal || rows[0][MS_COL.answered - 1] !== app.answered) {
+    if (mism.length < 3) mism.push({ raw: raw, app: app, total: rows[0][MS_COL.total - 1], answered: rows[0][MS_COL.answered - 1] });
+  }
+}
+ok('[9-3] ★앱 shopperScore 와 서버 계산이 같다★ (무작위 ' + cnt + '건 · 제출점수·응답수)', mism, []);
 
 console.log('\n' + (fail ? '★' + fail + '개 실패★' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);

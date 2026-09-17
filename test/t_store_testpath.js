@@ -76,14 +76,12 @@ function fnStoreSave(ctx, payload, target) {
        (스크립트가 보호 편집자여야 애초에 기록을 할 수 있기 때문이다).
        그래서 여기서 한 번 더 막는다 — 안 그러면 확정 뒤에도 앱으로 고칠 수 있고,
        §1-7⑪ '확정 후 점수 불변'이 말뿐이 된다. ★검수에서 실제로 뚫렸다.★
-       (종전: 이월된 줄만 열었다 — 그 건이 다음 달로 넘어가 아직 답할 것이 남았기 때문이었다 §1-8) */
+       (종전: 이월된 줄만 열었다 — 그 건이 다음 달로 넘어가 아직 답할 것이 남았기 때문이었다 §1-8)
+       ★이월 예외를 뺐다★ (2026-09-17) — 「이월」 칸에는 이제 완료 제출일(날짜)이 들어간다. 종전 검사
+         `Number(이월 칸) >= 1` 을 남겨 두면 ★날짜가 든 줄이 전부 확정 뒤에도 열린다★. */
     if (g.isNew && monthClosedAt(ss, ym)) {
-      const rc = grid(sh, r, g.roll, 1, 1);
-      const rolled = rc ? Number(rc.getValue() || 0) : 0;
-      if (!(rolled >= 1)) {
-        return err('FORBIDDEN', ym.slice(0, 2) + '/' + ym.slice(2) +
-          ' 채점이 확정되어 이 항목은 더 고칠 수 없습니다.');   // 「다음 점검에서 확인」은 봐주는 말로 읽혀 뺐다 (2026-09-15 담당자)
-      }
+      return err('FORBIDDEN', ymLabel(ym) +
+        ' 채점이 확정되어 이 항목은 더 고칠 수 없습니다.');   // 「다음 점검에서 확인」은 봐주는 말로 읽혀 뺐다 (2026-09-15 담당자)
     }
 
     // 현재 개선요청~개선 후 6칸 재읽기 → rev 비교
@@ -102,14 +100,16 @@ function fnStoreSave(ctx, payload, target) {
 
     /* ★관리자 알림(종) 판정에 쓸 저장 전 검수 값★ — 검수 칸은 새 서식(2610~)에만 있다.
        사본 시험(fileId)·옛 서식·9월 이전 탭은 알림을 아예 보지 않는다(noteAudit=null).
-       읽기가 실패해도 저장은 계속한다 — 검수 값만 빈 것으로 본다. */
-    let noteAudit = null;
-    if (!testId && g.isNew && g.audit && ym >= NOTIFY_FROM_YM) {
-      noteAudit = '';
+       읽기가 실패해도 저장은 계속한다 — 검수 값만 빈 것으로 본다.
+     ★같은 한 번의 읽기로 완료 제출일 칸(옛 「이월」)도 본다★ (2026-09-17 J1·J9 · impSubOnSave) —
+       사본 시험 경로에서도 적는다(그래야 10/1 전에 돌려 볼 수 있다). 못 읽으면 제출일은 건드리지 않는다. */
+    let noteAudit = null, beforeRow = null;
+    if (g.isNew && g.audit) {
       try {
-        const ac = grid(sh, r, g.audit, 1, 1);
-        if (ac) noteAudit = ac.getValue();
-      } catch (e) { Logger.log('알림용 검수 칸 읽기 실패: ' + String(e)); }
+        const br = grid(sh, r, 2, 1, Math.max(14, g.last - 1));
+        if (br) beforeRow = br.getValues()[0];
+      } catch (e) { Logger.log('저장 전 검수 칸 읽기 실패: ' + String(e)); }
+      if (!testId && ym >= NOTIFY_FROM_YM) noteAudit = beforeRow ? beforeRow[g.audit - 2] : '';
     }
 
     /* 사진 — 교체·삭제면 이전 드라이브 파일을 실제로 지운다 (안 하면 고아 파일이 쌓인다).
@@ -145,11 +145,38 @@ function fnStoreSave(ctx, payload, target) {
       if (oRng) oRng.setValue(photoCell);
     }
 
+    /* ★완료 제출일★ (2026-09-17 J1·J9) — 기한 뒤에 올린 완료를 가르는 근거. 규칙은 impSubOnSave 주석.
+       제출일을 못 적어도 저장은 이미 끝났다 — 그 건은 제출일이 비어 「기한 안」으로 보인다(매장에 불리하지 않은 쪽). */
+    const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+    if (g.isNew && g.roll && beforeRow) {
+      try {
+        const subPut = impSubOnSave(cell(curV[4], tz), texts.doneNote, beforeRow[g.audit - 2],
+          beforeRow[g.roll - 2], photoCell !== null, today);
+        if (subPut !== null) grid(sh, r, g.roll, 1, 1).setValue(subPut);
+      } catch (e) { Logger.log('완료 제출일 기록 실패: ' + String(e)); }
+    }
+
     // 재읽기해서 rev·item 구성 — ★쓴 값으로 계산하면 안 된다★ (safe()의 아포스트로피 때문)
-    const after = grid(sh, r, g.body, 1, 6);
-    const aV = after.getValues()[0];
-    const aF = after.getFormulas()[0];
+    /* 한 줄(B~끝)을 한 번에 읽는다 — J~O 6칸은 그 안에서 자른다(옛 서식이면 B~O라 종전과 같은 칸이다) */
+    const after = grid(sh, r, 2, 1, Math.max(14, g.last - 1));
+    const rowV = after.getValues()[0];
+    const rowF = after.getFormulas()[0];
+    const aV = rowV.slice(g.body - 2, g.body + 4);
+    const aF = rowF.slice(g.body - 2, g.body + 4);
     const item = itemOf(no, aV, aF, tz, ym);
+    /* ★새 서식이면 상태도 판정해 담는다★ (2026-09-17 J9) — 종전에는 상태를 안 실어 카드가 저장 전 상태로
+       남았다(완료를 올려도 「진행 중」, 보완본을 올려도 「보완 요청」). store.get 과 같은 impJudge·impOverdue 다. */
+    if (g.isNew) {
+      const atr = function (col) { return col ? rowV[col - 2] : ''; };
+      const jd = impJudge({
+        audit: atr(g.audit), redo: atr(g.redo), sub: atr(g.roll), doneNote: item.doneNote,
+        plan: atr(g.plan), planRaw: atr(g.plan), due: atr(g.due),
+      }, today, tz, ym, false);
+      item.status = jd.state;
+      item.statusWhy = jd.why || '';
+      item.resub = !!jd.resub;
+      item.overdue = impOverdue(jd.state);
+    }
 
     const summary = recountSummary(sh, tz);
     try {

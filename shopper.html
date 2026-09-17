@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=128">
+<link rel="stylesheet" href="css/app.css?v=129">
 </head>
 <body>
 <header class="topbar">
@@ -42,8 +42,8 @@
 <div class="thanks" id="thanks" style="display:none">
   <div class="b">GLOW SEOUL</div>
   <h1>제출이 완료되었습니다</h1>
-  <p>점수는 <b>매장별 QSC현황</b>에서 확인하실 수 있습니다.<br>
-     통합시트 반영에는 잠시 걸릴 수 있습니다.</p>
+  <p>점수는 <b>매장별 QSC현황</b>에서 「잠정」으로 먼저 보이고,<br>
+     매장 파일·통합시트에는 그 달 말일 23시에 반영됩니다.</p>
   <p style="margin-top:18px"><a href="index.html">홈으로</a></p>
 </div>
 <footer class="bottombar" id="bar"><div class="in">
@@ -60,13 +60,13 @@
      ★이 화면에서도 guard()는 절대 부르지 않는다 — 리다이렉트 금지.
        고객용 survey.html과 달리 이 화면은 관리자용이지만, 현장에서 작성 중이던 내용이
        로그인 화면으로 튕기며 날아가는 사고는 똑같이 비싸다. -->
-<script src="js/maint.js?v=128"></script>
-<script src="js/ui-busy.js?v=128"></script>
-<script src="js/auth.js?v=128"></script>
-<script src="js/scoring.js?v=128"></script>
-<script src="js/api.js?v=128"></script>
-<script src="js/ui-time.js?v=128"></script>
-<script src="js/shopper-core.js?v=128"></script>
+<script src="js/maint.js?v=129"></script>
+<script src="js/ui-busy.js?v=129"></script>
+<script src="js/auth.js?v=129"></script>
+<script src="js/scoring.js?v=129"></script>
+<script src="js/api.js?v=129"></script>
+<script src="js/ui-time.js?v=129"></script>
+<script src="js/shopper-core.js?v=129"></script>
 <script>
 /* ★고객용 화면으로 통일했다★ (2026-08-27 담당자 결정)
      "관리자가 보는MS평가표랑 고객용MS평가표가 일부 구조가 다를꺼야
@@ -148,6 +148,8 @@ initShopperForm({ admin: false });
      이미 로그인한 매장 직원이 로그인 화면만 오가게 된다. textContent라 링크도 함께 지워진다. */
   if (note) note.textContent = '이 평가표는 감사총무팀 담당자용입니다. 매장 개선요청사항은 홈의 「매장별 QSC현황」에서 확인하실 수 있습니다.';
   lock('담당자만 제출할 수 있습니다');
+  /* ★문항 목록도 감춘다★ (2026-09-17 담당자 — qsc.html 과 같은 장치) */
+  document.body.classList.add('noAccess');
 })();
 
 /* 뒤로가기를 눌렀을 때 한 번 되묻는다. (qsc.html과 같은 장치·같은 이유)
@@ -170,7 +172,8 @@ initShopperForm({ admin: false });
       if (el.id === 'backBottom' || (el.className && String(el.className).indexOf('back') === 0)) break;
     }
     if (!el || el === document) return;
-    if (confirm('작성 중인 내용이 있습니다. 사진은 임시저장에 남지 않습니다.\n이 화면을 나가시겠습니까?')) return;
+    /* 이 화면은 사진을 다루지 않는다(영수증 첨부 2026-08-20 삭제) — qsc.html 문구를 옮겨 온 「사진은 …」을 뺐다 (2026-09-17) */
+    if (confirm('작성 중인 내용이 있습니다.\n이 화면을 나가시겠습니까?')) return;
     e.preventDefault();
     e.stopPropagation();   // capture 단계라 버튼의 onclick까지 막힌다
   }, true);

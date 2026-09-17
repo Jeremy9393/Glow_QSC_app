@@ -42,6 +42,11 @@ var IC_OLD = { ok: true, row0: 2, due: 2, state: 3, body: 10, isNew: false,
 var IC_MODE = IC_NEW;
 function impCols(sh) { return IC_MODE; }
 
+function storeShareCols(IC) {
+  if (IC && IC.ok && IC.body === 10 && IC.dept && IC.memo && IC.memo >= IC.dept) return { c0: IC.dept, c1: IC.memo };
+  return { c0: 11, c1: 16 };
+}
+
 function improveScan(sh) {
   const IC = impCols(sh);
   const newFmt = !!(IC.ok && IC.isNew && IC.audit);
@@ -58,14 +63,15 @@ function improveScan(sh) {
 
   const lastRow = tableEndRow(sh) || sh.getMaxRows();
   const bodyN = Math.max(0, lastRow - headRow);
-  const out = { ok: true, headRow: headRow, newFmt: newFmt, IC: IC, filled: 0, touched: 0 };
+  const sc = storeShareCols(IC);
+  const out = { ok: true, headRow: headRow, newFmt: newFmt, IC: IC, filled: 0, touched: 0, sc: sc };
   if (!bodyN) return out;
-  const bodyR = grid(sh, headRow + 1, 2, bodyN, 14);   // B~O
+  const bodyR = grid(sh, headRow + 1, 2, bodyN, Math.max(9, sc.c1 - 1));   // B~매장 몫 끝(P)
   const body = bodyR ? bodyR.getValues() : [];
   for (let i = 0; i < body.length; i++) {
     if (String(body[i][8] == null ? '' : body[i][8]).trim() === '') continue;   // J열(본문)이 비면 빈 줄
     out.filled = i + 1;
-    for (let c = 9; c <= 13; c++) {                                             // K~O(매장 몫)
+    for (let c = sc.c0 - 2; c <= sc.c1 - 2; c++) {                              // K~P(매장 몫)
       if (String(body[i][c] == null ? '' : body[i][c]).trim() !== '') { out.touched++; break; }
     }
   }
@@ -92,9 +98,10 @@ function wipeImprove(sh) {
   const bcW = grid(sh, s.headRow + 1, s.newFmt ? s.IC.due : 2, s.filled, s.newFmt ? 1 : 2);
   const dW = grid(sh, s.headRow + 1, 4, s.filled, 1);
   const jW = grid(sh, s.headRow + 1, 10, s.filled, 1);
-  /* K~O = 매장 몫(예정일·완료일·개선 후 사진 등). improveScan 이 '매장이 손댔는가'를
-     판정할 때 보는 칸과 ★같은 범위★여야 한다(그 함수의 9~13번 자리 = K~O). */
-  const koW = grid(sh, s.headRow + 1, 11, s.filled, 5);
+  /* K~P = 매장 몫(담당부서·담당자·진행·완료·개선 후 사진·비고). improveScan 이 '매장이 손댔는가'를
+     판정할 때 보는 칸과 ★같은 범위★여야 한다 — 그래서 그 함수가 쓴 범위(s.sc)를 그대로 받는다.
+     ★비고(P)도 지운다★ (2026-09-17 J52) — 종전에는 K~O 만 지워 비고가 다음 회차 엉뚱한 줄에 남았다. */
+  const koW = grid(sh, s.headRow + 1, s.sc.c0, s.filled, s.sc.c1 - s.sc.c0 + 1);
   if (bcW) bcW.clearContent();
   if (dW) dW.clearContent();
   if (jW) jW.clearContent();
@@ -170,12 +177,27 @@ ok('★검수 칸을 모른다면 안 건드린다★', sh._v[1][16] === '남아
 ok('extra=0', w.extra === 0, 'extra=' + w.extra);
 IC_MODE = IC_NEW;
 
-console.log('\n[5] 비고(P)는 건드리지 않는다 — 누구 칸인지 확인 안 됨');
+console.log('\n[5] ★비고(P)도 매장 몫이다 — 함께 지우고, 비고만 적은 줄도 「매장이 적은 줄」로 센다★ (2026-09-17 J52)');
 CLEARED = [];
-sh = build(true, true);
-sh._v[1][15] = '본사 메모';
+sh = build(false, false);
+sh._v[1][15] = '매장 비고만 적음';
+var sc5 = improveScan(sh);
+ok('★비고만 적은 줄 → touched 1★ (종전 K~O 판정은 0)', sc5.touched === 1, 'touched=' + sc5.touched);
 w = wipeImprove(sh);
-ok('P열 그대로', sh._v[1][15] === '본사 메모', '값: ' + JSON.stringify(sh._v[1][15]));
+ok('★P열(비고) 지워졌다★', sh._v[1][15] === '', '남음: ' + JSON.stringify(sh._v[1][15]));
+ok('되돌리기가 알려 주는 매장 몫 건수도 1', w.touched === 1, 'touched=' + w.touched);
+
+console.log('\n[5-2] impCols 가 담당부서~비고 자리를 알려 주면 그 범위를 쓴다');
+IC_MODE = { ok: true, row0: 2, due: 2, state: 3, body: 10, isNew: true, dept: 11, memo: 16,
+            audit: 17, redo: 18, waive: 19, roll: 20 };
+CLEARED = [];
+sh = build(false, true);
+sh._v[1][15] = '비고'; sh._v[1][16] = '확정';
+w = wipeImprove(sh);
+ok('P 지움 · Q(검수)도 지움 · touched 1', sh._v[1][15] === '' && sh._v[1][16] === '' && w.touched === 1, JSON.stringify(w));
+ok('Q(검수) 칸은 매장 몫 범위에 안 들어간다 — 검수만 있는 줄은 touched 0', (function () {
+  var s2 = build(false, true); return improveScan(s2).touched === 0; })());
+IC_MODE = IC_NEW;
 
 console.log('\n[6] 개선요청이 원래 없으면 조용히 끝난다');
 CLEARED = [];
