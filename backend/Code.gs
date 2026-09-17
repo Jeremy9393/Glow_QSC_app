@@ -156,7 +156,8 @@ const DASH_PUBLIC = ['rank', 'store', 'region', 'category', 'qsc', 'qscGrade', '
    대시보드와 달리 여기서는 '투영'조차 하지 않고 accountRow()가 객체를 직접 조립한다 —
    계정 객체에는 해시가 들어 있으므로, 화이트리스트 루프를 도는 코드가 있으면 언젠가
    목록을 한 줄 늘리는 것만으로 해시가 나간다. 담을 값을 손으로 적는 편이 안전하다. */
-const ACCOUNT_PUBLIC = ['id', 'name', 'role', 'status', 'scope', 'hasPw', 'pw', 'pwAt', 'lastSeen'];
+/* ★pw(원문)는 목록에 담지 않는다 (2026-09-17)★ — account.revealPw 가 관리자 비밀번호를 한 번 더 확인한 뒤에만 준다 */
+const ACCOUNT_PUBLIC = ['id', 'name', 'role', 'status', 'scope', 'hasPw', 'pwKnown', 'pwAt', 'lastSeen'];
 
 /* ---------- 스크립트 속성 읽기 ---------- */
 
@@ -188,7 +189,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v140', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v141', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -394,6 +395,9 @@ function actionTable() {
        legacy 플래그가 없으므로 AUTH_ENFORCE='off'여도 토큰 없이는 도달할 수 없다.
        scope:'none'이라 payload.store는 읽지도 않는다. */
     'account.list':        { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 2 * KB, fn: fnAccountList },
+    /* 비밀번호 보기 — 관리자 비밀번호를 한 번 더 확인한 뒤에만 원문을 준다 (2026-09-17 담당자 선택).
+       ★act '쓰기'★ — 원문을 내보내는 조작이라 쓰기 권한자만 열고, doPost 가 감사로그(성공·실패)를 남긴다 */
+    'account.revealPw':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnAccountRevealPw },
     'account.setPassword': { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnAccountSetPassword },
     'account.setStatus':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnAccountSetStatus },
     'account.sync':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnAccountSync },
@@ -2321,9 +2325,10 @@ function menusOf(role) {
 /* 계정 1행을 화면용 객체로. ★해시·솔트·반복수·페퍼버전은 담지 않는다★
    화이트리스트 배열을 도는 대신 담을 값을 손으로 적는다 — 계정 객체에는 해시가 들어 있어서,
    투영 루프가 있으면 목록을 한 줄 늘리는 것만으로 해시가 응답에 실릴 수 있다.
-   ★pw는 해시가 아니라 따로 보관해 둔 원문이다★ (pwStash 주석 참조). 이 함수를 부르는 곳은
-   account.* 넷뿐이고 전부 menu:'accounts' 권한이 걸려 있다 — 매장 계정은 이 응답을 받을 수
-   없다. 다른 화면에서 이 함수를 가져다 쓰면 그 순간 26곳 비밀번호가 함께 나간다. */
+   ★원문(pw)은 담지 않는다 (2026-09-17)★ — 종전에는 따로 보관해 둔 원문(pwStash 주석 참조)을 늘 실어서,
+   관리자 로그인이 무기한인 채(확정사항 4) 관리자 폰을 잃어버리면 주운 사람이 「계정 관리」만 열어도
+   26곳 비밀번호를 봤다. 이제 원문은 account.revealPw 가 관리자 비밀번호를 확인한 뒤에만 준다.
+   pwKnown 은 「보관값이 있어 확인하면 보인다」는 뜻이다 — false 면 화면이 '확인 불가'로 적는다. */
 function accountRow(a, props) {
   return {
     id: a.id,               // 정규화된 아이디 (요청에 그대로 되돌려 보내면 된다)
@@ -2332,9 +2337,9 @@ function accountRow(a, props) {
     status: a.status,
     scope: a.scope,
     hasPw: !!a.hash,        // 비밀번호 설정 여부 — 해시 자체는 절대 내보내지 않는다
-    /* 현재 비밀번호 원문. 보관값이 없거나(이 기능이 생기기 전에 정한 비밀번호) 해시와 짝이
-       맞지 않으면(시트를 손으로 고친 경우) 빈 문자열이다. 화면은 그걸 '확인 불가'로 적는다. */
-    pw: pwStashRead(a.id, a.hash, props),
+    /* 보관값이 있는가(값은 싣지 않는다). 보관값이 없거나(이 기능이 생기기 전에 정한 비밀번호) 해시와 짝이
+       맞지 않으면(시트를 손으로 고친 경우) false 다. 화면은 그걸 '확인 불가'로 적는다. */
+    pwKnown: !!pwStashRead(a.id, a.hash, props),
     pwAt: a.pwAt || '',
     lastSeen: a.lastSeen || ''
   };
@@ -2381,6 +2386,49 @@ function fnAccountList(ctx) {
   };
 }
 
+/* ★비밀번호 보기 — 관리자 비밀번호를 한 번 더 확인한 뒤에만 원문을 준다★ (2026-09-17 담당자 선택
+   「비밀번호 볼 때 한 번 더 확인」 · 무기한 로그인(확정사항 4)은 그대로 둔다)
+   · 확인하는 비밀번호는 ★지금 로그인한 본인(ctx.id)의 것★이다 — 남의 아이디를 받지 않는다.
+   · ★틀리면 로그인과 같은 잠금(lockFail · 10분 안에 LOGIN_FAIL_MAX 번 → 15분)으로 센다★ — 토큰을 쥔 사람이
+     이 문으로 관리자 비밀번호를 끝없이 맞혀 보지 못하게. 키는 아이디 그대로라, 진짜 주인이 기기 통행증을 가진
+     기기로 로그인하는 것은 막히지 않는다(devicePass 설명). 잠금 중이면 해시를 계산하지 않는다.
+   · ★틀린 비밀번호에 AUTH_INVALID 를 쓰지 않는다★ — api.js 가 AUTH_* 를 가로채 조용한 재로그인을 시도하고,
+     실패하면 화면이 로그인 화면으로 보낸다. 그래서 전용 코드 PW_WRONG 을 쓴다.
+   · 감사로그는 doPost 가 남긴다(act 쓰기 · 성공/실패와 코드). 원문·입력값은 어디에도 적지 않는다. */
+function fnAccountRevealPw(ctx, payload) {
+  if (!prop('TOKEN_KEY', '') || !prop('PW_PEPPER', '')) {
+    return err('SERVER_ERROR', '서버 설정이 끝나지 않았습니다.');
+  }
+  const pw = String(payload && payload.pw ? payload.pw : '');
+  if (!pw) return err('BAD_REQUEST', '관리자 비밀번호를 입력해 주세요.');
+  const acct = (ctx && ctx.auth && ctx.id) ? getAccount(ctx.id) : null;
+  if (!acct || acct.status !== STATUS_ON || !acct.hash) {
+    return err('FORBIDDEN', '비밀번호를 확인할 수 없는 계정입니다.');
+  }
+  const lk = lockCheck(acct.id);
+  if (lk.locked) {
+    return { ok: false, code: 'LOCKED', retryAfterMin: lk.retryAfterMin, error: '시도가 많아 잠겼습니다. ' + lk.retryAfterMin + '분 후 다시 시도해 주세요.' };
+  }
+  if (!hashBudgetOk(acct.id)) return { ok: false, code: 'LOCKED', retryAfterMin: 60, error: '잠시 후 다시 시도해 주세요.' };
+  hashBudgetUse(acct.id);
+  const iter = Math.max(1, propN('PW_ITER', 10000));
+  if (!ctEq(pwHash(acct.salt, pw, acct.iter || iter), acct.hash)) {
+    if (lockFail(acct.id)) {
+      return { ok: false, code: 'LOCKED', retryAfterMin: 15, error: '시도가 많아 잠겼습니다. 15분 후 다시 시도해 주세요.' };
+    }
+    return err('PW_WRONG', '관리자 비밀번호가 맞지 않습니다.');
+  }
+  lockClear(acct.id);
+  const all = readAccounts();
+  const props = pwStashAll();   // 속성은 한 번만 읽는다 (fnAccountList 와 같은 이유)
+  const pws = {};
+  for (let i = 0; i < all.length; i++) {
+    const v = pwStashRead(all[i].id, all[i].hash, props);
+    if (v) pws[all[i].id] = v;
+  }
+  return { ok: true, pws: pws, fetchedAt: nowIso() };
+}
+
 /* `역할` 탭에 실제로 있는 역할 이름 목록 (화면의 역할 표시·필터용).
    ★코드가 역할을 정의하지 않는다는 원칙을 화면까지 밀어 둔다★ */
 function roleNames() {
@@ -2407,8 +2455,8 @@ function missingStoreAccounts(all) {
 /* 관리자가 매장 비밀번호를 정해 준다 (확정사항 3).
    ★감사로그에는 여전히 평문을 담지 않는다★ — 감사로그는 시트에 그대로 쌓이고 지울 수도
    없으므로, 거기 한 번 들어가면 영원히 남는다.
-   응답의 account.pw에는 들어 있다 — 목록 화면이 '현재 비밀번호'를 보여 주기 위해서고,
-   그 값은 pwStash가 따로 보관한 것이다(pwStash 주석 참조). */
+   ★응답(account)에도 원문은 없다 (2026-09-17)★ — 방금 정한 값은 화면이 입력칸에서 직접 넣어 보여 준다.
+   보관(pwStash)은 writeCredential 이 그대로 하므로, 나중에 account.revealPw 로 다시 볼 수 있다. */
 function fnAccountSetPassword(ctx, payload) {
   if (!prop('TOKEN_KEY', '') || !prop('PW_PEPPER', '')) {
     return err('SERVER_ERROR', '서버 설정이 끝나지 않았습니다.');

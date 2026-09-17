@@ -1,6 +1,6 @@
 {
- "sha256": "a7688af173c91d9aab4e7fb9a178681c9f1af15de1d729451bc5472575537326",
- "version": 140,
- "when": "2026-09-17 12:00:13",
- "description": "매장 계정 저장 달 제한 storeWriteBlock"
+ "sha256": "36d9ace672a8201161cf3b02280c82d4b584295d2b8af43a2b7db9bed6d972f1",
+ "version": 141,
+ "when": "2026-09-17 13:22:01",
+ "description": "계정 관리 비밀번호 보기 — 관리자 비밀번호 재확인(account.revealPw)"
 }

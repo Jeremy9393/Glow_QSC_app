@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=131">
+<link rel="stylesheet" href="css/app.css?v=132">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼.
@@ -46,11 +46,11 @@
       </div>
     </div>
 
-    <!-- 비밀번호 표시 토글. 기본은 '보임'이다 — 이 화면을 여는 이유의 대부분이
-         "그 매장 비밀번호가 뭐였죠"라서, 한 번 더 눌러야 보이면 그 한 번이 매번 든다.
-         매장 안에서 화면을 펴야 할 때만 가린다. 선택은 이 기기에만 기억된다. -->
+    <!-- 비밀번호 보기 (2026-09-17). 비밀번호는 기본으로 가려져 있다 — 관리자 로그인이 무기한이라
+         폰을 잃어버리면 이 화면만 열어도 26곳 비밀번호가 보였기 때문이다. 누르면 관리자 비밀번호를
+         한 번 더 묻고, 맞으면 5분 동안 보인다(보이는 중에 누르면 곧바로 다시 가린다). -->
     <div class="bcAct pwEyeBar">
-      <button class="miniBtn" id="pwEyeBtn" type="button">비밀번호 숨기기</button>
+      <button class="miniBtn" id="pwEyeBtn" type="button">비밀번호 보기</button>
     </div>
 
     <p class="note" id="stateNote">불러오는 중입니다…</p>
@@ -97,6 +97,7 @@
   <p class="note pre" id="help">· 비밀번호는 담당자가 정해 매장에 알려 주는 방식입니다. 매장이 스스로 만들 수는 없습니다.
 · 각 매장의 현재 비밀번호가 목록에 그대로 보입니다. 눌러서 복사하실 수 있습니다.
 · 매장 안에서 화면을 펴실 때는 [비밀번호 숨기기]로 가려 두실 수 있습니다.
+· 비밀번호는 가려져 있습니다 — [비밀번호 보기]나 ●●●●를 누르고 관리자 비밀번호를 한 번 더 넣으면 5분 동안 보입니다. 방금 새로 설정한 비밀번호는 바로 보입니다.
 · 「비밀번호 확인 불가」는 이 기능이 생기기 전에 정한 비밀번호입니다. 새로 설정하시면 그때부터 보입니다.
 · 비밀번호를 새로 설정하면 그 계정에 로그인되어 있던 기기가 모두 로그아웃됩니다.
 · [중지]한 계정은 즉시 접속이 막히고, [사용]으로 되돌리면 종전 비밀번호로 다시 들어옵니다.
@@ -115,12 +116,12 @@
      매장 계정이 이 주소를 직접 치면 accounts-app.js가 다 돈 뒤에야 막혔다. 키를 주면
      앱 스크립트가 실리기 전에 안내 후 홈으로 간다. 권한 사본이 없을 때(menus()===null)는
      guard가 막지 않으므로, accounts-app.js 쪽 판정도 그대로 남겨 두 겹으로 둔다. -->
-<script src="js/maint.js?v=131"></script>
-<script src="js/ui-busy.js?v=131"></script>
-<script src="js/auth.js?v=131"></script>
+<script src="js/maint.js?v=132"></script>
+<script src="js/ui-busy.js?v=132"></script>
+<script src="js/auth.js?v=132"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts');</script>
-<script src="js/api.js?v=131"></script>
-<script src="js/accounts-app.js?v=131"></script>
+<script src="js/api.js?v=132"></script>
+<script src="js/accounts-app.js?v=132"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
