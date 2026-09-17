@@ -12,7 +12,8 @@
 
 보는 것:
   · 한 제출이 38줄이어도 ★한 건으로★ 세는가 (제출시각으로 묶기)
-  · 제출이 둘이면 두 점수의 ★단순 평균★인가 (줄 수에 끌려가지 않는가)
+  · 제출이 둘이면 ★가장 최근 제출(제출시각) 1건★의 점수인가 — 2026-09-17 담당자 결정으로 평균에서 바뀜
+    (시트 순서가 뒤집혀 있어도 제출시각으로 고르는가 · 같은 시각이면 위쪽 줄 · 제출시각 없는 옛 줄보다 있는 줄)
   · ★앞에서부터★ 읽는가 — MS_상세는 최신이 맨 위다. 뒤에서 읽으면 옛 자료를 본다
   · 다른 매장·다른 달이 섞이지 않는가
   · 문항 환산 규칙이 앱(scoring.js)과 같은가 — 예=1 · 아니오=0 · 1~5→(n-1)/4
@@ -61,7 +62,7 @@ def cutcall(mark):
 
 body = '\n'.join([cutconst('MS_DETAIL'), cutconst('MS_HEADER'), cutconst('MS_COL'),
                   cut('msCodeOf'), cut('msConvert'), cut('msKindOf'),
-                  cut('shopperMonthAvg'), cut('submittedStores')])
+                  cut('shopperMonthAvg'), cut('submittedStores'), cut('stampOf')])
 # status.month 가 MS_상세를 부르는 자리 — 인자를 그대로 시험에 넘긴다
 CALLSITE = cutcall('shopperSet = submittedStores(')
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
@@ -113,25 +114,40 @@ function near(name, got, want) {
 }
 
 console.log('── 한 제출이 38줄이어도 한 건이다 ──');
-var sh = mkSheet(submit({ date: '2026-10-05', store: '금종제과', at: 'A', total: 90 }));
+var sh = mkSheet(submit({ date: '2026-10-05', store: '금종제과', at: '2026-10-05 10:00', total: 90 }));
 near('[1-1] 38줄짜리 제출 하나 → 90점', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 90);
 
-console.log('── 제출이 둘이면 두 점수의 평균 ──');
-sh = mkSheet(submit({ date: '2026-10-05', store: '금종제과', at: 'A', total: 90 })
-  .concat(submit({ date: '2026-10-20', store: '금종제과', at: 'B', total: 70 })));
-near('[2-1] 90 과 70 의 평균은 80', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 80);
-ok('[2-2] ★줄 수(76)에 끌려가지 않는다★', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul') === 80, true);
+console.log('── 제출이 둘이면 가장 최근 제출 1건 (2026-09-17 담당자 결정 — 평균 아님) ──');
+// 실제 시트처럼 최신이 맨 위
+sh = mkSheet(submit({ date: '2026-10-20', store: '금종제과', at: '2026-10-20 15:00', total: 70 })
+  .concat(submit({ date: '2026-10-05', store: '금종제과', at: '2026-10-05 10:00', total: 90 })));
+near('[2-1] 10-05 90 · 10-20 70 → 최근 것 70 (평균 80 아님)', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 70);
+ok('[2-2] ★줄 수(76)에 끌려가지 않는다★', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul') === 70, true);
+// 시트 순서가 뒤집혀 있어도(옛 것이 위) 제출시각으로 고른다
+sh = mkSheet(submit({ date: '2026-10-05', store: '금종제과', at: '2026-10-05 10:00', total: 90 })
+  .concat(submit({ date: '2026-10-20', store: '금종제과', at: '2026-10-20 15:00', total: 70 })));
+near('[2-3] ★시트 순서가 뒤집혀도 제출시각이 늦은 70★', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 70);
+// 방문날짜보다 제출시각 — 늦게 제출한 쪽이 최신이다
+sh = mkSheet(submit({ date: '2026-10-25', store: '금종제과', at: '2026-10-26 09:00', total: 60 })
+  .concat(submit({ date: '2026-10-10', store: '금종제과', at: '2026-10-28 09:00', total: 95 })));
+near('[2-4] 방문은 10-10 이어도 10-28 에 제출했으면 그것이 최근 → 95', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 95);
+// 고객 설문 2건(12월 베타 부산역·신라당 경주와 같은 모양) — 경로를 가리지 않는다
+sh = mkSheet(submit({ date: '2026-12-01', store: '신라당 경주', at: '2026-09-16T06:30:00', total: 86.2 })
+  .concat(submit({ date: '2026-12-01', store: '신라당 경주', at: '2026-09-16T05:10:00', total: 89.5 })));
+near('[2-5] 같은 날 두 건 — 제출시각이 늦은 86.2', shopperMonthAvg(sh, '신라당 경주', '2026-12-01', 'Asia/Seoul'), 86.2);
 
-console.log('── 최신이 맨 위 — 앞에서부터 읽는다 ──');
-// 새 제출(위) + 옛 제출(아래). 뒤에서 읽으면 옛 것만 보게 된다
-sh = mkSheet(submit({ date: '2026-10-25', store: '금종제과', at: 'NEW', total: 100 })
-  .concat(submit({ date: '2026-10-01', store: '금종제과', at: 'OLD', total: 60 })));
-near('[3-1] 둘 다 세어 80', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 80);
+console.log('── 같은 시각·제출시각 없는 옛 줄 ──');
+sh = mkSheet(submit({ date: '2026-10-25', store: '금종제과', at: '2026-10-25 10:00', total: 100 })
+  .concat(submit({ date: '2026-10-25', store: '금종제과', at: '2026-10-25 10:00', total: 60 })));
+near('[3-1] 제출시각이 같으면 위쪽(나중에 들어온) 줄 → 100', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 100);
+sh = mkSheet(submit({ date: '2026-10-25', store: '금종제과', at: '', total: 55 })
+  .concat(submit({ date: '2026-10-02', store: '금종제과', at: '2026-10-02 09:00', total: 88 })));
+near('[3-2] 제출시각 없는 옛 줄보다 제출시각 있는 줄 → 88', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 88);
 
 console.log('── 남의 매장·다른 달은 안 센다 ──');
-sh = mkSheet(submit({ date: '2026-10-05', store: '금종제과', at: 'A', total: 90 })
-  .concat(submit({ date: '2026-10-05', store: '도넛정수', at: 'B', total: 10 }))
-  .concat(submit({ date: '2026-09-30', store: '금종제과', at: 'C', total: 10 })));
+sh = mkSheet(submit({ date: '2026-10-05', store: '금종제과', at: '2026-10-05 10:00', total: 90 })
+  .concat(submit({ date: '2026-10-05', store: '도넛정수', at: '2026-10-29 10:00', total: 10 }))
+  .concat(submit({ date: '2026-09-30', store: '금종제과', at: '2026-10-30 10:00', total: 10 })));
 near('[4-1] 내 매장·그 달만 → 90', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 90);
 near('[4-2] 다른 매장도 제 것만 → 10', shopperMonthAvg(sh, '도넛정수', '2026-10-01', 'Asia/Seoul'), 10);
 near('[4-3] 지난 달 → 10', shopperMonthAvg(sh, '금종제과', '2026-09-01', 'Asia/Seoul'), 10);
@@ -147,10 +163,10 @@ sh = mkSheet(submit({ date: '2026-10-05', store: '금종제과', at: 'A', total:
   .concat(submit({ date: '2026-10-06', store: '금종제과', at: 'B', total: 80 })));
 near('[6-1] 빈 점수는 빼고 80', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 80);
 
-console.log('── 제출시각이 비어도 뭉개지지 않는다 ──');
+console.log('── 제출시각이 둘 다 비면(옛 줄) 위쪽 줄 ──');
 sh = mkSheet(submit({ date: '2026-10-05', time: '11:00', store: '금종제과', at: '', total: 90 })
   .concat(submit({ date: '2026-10-05', time: '15:00', store: '금종제과', at: '', total: 70 })));
-near('[7-1] 시각·점수로 갈라 평균 80', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 80);
+near('[7-1] 제출시각이 없으면 시트 위쪽(나중에 들어온) 줄 90 — 평균(80) 아님', shopperMonthAvg(sh, '금종제과', '2026-10-01', 'Asia/Seoul'), 90);
 
 console.log('── 문항 환산 (앱 scoring.js 와 같은 규칙) ──');
 ok('[8-1] 예 = 1', msConvert('예'), 1);

@@ -1,6 +1,6 @@
 {
- "sha256": "72e2cda859f38f1a610d928f291d95ff7f853faf37b1881276d0608f5ffac8c2",
- "version": 142,
- "when": "2026-09-17 13:58:00",
- "description": "NAS 아카이빙 자료 admin.archiveData (읽기)"
+ "sha256": "5c01c33ace9223bebd915df208a9107f2fcc4117d72b8ad98c1b9ca7e2de05bb",
+ "version": 143,
+ "when": "2026-09-17 14:25:48",
+ "description": "같은 달 MS 2건 이상이면 가장 최근 제출 1건 (평균 → 최신)"
 }
