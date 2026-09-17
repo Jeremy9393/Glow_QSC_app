@@ -231,6 +231,8 @@ src_ok('화면: 옛 [숨기기] 선택(pwShow)이 남아 있지 않다', 'pwShow
 src_ok("화면: 감사로그 이름표에 account.revealPw", "'account.revealPw': '비밀번호 보기(관리자 확인)'," in sapp)
 spage = io.open(PAGE, 'r', encoding='utf-8', newline='').read()
 src_ok('화면: 버튼 첫 문구 「비밀번호 보기」', '<button class="miniBtn" id="pwEyeBtn" type="button">비밀번호 보기</button>' in spage)
+src_ok('★화면: 도움말에 옛 안내(「목록에 그대로 보입니다」·[비밀번호 숨기기])가 남아 있지 않다★',
+       '목록에 그대로 보입니다' not in spage and '비밀번호 숨기기' not in spage and "'비밀번호 숨기기'" not in sapp)
 
 print('\n소스 검사 통과 %d · 실패 %d' % (sp, sf))
 try:
