@@ -77,7 +77,31 @@
    ★속성이 비어 있을 때의 방향(fail-safe): AUTH_SHEET_ID·TOKEN_KEY·PW_PEPPER가 비면 인증은
      '항상 실패'한다(fail-closed). 대신 AUTH_ENFORCE='off'인 동안은 옛 경로가 그대로 살아 있어
      현장 업무는 멈추지 않는다. 즉 "인증을 못 켜면 인증만 안 켜지고, 업무는 돈다". */
-const PROPS = PropertiesService.getScriptProperties();
+/* ★스크립트 속성은 실행 단위로 기억한다★ (2026-09-17 ③-4 · find_S4 §1)
+   store.get 한 건이 PropertiesService 를 10~12번 읽고 있었다(MAINT · TOKEN_KEY · TOKEN_MINV ×2 · CACHE_EPOCH ×6~8 · PSEEN).
+   한 실행 안에서는 같은 키를 한 번만 묻는다. ★쓰는 자리가 이 문을 지나므로 메모도 같이 갱신된다★ —
+   setProperty/deleteProperty 를 부르는 27+12곳을 하나씩 손보지 않아도 「썼는데 낡은 값을 읽는다」가 구조적으로
+   생기지 않는다(fnAdminMaint 가 MAINT 를 켜고 곧바로 maintInfo 로 읽는 것이 그 예다).
+   「속성은 매 실행마다 다시 읽는다 → 재배포 없이 즉시 반영」(prop 주석)은 그대로다 — 메모는 이 실행 안에서만 산다.
+   ⚠쓰기가 예외로 끝나면 메모를 건드리지 않는다 — 실제 값이 안 바뀌었으므로 옛 메모가 맞다. */
+const PROPS = (function (raw) {
+  const memo = {};
+  const norm = function (v) { return (v === null || v === undefined) ? null : String(v); };
+  const has = function (k) { return Object.prototype.hasOwnProperty.call(memo, k); };
+  const wipe = function () { for (const k in memo) if (has(k)) delete memo[k]; };
+  return {
+    getProperty: function (k) {
+      if (!has(k)) memo[k] = norm(raw.getProperty(k));
+      return memo[k];
+    },
+    setProperty: function (k, v) { raw.setProperty(k, v); memo[k] = norm(v); return this; },
+    deleteProperty: function (k) { raw.deleteProperty(k); memo[k] = null; return this; },
+    getProperties: function () { return raw.getProperties(); },
+    getKeys: function () { return raw.getKeys(); },
+    setProperties: function (o, del) { raw.setProperties(o, del); wipe(); return this; },
+    deleteAllProperties: function () { raw.deleteAllProperties(); wipe(); return this; },
+  };
+})(PropertiesService.getScriptProperties());
 const SPREADSHEET_ID = PROPS.getProperty('SPREADSHEET_ID') || '';
 const PHOTO_FOLDER_ID = PROPS.getProperty('PHOTO_FOLDER_ID') || '';
 const DASHBOARD_ID = PROPS.getProperty('DASHBOARD_ID') || '';
@@ -189,7 +213,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v143', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v145', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -366,6 +390,9 @@ function actionTable() {
     /* 통합시트 10·11·12월 종합 수식(CA·CH·CO 204칸) 갈아 끼우기 — 기본이 미리보기다.
        매장 파일 쪽은 admin.msOpen {formulaOnly:true} 가 한다. 둘은 ★짝★이라 함께 돌린다. */
     'admin.fixDashTotal': { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnFixDashTotal },
+    /* 종합등급 수식을 「QSC·MS 둘 다 숫자일 때만」으로 감싼다 — 매장 파일 월 탭·원본(7곳씩 page 0~3) + 통합시트 CB·CI·CP(page 0).
+       기본이 미리보기다 (2026-09-17 담당자 ②-5a). */
+    'admin.fixGrade':     { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnFixGrade },
     /* 매장 파일·통합시트가 지금 누구에게 열려 있는지 ★읽기만★ 한다 (아무것도 안 바꾼다) */
     'admin.shareProbe':   { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnShareProbe },
     /* 앱 계정을 매장 파일 편집자로 못 박는다 — ★기본이 미리보기★ */
@@ -485,6 +512,19 @@ function doPost(e) {
        4KB를 넘는 본문은 어차피 통과 대상이 아니다(관리자 예외도 이 크기 안에 든다). */
     const maint0 = maintMsg();
     if (maint0 && raw.length > 4096) return json({ ok: false, code: 'MAINT', error: maint0 });
+
+    /* 0.6 — ★큰 본문은 토큰 서명부터 본다★ (2026-09-17 담당자 ②-3f)
+       종전에는 무인증 12MB 본문이 토큰 검증 ★전에★ JSON.parse 를 탔다 — 스로틀도 없어서 동시 30 병렬이면
+       몇 분에 하루 실행시간(90분)을 태울 수 있었다. 토큰이 실린 본문은 1KB 를 넘지 않고, 64KB 를 넘는 것은
+       사진이 붙은 qsc.submit 뿐이므로 그 크기부터는 ★본문 끝 2KB 에서 토큰만 뽑아 형식·서명(HMAC)만★ 먼저 본다 —
+       시트는 열지 않는다(verifyToken 1·2단계 · tokenSigOk). 토큰이 없거나 서명이 틀리면 파싱조차 하지 않는다.
+       ★토큰이 끝에 오는 근거★ — js/api.js call() 이 봉투를 { reqId, payload, action, token } 순으로 만들어
+       JSON.stringify 하므로 token 은 언제나 본문 맨 끝이다. 3~5단계 정상 검증은 그대로 한 번 더 돈다(경로가 둘이 되지 않는다).
+       ⚠옛 봉투(type · 토큰 없음)의 큰 본문도 여기서 끊긴다 — qsc.html 은 로그인 뒤에만 열리므로 실제로는 닿지 않는다. */
+    if (raw.length > 64 * 1024) {
+      const tm = raw.slice(-2048).match(/"token"\s*:\s*"(v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"/);
+      if (!tm || !tokenSigOk(tm[1])) return json(err('AUTH_REQUIRED', '로그인이 필요합니다.'));
+    }
 
     // 1 — ★내용을 로그에 남기지 않는다★ (비밀번호가 실행 로그에 영구히 남는다)
     let body;
@@ -685,10 +725,23 @@ function idemKey(spec, reqId, payload) {
 
 /* ---------- 인증 스프레드시트 (명세 §3) ---------- */
 
+/* ★스프레드시트 열기를 실행 단위로 기억한다★ (2026-09-17 ③-2 · find_S4 §1)
+   openById 는 한 번에 「수백 ms」다(ssTz 주석의 실측 표현). 한 요청 안에서 같은 파일을 여러 번 열고 있었다 —
+   관리자 store.get 미스 때 응답 시트 3번, 모든 쓰기 액션이 감사로그(auditLog→authSS) 때문에 같은 파일을 한 번 더.
+   같은 ID 면 같은 객체를 돌려줄 뿐이라 동작은 바뀌지 않는다(시트 객체는 살아 있는 손잡이라 getSheetByName 은 매번 새로 묻는다).
+   뜨거운 5곳(authSS · fnQscSubmit · attachAdminLive · qscRounds · roundTicketCountsRaw)부터 이걸 쓴다 — 나머지 openById 는 그대로. */
+const _ssMemo = {};
+function ssOpen(id) {
+  const k = String(id || '');
+  if (!k) throw new Error('ssOpen: 파일 ID 가 비어 있습니다');
+  if (!_ssMemo[k]) _ssMemo[k] = SpreadsheetApp.openById(k);
+  return _ssMemo[k];
+}
+
 function authSS() {
   const id = prop('AUTH_SHEET_ID', '');
   if (!id) return null;
-  try { return SpreadsheetApp.openById(id); } catch (e) { return null; }
+  try { return ssOpen(id); } catch (e) { return null; }
 }
 
 /* 인증 시트에 탭 4개와 머리글을 만든다. 이미 있으면 손대지 않는다.
@@ -1078,6 +1131,7 @@ function auditLog(ctx, action, store, result, reason, note) {
       auditCut(reason, 40),
       auditCut(note, 300)
     ]));
+    gridForget(sh);         // 한 줄 늘었다 — grid() 메모를 버린다
     maybeTidyLog(sh, ss);   // 하루 한 번, 40일 지난 줄을 여기서 정리한다
   } catch (e) { /* 감사로그 실패가 업무를 멈추면 안 된다 */ }
 }
@@ -1138,6 +1192,7 @@ function tidyAuditLog(sh, ss) {
   if (!cnt) return 0;
 
   sh.deleteRows(2, cnt);                          // 한 번에 (delRows 와 같은 이유)
+  gridForget(sh);                                 // 줄 수가 바뀌었다 — grid() 메모를 버린다
   /* ★지웠다는 사실은 남긴다★ — 로그가 조용히 줄어들면 나중에 '누가 지웠나'를 알 수 없다.
      auditLog 를 부르지 않고 직접 적는다(그 함수 안에서 불려 온 참이라 되돌아가면 안 된다). */
   try {
@@ -1146,6 +1201,7 @@ function tidyAuditLog(sh, ss) {
       '(시스템)', '', 'log.tidy', '', '성공', '',
       cnt + '줄 삭제 — ' + AUDIT_KEEP_DAYS + '일 지난 기록 (' + cut + ' 이전)'
     ]));
+    gridForget(sh);
   } catch (e) { }
   return cnt;
 }
@@ -1379,19 +1435,26 @@ function signToken(acct) {
   return { token: bodyB64 + '.' + hmacB64(bodyB64, key), exp: exp };
 }
 
+/* 1·2단계만 — 형식과 서명. ★시트를 열지 않는다★ (속성 TOKEN_KEY 하나만 읽는다).
+   verifyToken 과 doPost 0.6단계(큰 본문 선검사 · 2026-09-17 ②-3f)가 같이 쓴다 — 서명 검사가 두 벌이 되지 않게. */
+function tokenSigOk(token) {
+  const t = String(token || '');
+  if (!t || t.length > 512 || t.indexOf('v1.') !== 0 || t.split('.').length !== 3) return false;
+  const parts = t.split('.');
+  const key = prop('TOKEN_KEY', '');
+  if (!key) return false; // 키가 없으면 어떤 토큰도 신뢰하지 않는다 (fail-closed)
+  return ctEq(parts[2], hmacB64(parts[0] + '.' + parts[1], key));   // 상수시간
+}
+
 /* 5단계 검증. 4단계의 실제 사유(ACCOUNT_DISABLED·CRED_CHANGED)는 감사로그에만 남기고
    응답에는 담지 않는다 — 응답에 담으면 계정 상태를 캐묻는 오라클이 된다. */
 function verifyToken(token) {
   const bad = { ok: false, code: 'AUTH_INVALID', msg: '로그인이 필요합니다.' };
   const t = String(token || '');
   if (!t) return { ok: false, code: 'AUTH_REQUIRED', msg: '로그인이 필요합니다.' };
-  // 1 형식
-  if (t.length > 512 || t.indexOf('v1.') !== 0 || t.split('.').length !== 3) return bad;
+  // 1 형식 · 2 서명 — tokenSigOk 한 곳
+  if (!tokenSigOk(t)) return bad;
   const parts = t.split('.');
-  const key = prop('TOKEN_KEY', '');
-  if (!key) return bad; // 키가 없으면 어떤 토큰도 신뢰하지 않는다 (fail-closed)
-  // 2 서명 (상수시간)
-  if (!ctEq(parts[2], hmacB64(parts[0] + '.' + parts[1], key))) return bad;
   // 3 payload
   let p;
   try { p = JSON.parse(b64uDecode(parts[1])); } catch (e) { return bad; }
@@ -2581,6 +2644,7 @@ function fnAccountDelete(ctx, payload) {
     return err('CONFLICT', '같은 아이디 행이 둘 이상이라 지우지 않았습니다 — 시트에서 정리하십시오: ' + id);
   }
   sh.deleteRow(fresh[0].row);
+  gridForget(sh);
   try { pwStashClear(id); } catch (e) { }
   dropAccountCache(id);
   auditLog(ctx, 'account.delete', '', '성공', '',
@@ -2627,6 +2691,7 @@ function fnAccountRename(ctx, payload) {
       return err('CONFLICT', '새 이름의 계정 행이 하나가 아닙니다 — 시트에서 정리하십시오: ' + to);
     }
     sh.deleteRow(rows[0].row);
+    gridForget(sh);
     dropAccountCache(normId(to));
     auditLog(ctx, 'account.delete', '', '성공', '', '대상: ' + to + ' (동기화가 만든 빈 계정 · 이름 변경 전 정리)');
   }
@@ -2805,6 +2870,7 @@ function notifyAdd(kind, store, ym, no, text) {
     Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss'),
     auditCut(kind, 20), normStore(store), auditTxt(ym), Number(no), auditCut(text, 200), '열림', '', ''
   ]));
+  gridForget(sh);
   notifyTouched(sh, ss);
   return true;
 }
@@ -3282,6 +3348,10 @@ function readDashboardRows() {
    ══════════════════════════════════════════════════════════════ */
 
 /* 그 매장·그 달의 제출 목록 요약. 없으면 []. 되묻기 문구가 이걸 그대로 편다. */
+/* 원장(QSC_회차·QSC_상세·MS_상세)을 「그 달」만 보려고 읽을 때의 상한 — 최신이 맨 위라 앞쪽 N행이면 충분하다.
+   NOTIFY_SCAN(알림 원장 3000)과 같은 규율. prevSubmitsOf · roundTicketCountsRaw 가 쓴다. */
+const LEDGER_SCAN = 3000;
+
 function prevSubmitsOf(ss, kind, store, dateStr) {
   const key = normStore(store);
   const ym = String(dateStr || '').slice(0, 7);
@@ -3298,7 +3368,11 @@ function prevSubmitsOf(ss, kind, store, dateStr) {
   const last = sh.getLastRow();
   if (last < 2) return [];
   const tz = ssTz();
-  const rng = grid(sh, 2, 1, last - 1, conf.cols);
+  /* ★위에서 LEDGER_SCAN 행만 읽는다★ (2026-09-17 ③-6 · find_S4 §1) — 원장은 「최신이 맨 위」(prependRows · 2026-09-10)라
+     이번 달은 언제나 앞쪽에 있다. QSC_회차는 제출 1건=1줄, MS_상세는 38줄이라 3,000줄이면 MS 79건 ≈ 3개월치다.
+     통째로 읽으면 1년 뒤 MS_상세 23k행×17열 = 391k셀 → 캐시 미스마다 1~2초(성장 가드). 「그 달」만 보는 함수라 상한이 무해하다
+     — fnArchiveData·되돌리기는 제외(전 기간을 본다). */
+  const rng = grid(sh, 2, 1, Math.min(LEDGER_SCAN, last - 1), conf.cols);
   const vals = rng ? rng.getValues() : [];
   const out = [];
   for (let i = 0; i < vals.length; i++) {
@@ -3411,7 +3485,11 @@ function fnShopperStatus(ctx, payload) {
 }
 
 function fnQscSubmit(ctx, payload) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss = ssOpen(SPREADSHEET_ID);
+  /* ★확정된 달은 여기서 끝낸다★ (2026-09-17 담당자 ②-3h) — 되묻기(guardResubmit)·사진·응답 시트 어디에도 닿기 전에.
+     같은 판정을 saveQsc(사진 올리기 전)·writeStoreQscInto(매장 파일에 쓰기 직전)가 한 번 더 한다. */
+  const closed = qscMonthClosed(payload && payload.store, payload && payload.date);
+  if (closed) return closed;
   /* ★앞 제출을 정리하며 한 일을 화면까지 올려 보낸다★ (2026-08-27) — 종전에는 이 목록을
      통째로 버렸다. 그래서 '개선요청 N행은 손으로 지우십시오' 같은 말이 서버에서만 맴돌고
      사람에게는 '저장 완료'만 보였다. 조용한 실패가 이 앱이 가장 싫어하는 것이다. */
@@ -3461,7 +3539,8 @@ function fnShopperSubmit(ctx, payload) {
 const CODE_SHEET = '쇼퍼_코드';
 const CODE_HEADER = ['회차', '매장', '코드', '발급시각', '만료시각', '상태', '사용시각', '메모'];
 const CODE_TTL = { '3h': 3 * 3600e3, 'today': -1, '15d': 15 * 86400e3 };   // -1 = 그날 23:59:59
-const CODE_FAIL_MAX = 15;      // 10분 안에 이만큼 틀리면 잠근다
+const CODE_FAIL_MAX = 15;      // 한 매장 · 10분 안에 이만큼 틀리면 그 매장을 잠근다
+const CODE_FAIL_ALL = 60;      // 전 매장 합산 · 10분 (매장 이름을 바꿔 가며 두드리는 것을 막는다 · 2026-09-17 ②-3c)
 const CODE_FAIL_MIN = 10;
 
 function codeSheet(ss) {
@@ -3560,6 +3639,22 @@ function fnCodesIssue(ctx, payload) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const tz = ss.getSpreadsheetTimeZone();
 
+  /* ★그 달 MS 가 이미 있으면 발급하지 않는다★ (2026-09-17 담당자 ②-2)
+     MS 는 한 달 한 매장 1회다. 그런데 관리자 제출도 고객 경로(survey.submit · 제출 코드)로 가므로 같은 달 두 번째
+     제출을 되묻는 장치(guardResubmit)가 MS 에는 하나도 안 걸렸다 — 12월 베타의 「부산역·신라당 MS 2건」이 이 길로 생겼다.
+     막는 자리는 ★코드 발급★이다(제출 순간에 막으면 손님이 헛걸음한다). 2026-08-26 「한 매장 몇 장이든」은 이걸로 바뀐다.
+     · 판정 자료는 「가장 최근 1건」 점수가 읽는 것과 같다(msMonthPick — MS_상세 · 앞 6,000줄)
+     · 달은 발급 시점의 달, ym 을 주면 그 달('2610' 또는 '2026-10')
+     · 되돌리기(admin.undoSubmit)로 지우면 그 줄이 없어지므로 다시 발급된다 */
+  const ymIn = String((payload && payload.ym) || '').trim();
+  const ym = /^\d{4}$/.test(ymIn) ? ('20' + ymIn.slice(0, 2) + '-' + ymIn.slice(2, 4))
+    : (/^\d{4}-\d{2}$/.test(ymIn) ? ymIn : Utilities.formatDate(new Date(), tz, 'yyyy-MM'));
+  const msSh = ss.getSheetByName(MS_DETAIL);
+  if (msSh && msMonthPick(msSh, store, ym, tz).n > 0) {
+    return err('CONFLICT', store + ' ' + ymLabel(ym.slice(2, 4) + ym.slice(5, 7)) +
+      '은 MS 가 이미 제출되어 코드를 발급할 수 없습니다. 잘못 낸 것이면 제출 관리에서 되돌린 뒤 발급하세요.');
+  }
+
   const lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
   try {
@@ -3577,8 +3672,10 @@ function fnCodesIssue(ctx, payload) {
     }
     const now = new Date();
     const exp = new Date(codeExpiry(ttl, tz));
-    codeSheet(ss).appendRow(safeRow([curYymm(), store, code, now, exp, '미사용', '',
+    const csh = codeSheet(ss);
+    csh.appendRow(safeRow([curYymm(), store, code, now, exp, '미사용', '',
       '발급: ' + (ctx ? ctx.id : '')]));
+    gridForget(csh);
     return {
       ok: true, store: store,
       rec: { code: code, store: store, issuedAt: now.getTime(), expiresAt: exp.getTime() },
@@ -3609,19 +3706,29 @@ function fnCodesRevoke(ctx, payload) {
 
 /* ---------- 제출 검표 ---------- */
 
-/* ★전역 실패 카운터★ — IP를 못 보므로 이것이 유일한 무작위 대입 방어다.
-   정상 사용자의 오타는 1~2회라 걸릴 일이 없다(10분에 15회). */
-function codeFailOk() {
-  try {
-    const k = 'codefail:' + Math.floor(Date.now() / (CODE_FAIL_MIN * 60000));
-    return Number(CacheService.getScriptCache().get(k) || 0) < CODE_FAIL_MAX;
-  } catch (e) { return true; }
+/* ★실패 카운터 — 매장별 + 전체 합산★ (2026-09-17 담당자 ②-3c) — IP를 못 보므로 이것이 유일한 무작위 대입 방어다.
+   종전에는 전역 카운터 하나(10분 15회)였다 — 누구나 survey 주소에 틀린 코드 15개면 ★전 매장★ 고객 제출이 10분 멈췄다.
+   이제 매장별 `codefail:<매장>:<10분 버킷>` 15회로 가르고, 매장 이름을 바꿔 가며 두드리는 것은
+   전체 합산 `codefail:*:<버킷>` 60회가 막는다. 둘 다 본다. 정상 사용자의 오타는 1~2회라 걸릴 일이 없다. */
+function codeFailKeys(store) {
+  const b = Math.floor(Date.now() / (CODE_FAIL_MIN * 60000));
+  return { all: 'codefail:*:' + b, one: 'codefail:' + normStore(store).slice(0, 100) + ':' + b };
 }
-function codeFailBump() {
+function codeFailOk(store) {
   try {
     const c = CacheService.getScriptCache();
-    const k = 'codefail:' + Math.floor(Date.now() / (CODE_FAIL_MIN * 60000));
-    c.put(k, String(Number(c.get(k) || 0) + 1), CODE_FAIL_MIN * 60 + 60);
+    const k = codeFailKeys(store);
+    if (Number(c.get(k.all) || 0) >= CODE_FAIL_ALL) return false;
+    return Number(c.get(k.one) || 0) < CODE_FAIL_MAX;
+  } catch (e) { return true; }
+}
+function codeFailBump(store) {
+  try {
+    const c = CacheService.getScriptCache();
+    const k = codeFailKeys(store);
+    [k.all, k.one].forEach(function (key) {
+      c.put(key, String(Number(c.get(key) || 0) + 1), CODE_FAIL_MIN * 60 + 60);
+    });
   } catch (e) { }
 }
 
@@ -3631,11 +3738,11 @@ function codeFailBump() {
 function submitWithCode(ss, p, ctx) {
   const code = String((p && p.code) || '').replace(/\D/g, '');
   if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
-  if (!codeFailOk()) {
-    return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
-  }
   const store = normStore(p && p.store);
   if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+    return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
+  }
 
   const lock = LockService.getScriptLock();
   try { lock.waitLock(25000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
@@ -3645,7 +3752,7 @@ function submitWithCode(ss, p, ctx) {
     const rec = codeFind(ss, code);
     /* ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
        다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
-    if (!rec || normStore(rec.store) !== store) { codeFailBump(); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
+    if (!rec || normStore(rec.store) !== store) { codeFailBump(store); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
     if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
     if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
     if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');
@@ -3700,7 +3807,24 @@ function qscFixHeader(sh) {
   } catch (e) { /* 머리글은 덤이다 — 여기서 제출을 막지 않는다 */ }
 }
 
+/* 그 매장 파일에서 그 달이 확정됐으면 거부 응답을, 아니면 null (2026-09-17 담당자 ②-3h).
+   ★사진을 올리기 전·응답 시트에 쓰기 전에 본다★ — 확정 뒤 재제출이 응답 시트에만 남으면 아카이빙(fnArchiveData)이
+   「QSC 제출이 2건」으로 멈추고, 매장 파일까지 가면 상태·개선율은 굳은 값인데 점수·표만 새것이 된다.
+   매장 파일을 못 찾거나 열지 못하면 막지 않는다 — writeStoreQsc 가 그 사실을 알린다(여기서 판정 실패로 제출을 막지 않는다). */
+function qscMonthClosed(store, dateStr) {
+  try {
+    const id = storeFileId(store);
+    if (!id) return null;
+    const tab = yymm(dateStr);
+    if (!monthClosedAt(ssOpen(id), tab)) return null;
+    return { ok: false, code: 'MONTH_CLOSED', error: ymLabel(tab) + ' 채점이 확정되어 제출할 수 없습니다.' };
+  } catch (e) { return null; }
+}
+
 function saveQsc(ss, p, ctx) {
+  /* ★확정된 달은 사진을 올리기 전에 끊는다★ (②-3h) — fnQscSubmit 이 먼저 봤지만 saveQsc 를 따로 부르는 길(시험·사본)도 같은 문을 지난다 */
+  const closed = qscMonthClosed(p.store, p.date);
+  if (closed) return closed;
   const photoMap = savePhotos(p, ctx); // {문항no: [{url, id}]}
   // v3.7 절대 감점제 스키마: 대분류 점수 대신 감점 3층 + 중대 차감 기록
   // 맨 뒤 '계정' 칸은 누가 제출했는지 남기기 위한 것 — p.inspector는 자유 입력이라 검증할 방법이 없다
@@ -3762,7 +3886,7 @@ function saveQsc(ss, p, ctx) {
       if (normStore(vals[i][0]) === normStore(p.store)) { found = i + 1; break; }
     }
     if (found > 0) naSheet.getRange(found, 2, 1, 2).setValues([safeRow([naNos, p.date])]);
-    else naSheet.appendRow(safeRow([p.store, naNos, p.date]));
+    else { naSheet.appendRow(safeRow([p.store, naNos, p.date])); gridForget(naSheet); }
     dropNaCache();   // 방금 고쳤으니 캐시를 버린다 (안 그러면 10분간 옛 프리셋을 제안한다)
   } catch (err) { /* 프리셋 실패는 저장에 영향 없음 */ }
 
@@ -3797,9 +3921,9 @@ function saveQsc(ss, p, ctx) {
              (쇼퍼_비고랑 쇼퍼_응답을 합쳐서 구조도 QSC_상세처럼 바꾸라는 소리)"*
            *"매장명, 코드, 문항번호 등등 이런것들도 최대한 똑같이 완전히 맞춰줘"*
 
-   ★앞 14열은 QSC_상세와 자리를 그대로 맞춘다★ — 두 시트를 나란히 놓고 볼 수 있게.
-   MS 에 없는 것(상태·사진·NA사유)은 ★빈 칸으로 자리만★ 둔다.
-   15열부터는 제출 단위 정보다 — 한 제출이 38줄이 되므로 ★모든 줄에 같은 값이 반복★된다.
+   ★앞 5열(방문날짜·방문시간·매장명·코드·문항번호)까지만 QSC_상세와 자리가 같다★ — 두 시트를 나란히 놓고 볼 수 있게.
+   (2026-09-08 정리 때 구분·유형·상태·사진·NA사유를 빼서 6열부터는 자리가 다르다 — 「앞 14열이 같다」는 옛 말 · 2026-09-17 #32)
+   10열부터는 제출 단위 정보다 — 한 제출이 38줄이 되므로 ★모든 줄에 같은 값이 반복★된다.
    그중 「제출점수」는 MS 점수 계산(shopperMonthAvg)이 쓰는 열이라 반드시 채운다.
 
    ⚠한 줄 = 한 문항이므로 ★회차를 세는 곳은 제출시각으로 묶어야 한다★ —
@@ -3905,6 +4029,7 @@ function msPrepend(sh, rows) {
   if (!rows.length) return;
   msFixHeader(sh);
   sh.insertRowsBefore(2, rows.length);
+  gridForget(sh);   // 행이 늘었다 — grid() 메모를 버린다
   sh.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
   msTidyRows(sh, 2, rows.length);
 }
@@ -4060,7 +4185,7 @@ function fnReorderRows(ctx, payload) {
         '칸으로 늘립니다 (' + QSC_DETAIL_HEADER.slice(have.length).join(' · ') + ')');
     } else {
       const need = QSC_DETAIL_HEADER.length;
-      if (det.getMaxColumns() < need) det.insertColumnsAfter(det.getMaxColumns(), need - det.getMaxColumns());
+      if (det.getMaxColumns() < need) { det.insertColumnsAfter(det.getMaxColumns(), need - det.getMaxColumns()); gridForget(det); }
       det.getRange(1, have.length + 1, 1, need - have.length)
         .setValues([QSC_DETAIL_HEADER.slice(have.length)]);
       out.push('QSC_상세 머리글 — ' + QSC_DETAIL_HEADER.slice(have.length).join(' · ') + ' 를 붙였습니다 ✓');
@@ -4119,7 +4244,7 @@ function saveShopper(ss, p, ctx, isSurvey) {
   const route = isSurvey ? '고객 직접' : '관리자 입력';
   /* ★MS_상세 한 시트에 문항마다 한 줄★ (2026-09-08 담당자 결정)
      종전에는 쇼퍼_응답(제출 1줄 + 문항 38열)과 쇼퍼_비고(비고 있는 문항만)로 나뉘어 있었다.
-     QSC 와 같은 짜임으로 맞추면서 ★한 시트★로 합쳤다 — 앞 14열은 QSC_상세와 자리가 같다.
+     QSC 와 같은 짜임으로 맞추면서 ★한 시트★로 합쳤다 — 앞 5열(날짜·시간·매장·코드·문항번호)까지 QSC_상세와 자리가 같다(MS_HEADER 주석).
      비고가 없는 문항도 한 줄씩 남긴다(QSC_상세가 74문항을 다 남기는 것과 같다) —
      '답을 안 한 것'과 '기록이 없는 것'을 구별할 수 있어야 한다. */
   const sh = sheet(ss, MS_DETAIL, MS_HEADER.slice(0));
@@ -4157,10 +4282,10 @@ function saveShopper(ss, p, ctx, isSurvey) {
        ⚠★이 경로는 늘 쓴다★ — 막아 주는 것은 제출 코드 하나뿐이다(1회용·매장 지정·만료).
          그 코드 검사가 유일한 문지기이므로, 그 자리를 느슨하게 만들지 말 것. */
 
-  // 통합시트 CS 칸 + 매장 파일 CS점수: 같은 달 쇼퍼가 여러 명이면 "해당 월 평균"으로 기록
+  // 통합시트 MS 칸 + 매장 파일 MS점수: 같은 달 제출이 여럿이면 ★가장 최근 제출 1건★으로 기록 (평균 아님 · 2026-09-17)
   const extra = { dashboard: null, storeFile: null };
   if (DASHBOARD_ID && sc.score != null) {
-    const avg = shopperMonthAvg(sh, p.store, p.date, ss.getSpreadsheetTimeZone());
+    const avg = shopperMonthAvg(sh, p.store, p.date, ss.getSpreadsheetTimeZone());   // 이름만 옛것 — 값은 「가장 최근 1건」
     /* dashboard와 storeFile의 catch를 분리한다 — 합쳐 두면 매장 파일 실패가
        성공한 dashboard 결과를 오류로 덮어써 원인을 잘못 보게 된다. */
     /* ★MS 점수는 그 달이 끝나야 연다 — 매장 파일과 통합시트 ★둘 다★★ (2026-09-04 담당자 결정)
@@ -4175,7 +4300,11 @@ function saveShopper(ss, p, ctx, isSurvey) {
 
        ⚠늦추는 것은 MS 하나다. QSC 점수(offset 0)는 지금처럼 즉시 쓴다.
        ⚠이미 끝난 달(지난 달 자료를 늦게 넣는 경우)은 숨길 이유가 없으므로 즉시 쓴다.
-       ⚠통합시트 종합 수식은 =IF(COUNT(BV,BX)<2,"",…) 이라 MS 칸이 비면 종합도 저절로 빈다.
+       ⚠통합시트 종합 수식은 2026-09-16 부터
+           =IF(NOT(ISNUMBER(BV)),"",BV*0.6+IF(ISNUMBER(BX),BX,0)*0.3+IF(ISNUMBER(BZ),BZ,1)*0.1)
+         이라 ★MS 칸이 비어도 종합은 QSC 만으로 뜬다★(MS 를 0 으로 친다 · fixDashTotalRun). 「MS 가 비면 종합도 빈다」는 옛 수식
+         `IF(COUNT(BV,BX)<2,"",…)` 시절 말이다 — 월중에 종합이 보이는 것은 설계다(★COUNT 판정으로 되돌리지 말 것★ · 현재상황).
+         종합등급 수식은 admin.fixGrade 가 「QSC·MS 둘 다 숫자일 때만」으로 감싼다(②-5a).
        월말에 여는 일은 monthCloseRun() 이 한다(트리거·관리자 버튼 공용). */
     const msOpen = monthClosed(p.date, ss.getSpreadsheetTimeZone());
     const deferMsg = { ok: true, deferred: true, msg: '그 달 말일 23시에 반영합니다' };
@@ -4203,48 +4332,59 @@ function saveShopper(ss, p, ctx, isSurvey) {
    그 평균은 writeStoreShopper·통합시트로 흘러가고 ★10월부터 CS는 종합점수의 30%★다.
    예외가 나지 않고 숫자만 조금 달라지는, 가장 잡기 어려운 종류의 틀림이었다.
    ymOfCell() 하나로 통일한다 — status.month가 이미 쓰고 있는 그 함수다. */
-function shopperMonthAvg(sh, store, dateStr, tz) {
-  const ym = dateStr.slice(0, 7); // 'YYYY-MM'
-  /* ★앞에서부터 읽는다★ (2026-09-08) — MS_상세는 ★최신이 맨 위★로 쌓이므로
+/* 그 매장·그 달(ym = 'YYYY-MM')의 MS 제출을 MS_상세에서 골라낸다 — { score, at, n }.
+     score  가장 최근 제출 1건의 제출점수(0~100) · 없으면 null
+     at     그 제출의 제출시각(stampOf) · 옛 줄이라 비어 있으면 ''
+     n      그 달에 있는 제출 건수(제출시각으로 묶어 센다 · 제출시각이 없는 옛 줄은 날짜+시간으로)
+   ★MS 점수(shopperMonthAvg)와 코드 발급 거부(fnCodesIssue ②-2)가 같은 자료를 같은 규칙으로 본다★ — 두 벌이 되지 않게.
+
+   ★앞에서부터 읽는다★ (2026-09-08) — MS_상세는 ★최신이 맨 위★로 쌓이므로
      최근 자료는 시트 앞쪽에 있다. 종전 쇼퍼_응답은 끝에 쌓여서 끝에서 읽었다.
-     여기를 안 뒤집으면 옛 자료만 보고 평균을 내게 된다 — 오류 없이 숫자만 틀린다. */
+     여기를 안 뒤집으면 옛 자료만 보고 점수를 내게 된다 — 오류 없이 숫자만 틀린다.
+   ★본사가 채운 것과 고객이 낸 것을 구별하지 않는다★ (2026-08-20 사용자 결정)
+     담당자가 직접 체크하는 경우도 미스터리쇼퍼와 같은 일이다 — 손님으로 가서 보고 적는 것이다.
+     그래서 두 경로가 MS 점수에 똑같이 들어간다. 시트의 '입력경로' 칸은 ★기록용으로만★ 남는다.
+   ★그 달 MS 점수 = 가장 최근에 제출된 1건★ (2026-09-17 담당자 결정)
+     MS 는 한 달 한 매장 1회다. 그래도 2건 이상 들어오는 일이 있었다 — 관리자 MS 도 고객 경로(survey.submit · 제출 코드)로
+     가므로 ★되묻기가 없고★, 제출 코드마다 그냥 들어갔다(12월 베타에서 이티에프 베이커리 부산역·신라당 경주가 2건씩).
+     그래서 2026-09-17 부터 ★코드 발급 때 막는다★(fnCodesIssue — 그 달 MS 가 있으면 발급 거부 · ②-2).
+     종전에는 그 달 제출의 ★평균★을 냈는데, 담당자가 「두개의 평균이 아니라 가장 최신에 제출된거로」 —
+     「가장 최근 제출 1건만 쓰기」를 골랐다.
+     · 최신은 ★제출시각(MS_COL.at)★으로 가린다 — 시트 순서(최신이 맨 위)에만 기대지 않는다(뒤집기 사고가 있었다)
+     · ★제출시각이 빈 줄(옛 이관 줄)은 언제나 진다★ (2026-09-17 #29) — 종전에는 맨 위 줄의 제출시각이 비어 있으면
+       아래쪽 오래된 제출이 「가장 최근」으로 뽑혔다. fnArchiveData 의 열쇠('B'+제출시각 > 'A'+날짜)와 같은 결과가 되게 맞췄다
+     · 제출시각이 같거나 모두 비었으면 시트에서 먼저 만난 줄(= 위쪽 = 나중에 들어온 것)을 쓴다
+     · 한 제출이 38줄이어도 제출점수는 줄마다 같다 — 어느 줄을 봐도 그 제출의 점수다
+   ★잠정 MS·월말 반영·되돌리기 뒤 재계산·제출 직후·코드 발급이 모두 이 함수를 부른다★ — 규칙은 여기 한 곳이다.
+   NAS 아카이빙 자료(fnArchiveData)도 같은 규칙으로 고른다. */
+function msMonthPick(sh, store, ym, tz) {
+  const out = { score: null, at: '', n: 0 };
   const last = sh.getLastRow();
-  if (last < 2) return 0;
+  if (last < 2) return out;
   const n = Math.min(6000, last - 1);
   const rng = grid(sh, 2, 1, n, MS_COL.order);
   const vals = rng ? rng.getValues() : [];
   const key = normStore(store);
-  /* ★본사가 채운 것과 고객이 낸 것을 구별하지 않는다★ (2026-08-20 사용자 결정)
-     담당자가 직접 체크하는 경우도 미스터리쇼퍼와 같은 일이다 — 손님으로 가서 보고 적는 것이다.
-     그래서 두 경로가 CS 점수에 똑같이 들어간다. 시트의 '입력경로' 칸은 ★기록용으로만★ 남는다.
-
-     ⚠종전에는 '관리자 입력'만 셌다. 이유는 survey.html을 누구나 열 수 있다는 것이었다 —
-       아무나 특정 매장 이름으로 설문을 여러 건 넣어 그 달 CS를 끌어내리거나(또는 올리거나) 할 수 있다.
-       CS는 10월부터 종합점수의 30%다. ★그 방어는 제출 코드(매장 1곳 = 코드 1개 = 월 1회)가 맡는다★ —
-       설계는 `_보관/설계/쇼퍼_제출코드_설계.md`에 있고 아직 만들지 않았다.
-       그때까지는 담당자가 `쇼퍼_응답` 시트를 보고 이상한 건을 지우거나 고친다(그 편집이 곧 반영된다). */
-  /* ★그 달 MS 점수 = 가장 최근에 제출된 1건★ (2026-09-17 담당자 결정 · 함수 이름은 옛 것 그대로 둔다)
-     MS 는 한 달 한 매장 1회다. 그래도 2건 이상 들어오는 일이 있다 — 관리자 입력은 같은 달 두 번째면
-     덮어쓰기를 되묻지만 ★고객 설문은 제출 코드마다 그냥 들어간다★(12월 베타에서 이티에프 베이커리 부산역·
-     신라당 경주가 고객 설문 2건씩이었다). 종전에는 그 달 제출의 ★평균★을 냈는데, 담당자가
-     「두개의 평균이 아니라 가장 최신에 제출된거로」 — 「가장 최근 제출 1건만 쓰기」를 골랐다.
-     · 최신은 ★제출시각(MS_COL.at)★으로 가린다 — 시트 순서(최신이 맨 위)에만 기대지 않는다(뒤집기 사고가 있었다)
-     · 제출시각이 같거나 비었으면 시트에서 먼저 만난 줄(= 위쪽 = 나중에 들어온 것)을 쓴다
-     · 한 제출이 38줄이어도 제출점수는 줄마다 같다 — 어느 줄을 봐도 그 제출의 점수다
-     ★잠정 MS·월말 반영·되돌리기 뒤 재계산·제출 직후가 모두 이 함수를 부른다★ — 규칙은 여기 한 곳이다.
-     NAS 아카이빙 자료(fnArchiveData)도 같은 규칙으로 고른다. */
-  let best = null, bestAt = '';
+  const seen = {};
   for (let i = 0; i < vals.length; i++) {
     const v = vals[i];
     const dYm = ymOfCell(v[MS_COL.date - 1], tz);
     if (normStore(v[MS_COL.store - 1]) !== key || dYm !== ym) continue;
-    const sc = v[MS_COL.total - 1];
-    if (typeof sc !== 'number') continue;
     const raw = v[MS_COL.at - 1];
     const at = (raw == null || raw === '') ? '' : stampOf(raw, tz);
-    if (best === null || (at && at > bestAt)) { best = sc; bestAt = at; }
+    seen[at ? ('B' + at) : ('A' + dateOfCell(v[MS_COL.date - 1], tz) + ' ' + timeKeyOf(v[MS_COL.time - 1], tz))] = 1;
+    const sc = v[MS_COL.total - 1];
+    if (typeof sc !== 'number') continue;
+    if (out.score === null || (at && (!out.at || at > out.at))) { out.score = sc; out.at = at; }
   }
-  return best === null ? 0 : best;
+  out.n = Object.keys(seen).length;
+  return out;
+}
+
+/* 그 달 MS 점수(0~100) · 없으면 0. ★이름은 옛 것 그대로 둔다★ — 값은 평균이 아니라 「가장 최근 제출 1건」이다(msMonthPick 주석). */
+function shopperMonthAvg(sh, store, dateStr, tz) {
+  const p = msMonthPick(sh, store, String(dateStr).slice(0, 7), tz);
+  return p.score === null ? 0 : p.score;
 }
 
 /* ---------- ② 통합시트 [데이터] ---------- */
@@ -4252,8 +4392,8 @@ function shopperMonthAvg(sh, store, dateStr, tz) {
 /* offset: 0 = QSC(위생) 점수 열, 2 = MS(CS) 점수 열. 등급·개선·종합 열은 시트 수식이라 건드리지 않는다.
    ★쓰는 칸은 매장 한 행 x 한 칸뿐이다★ — 못 찾으면 아무것도 쓰지 않고 이유를 돌려준다.
 
-   검사 두 개를 앞에 둔다. 종전에는 "계정에 보기 권한밖에 없다"가 안전장치였는데 이제 편집 권한이
-   있으므로, 그 자리를 이 검사들이 대신한다. 둘 다 ★쓰지 않고 알린다★ — 제출 자체는 그대로 저장된다. */
+   검사 세 개를 앞에 둔다(올해인가 · 열 머리글이 맞는가 · 그 칸이 수식이 아닌가). 종전에는 "계정에 보기 권한밖에 없다"가
+   안전장치였는데 이제 편집 권한이 있으므로, 그 자리를 이 검사들이 대신한다. 셋 다 ★쓰지 않고 알린다★ — 제출 자체는 그대로 저장된다. */
 function writeDashboard(store, dateStr, frac, offset) {
   /* ① 올해 자료인가. 통합시트는 ★한 해짜리 파일★이다(기간 목록도 올해만 준다 — dashPeriods).
         지난해 날짜를 그대로 쓰면 올해 그 달 칸에 조용히 들어가 앉는다. 오류 하나 없이 틀린다. */
@@ -4264,6 +4404,20 @@ function writeDashboard(store, dateStr, frac, offset) {
   const sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET);
   const month = parseInt(dateStr.slice(5, 7), 10);
   const col = MONTH_COL[month] + offset;
+  /* ② ★그 열의 5행 머리글을 먼저 본다★ (2026-09-17 #25) — 통합시트에 열이 하나라도 끼어들면 MONTH_COL 상수가
+        엉뚱한 칸을 가리키고, 점수는 오류 하나 없이 옆 칸에 들어간다. QSC 쪽은 「QSC점수」(옛 「위생점수」) ·
+        MS 쪽은 「MS점수」(옛 「CS점수」)여야 쓴다. ★쓰지 않고 알린다★ — 부르는 쪽(saveQsc·saveShopper·되돌리기·월말 반영)이
+        이 실패를 화면·기록에 그대로 올린다(제출 자체는 응답 시트에 저장된 뒤다). */
+  const headCell = sh.getRange(5, col);
+  /* ★머리글이 두 줄이다★ (2026-09-18 실물: 5행은 「점수」·「등급」뿐이고 「QSC」「MS」는 그 윗줄) — 3~5행을 이어 붙여 본다.
+     v144 는 5행만 봐서 「점수」≠「QSC점수」로 모든 점수 쓰기가 막힐 뻔했다(배포 직후 rateProbe 로 잡아 v145 에서 고침). */
+  const head = sh.getRange(3, col, 3, 1).getValues().map(function (r) { return r[0] == null ? '' : String(r[0]); }).join('').replace(/\s+/g, '');
+  const want = (offset === 2) ? ['MS점수', 'CS점수'] : ['QSC점수', '위생점수'];
+  /* 「포함」으로 본다 — 머리글에 「(10월)」 같은 장식이 붙어 있어도 열이 맞으면 쓴다. 막으려는 것은 「끼어든 열」(전혀 다른 말)이다. */
+  if (!want.some(function (w) { return head.indexOf(w) >= 0; })) {
+    return { ok: false, error: '열 머리글 불일치: ' + headCell.getA1Notation() + ' = 「' + head + '」 (기대 ' + want.join('·') +
+      ') — 통합시트 열이 바뀐 것 같습니다. 점수는 직접 입력해 주십시오' };
+  }
   const last = sh.getLastRow();
   const rng = grid(sh, 6, STORE_NAME_COL, last - 5, 1); // D6부터 매장명 (숨김 행도 그대로 온다)
   const names = rng ? rng.getValues() : [];
@@ -4272,7 +4426,7 @@ function writeDashboard(store, dateStr, frac, offset) {
     if (normStore(names[i][0]) === key) {
       const row = 6 + i;
       const cell = sh.getRange(row, col);
-      /* ② 그 칸이 수식이면 손대지 않는다. 점수 칸은 사람이 넣는 값 칸이라 수식이 있을 리 없다 —
+      /* ③ 그 칸이 수식이면 손대지 않는다. 점수 칸은 사람이 넣는 값 칸이라 수식이 있을 리 없다 —
             있다면 열을 잘못 짚었거나(칸 뜻이 또 바뀌었거나) 담당자가 뭔가 걸어 둔 것이다.
             setValue는 수식을 되돌릴 수 없이 지운다. 덮어쓰기 전에 멈추는 편이 낫다. */
       if (String(cell.getFormula() || '') !== '') {
@@ -4651,12 +4805,24 @@ function attachAdminLive(out, ctx, store, ym) {
   if (!isAdmin) return;
   try {
     const dateStr = '20' + String(ym).slice(0, 2) + '-' + String(ym).slice(2, 4) + '-01';
-    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-    const tz = fileTz(ss);
-    if (monthClosed(dateStr, tz)) return;      // 이미 매장 파일에 들어간 달 — 덧붙일 것이 없다
-    const sh = ss.getSheetByName(MS_DETAIL);
-    if (!sh) return;
-    const avg = shopperMonthAvg(sh, store, dateStr, tz);      // 0~100
+    /* ★60초 캐시★ (2026-09-17 ③-5 · find_S4 §2) — 종전에는 관리자가 매장현황을 열 때마다 응답 시트를 열고 MS_상세
+       6,000행×17열(102k셀)을 읽었다. 키를 매장 캐시(store:…)와 ★따로★ 둔다 — 매장 계정에는 절대 안 실리는 구조를
+       그대로 지키기 위해서다(위 「캐시 밖에서 붙인다」). 제출·되돌리기 때 dropStoreCache 가 이 키도 함께 버린다.
+       관리자에게 잠정 MS 가 1분 늦는 것은 무해하다. 값이 없을 때(0)도 담는다 — 없는 달을 매번 다시 읽지 않게. */
+    const ck = 'mslive:v' + epoch() + ':' + normStore(store) + ':' + ym;
+    const cache = CacheService.getScriptCache();
+    let avg = null;
+    const hit = cache.get(ck);
+    if (hit !== null && hit !== undefined && hit !== '') { const hn = Number(hit); if (isFinite(hn)) avg = hn; }
+    if (avg === null) {
+      const ss = ssOpen(SPREADSHEET_ID);
+      const tz = fileTz(ss);
+      if (monthClosed(dateStr, tz)) return;      // 이미 매장 파일에 들어간 달 — 덧붙일 것이 없다
+      const sh = ss.getSheetByName(MS_DETAIL);
+      if (!sh) return;
+      avg = shopperMonthAvg(sh, store, dateStr, tz);      // 0~100 · 「가장 최근 1건」
+      try { cache.put(ck, String(avg), 60); } catch (e) { }
+    }
     if (!avg) return;
     out.summary.msLive = round1(avg);
     /* 종합도 같은 산식으로 미리 낸다 — 시트 수식과 같아야 한다(setTotalFormula).
@@ -4759,7 +4925,7 @@ function qscRounds(store, ym) {
 
   const out = [];
   try {
-    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const ss = ssOpen(SPREADSHEET_ID);
     const sh = ss.getSheetByName('QSC_회차');
     if (!sh || sh.getLastRow() < 2) return out;
     const tz = ss.getSpreadsheetTimeZone();   // 날짜·시간 칸은 이 파일의 시계로 읽는다
@@ -4808,12 +4974,14 @@ function roundTicketCounts(store, ym, rounds) {
 
 function roundTicketCountsRaw(store, ym, rounds) {
   try {
-    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const ss = ssOpen(SPREADSHEET_ID);
     const sh = ss.getSheetByName('QSC_상세');
     if (!sh || sh.getLastRow() < 2) return null;
     const tz = ss.getSpreadsheetTimeZone();
     // 0 점검일자 · 1 방문시간 · 2 매장명 · … · 8 개선필요건수
-    const rng = grid(sh, 2, 1, sh.getLastRow() - 1, 9);
+    /* ★위에서 LEDGER_SCAN 행만★ (2026-09-17 ③-6 · find_S4 §1) — QSC_상세는 최신이 맨 위(prependRows)라 이번 달은 앞쪽에 있다.
+       74문항×26곳 = 월 1,900행이니 3,000행이면 최근 1.5개월치다. 통째로 읽으면 1년 뒤 23k행×9열 = 207k셀 → 캐시 미스마다 1~2초. */
+    const rng = grid(sh, 2, 1, Math.min(LEDGER_SCAN, sh.getLastRow() - 1), 9);
     if (!rng || rng.getNumColumns() < 9) return null;
     const vals = rng.getValues();
     const want = normStore(store);
@@ -5293,6 +5461,7 @@ function dropStoreCache(store, ym) {
     CacheService.getScriptCache().removeAll([
       'store:v' + epoch() + ':' + s + ':' + ym,
       'rnd:v' + epoch() + ':' + s + ':' + ym,
+      'mslive:v' + epoch() + ':' + s + ':' + ym,   // 관리자 잠정 MS 60초 캐시(attachAdminLive) — 제출·되돌리기 뒤 낡지 않게
     ]);
   } catch (e) { }
 }
@@ -5561,9 +5730,11 @@ function recountSummary(sh, tz) {
         planRaw: at(v, g.plan), due: at(v, g.due), sub: g.roll ? at(v, g.roll) : '',
       }, today, tz, ym, false);
       judged.push({ state: jd.state, waive: at(v, g.waive) === true });
-      /* '기한 후 완료'는 완료로도 진행으로도 세지 않는다(미조치 칸) — 개선율 분자와 같다 (2026-09-17 J1) */
+      /* '기한 후 완료'는 완료로도 진행으로도 세지 않는다(미조치 칸) — 개선율 분자와 같다 (2026-09-17 J1)
+         '재제출기한 지남'도 진행이 아니라 ★미조치★로 흘린다 (2026-09-17 #28) — 앱(store-app.js)은 그 건을 「기한 지남」으로 세는데
+         시트 요약만 「개선예정/진행」에 넣고 있었다. 이 줄이 월별 QSC현황표로 가므로 앱과 같은 집계여야 한다(개선율엔 영향 없음). */
       if (jd.state === '확정' || jd.state === '완료(검수 전)') done++;
-      else if (jd.state === '진행중' || jd.state === '반려' || jd.state === '재제출기한 지남') prog++;
+      else if (jd.state === '진행중' || jd.state === '반려') prog++;
     } else {
       const s = stateOf(at(v, g.plan), at(v, g.done));
       if (s === '완료') done++;
@@ -5727,6 +5898,12 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
      "편집기를 여세요"는 성립하지 않는 안내다.
      ★만든 사실을 반드시 알린다★ — 조용히 생기면 원본이 잘못 잡혔을 때 아무도 모른다. */
   let sh = ss.getSheetByName(tab);
+  /* ★확정된 달에는 쓰지 않는다★ (2026-09-17 담당자 ②-3h) — 시트 보호는 사람을 막지 스크립트 계정을 못 막는다(fnStoreSave 주석).
+     여기서 막지 않으면 확정 뒤 재제출이 그 달 탭을 덮어써 상태·개선율은 굳은 값인데 점수·표만 새것이 된다(「확정 후 점수 불변」이 깨진다).
+     fnQscSubmit·saveQsc 가 사진을 올리기 전에 같은 판정을 먼저 하지만(qscMonthClosed), 사본 시험(testStoreCopy)처럼 이 함수를
+     바로 부르는 길도 있으므로 여기서 한 번 더 본다. 되돌리기(fnUndoSubmit)도 같은 판단이다. */
+  const closedAt = monthClosedAt(ss, tab);
+  if (closedAt) return { ok: false, code: 'MONTH_CLOSED', error: ymLabel(tab) + ' 채점이 확정되어 제출할 수 없습니다.' };
   if (!sh) {
     let made;
     try { made = makeMonthTabIn(ss, tab); }
@@ -5899,7 +6076,7 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
 
   /* ★매장에 가는 것은 '사진 + 개선요청 문장' 둘뿐이다★ (2026-08-20 사용자 결정)
 
-     종전에는 이렇게 썼다:  [★★ 중대] A-05 원산지 표시… (2건)
+     종전에는 이렇게 썼다:  [★ 중대] A-05 원산지 표시… (2건)     (A-05 는 ★ 문항이다 — 2026-09-17 #32 정정)
      여기에는 ★채점 근거가 그대로 들어 있었다★ — 심각도 딱지 · 문항 코드 · 문항 본문 · 건수 ·
      대분류. 매장이 이 한 줄만 보고 "이 문항에서 ★★로 몇 건 걸려 몇 점 깎였구나"를 읽는다.
 
@@ -6505,7 +6682,7 @@ function fnMergeAuth(ctx, payload) {
    ★같은 함수를 두 입구가 부른다★ — 트리거가 안 돌았을 때 손으로 만회할 수 있고,
    두 길이 다른 일을 할 수가 없다. 몇 번을 돌려도 결과가 같다(덮어쓰기).
 
-   ★하는 일은 둘★ ①그 달 쇼퍼 평균을 매장 파일 MS점수에 쓴다 ②종합 수식을 새 규칙으로 고쳐 둔다
+   ★하는 일은 둘★ ①그 달 MS 점수(가장 최근 제출 1건 · 평균 아님 · 2026-09-17)를 매장 파일 MS점수에 쓴다 ②종합 수식을 새 규칙으로 고쳐 둔다
    (setTotalFormula — 옛 탭은 `COUNT(...)=0` 이라 MS가 비면 틀린 종합이 뜬다). */
 
 /* 그 달이 끝났는가 — 말일 23시가 지났으면 끝난 것으로 본다.
@@ -6636,6 +6813,7 @@ function monthCloseRun(ym, apply, stores) {
       const log = sheet(ss, '월말반영', ['실행시각', '대상월', '반영', '응답없음', '실패', '못한곳', '비고']);
       log.appendRow(safeRow([nowIso(), target, done.length, skip.length, bad.length, left.length,
         bad.concat(left).join(' / ').slice(0, 400)]));
+      gridForget(log);
     } catch (e) { lines.push('(실행 기록을 남기지 못했습니다: ' + String(e).slice(0, 50) + ')'); }
   }
   return { ok: true, apply: !!apply, ym: target, done: done.length, skipped: skip.length,
@@ -6777,6 +6955,163 @@ function fnFixDashTotal(ctx, payload) {
   return out;
 }
 
+/* ★종합등급 수식 감싸기★ — admin.fixGrade (2026-09-17 담당자 ②-5a · fixDashTotalRun 의 형제)
+
+   ★왜★ — 2026-09-16 「등급은 셋이 다 나와야 붙인다」가 앱(readStoreTab)에만 적용됐고, 같은 날 종합 수식을
+   「채워진 것부터 더하기」(위 fixDashTotalRun)로 바꿔 QSC 만 있어도 종합이 숫자가 됐다 → 시트의 등급 수식이 말을 붙인다.
+   실물: 카페 라 2612 탭 `QSC 0.87 · MS 빈칸 · 종합 0.522 · 종합등급 「부적합」`. 매장 파일은 링크 공개, 통합시트는 웹 공개라
+   ★월중에 매장이 「부적합」을 본다★. 담당자: 시트 등급 수식도 감싼다.
+
+   ★무엇을★ — 「종합등급」 칸의 기존 수식을
+       =IF(OR(NOT(ISNUMBER(<QSC점수칸>)),NOT(ISNUMBER(<MS점수칸>))),"",<기존 수식>)
+   로 감싼다. QSC등급·MS등급 칸은 손대지 않는다(각각 자기 점수만 보면 된다).
+     ① 매장 파일 — 새 원본 탭(TPL_NEW)과 2610 이후 월 탭(존재하는 것). 칸은 ★라벨로★ 찾는다(labelValue — 파일마다 자리가 다르다).
+     ② 통합시트 [데이터] — 10·11·12월 종합등급 열(MONTH_COL +6 = CB·CI·CP) 6~39행이 BV/BX(+0·+2)를 보게.
+   ★이미 감싼 칸은 건너뛴다★(두 번 돌려도 같다) · 수식이 아닌 칸(값)은 손대지 않는다 · 기본은 미리보기(고칠 칸 목록).
+   ★쓴 뒤 다시 읽어 대조한다★ — 방금 만든 객체에게 묻지 않는다(fixDashTotalRun 과 같은 규율).
+
+   부르는 법
+     await Api.call('admin.fixGrade', {})                  ← 미리보기 · page 0 (통합시트 + 매장 1~7곳)
+     await Api.call('admin.fixGrade', {page:1})            ← 매장 8~14곳 (0·1·2·3)
+     await Api.call('admin.fixGrade', {page:0, apply:true}) ← 실제로 쓴다
+   ⚠26곳을 한 번에 돌리지 말 것 — 파일마다 열기+탭마다 라벨 읽기라 45초 시한에 걸린다. 7곳씩 4쪽이다. */
+const FIX_GRADE_PER_PAGE = 7;
+const GRADE_WRAP_RE = /^=IF\(OR\(NOT\(ISNUMBER\(/i;
+
+/* 기존 수식 f 를 감싼 수식. null = 수식이 아니다(값 칸 · 손대지 않는다) · '' = 이미 감쌌다 · 그 밖 = 새 수식 */
+function wrapGradeFormula(f, qA1, mA1) {
+  const cur = String(f == null ? '' : f).trim();
+  if (!cur || cur.charAt(0) !== '=') return null;
+  if (GRADE_WRAP_RE.test(cur.replace(/\s+/g, ''))) return '';
+  return '=IF(OR(NOT(ISNUMBER(' + qA1 + ')),NOT(ISNUMBER(' + mA1 + '))),"",' + cur.slice(1) + ')';
+}
+
+/* 월 탭(또는 원본 탭) 하나. 돌려주는 값: { mark, msg } — mark '✓' 썼다 · '·' 할 것 없음/미리보기 · '✗' 못 했다 */
+function fixGradeTabIn(sh, apply) {
+  const norm = function (f) { return String(f == null ? '' : f).replace(/\s+/g, ''); };
+  const lm = labelMap(sh);
+  const q = labelValue(lm, L_QSC), m = labelValue(lm, L_MS), g = labelValue(lm, ['종합등급']);
+  if (!(q.found && q.row && m.found && m.row && g.found && g.row)) {
+    return { mark: '✗', msg: '라벨을 못 찾았습니다(' + (q.found ? '' : 'QSC점수 ') + (m.found ? '' : 'MS점수 ') + (g.found ? '' : '종합등급') + ')' };
+  }
+  const a1 = function (pv) { return grid(sh, pv.row, pv.col, 1, 1).getA1Notation(); };
+  const cell = grid(sh, g.row, g.col, 1, 1);
+  const next = wrapGradeFormula(cell.getFormula(), a1(q), a1(m));
+  if (next === null) return { mark: '·', msg: '종합등급 ' + a1(g) + ' 이 수식이 아니라 손대지 않았습니다' };
+  if (next === '') return { mark: '·', msg: '이미 감싸져 있습니다' };
+  if (!apply) return { mark: '·', msg: '고칠 칸 ' + a1(g) + ' → ' + next.slice(0, 60) + (next.length > 60 ? '…' : '') };
+  cell.setFormula(next);
+  SpreadsheetApp.flush();
+  const back = grid(sh, g.row, g.col, 1, 1).getFormula();
+  if (norm(back) !== norm(next)) return { mark: '✗', msg: a1(g) + ' 에 썼는데 다시 읽은 값이 다릅니다' };
+  return { mark: '✓', msg: a1(g) + ' 감쌌습니다' };
+}
+
+/* 통합시트 [데이터] 10·11·12월 종합등급 열(CB·CI·CP) 6~39행 */
+function fixGradeDashRun(apply) {
+  const lines = [];
+  if (!DASHBOARD_ID) return { ok: false, changed: 0, wrote: 0, mismatch: 0, lines: ['통합시트 ID 가 설정되어 있지 않습니다'] };
+  let sh;
+  try { sh = SpreadsheetApp.openById(DASHBOARD_ID).getSheetByName(DASHBOARD_SHEET); }
+  catch (e) { return { ok: false, changed: 0, wrote: 0, mismatch: 0, lines: ['통합시트를 열지 못했습니다: ' + String(e).slice(0, 60)] }; }
+  if (!sh) return { ok: false, changed: 0, wrote: 0, mismatch: 0, lines: ['통합시트 [' + DASHBOARD_SHEET + '] 탭을 찾지 못했습니다'] };
+
+  const ROW0 = 6, ROWN = 34;              // 6~39행 (fixDashTotalRun 과 같다)
+  const norm = function (f) { return String(f == null ? '' : f).replace(/\s+/g, ''); };
+  let changed = 0, wrote = 0, bad = 0;
+  [10, 11, 12].forEach(function (mo) {
+    const base = MONTH_COL[mo];
+    const gCol = base + 6;                                    // +6 종합등급 (MONTH_COL 주석의 오프셋)
+    const a1 = colLetter(gCol) + ROW0 + ':' + colLetter(gCol) + (ROW0 + ROWN - 1);
+    const rng = sh.getRange(ROW0, gCol, ROWN, 1);
+    const now = rng.getFormulas();
+    const next = [];
+    let d = 0, valueCells = 0, already = 0;
+    for (let i = 0; i < ROWN; i++) {
+      const r = ROW0 + i;
+      const w = wrapGradeFormula(now[i][0], colLetter(base) + r, colLetter(base + 2) + r);
+      if (w === null) { valueCells++; next.push(null); }
+      else if (w === '') { already++; next.push(null); }
+      else { d++; next.push(w); }
+    }
+    changed += d;
+    if (!apply) {
+      lines.push('· ' + mo + '월 ' + a1 + ' — 고칠 칸 ' + d + ' / 이미 감싼 칸 ' + already + ' / 수식 아닌 칸 ' + valueCells);
+      if (d && mo === 10) { const k = next.findIndex(function (x) { return x !== null; }); lines.push('   새 수식(첫 칸): ' + next[k]); }
+      return;
+    }
+    if (!d) { lines.push('· ' + mo + '월 ' + a1 + ' — 고칠 칸 없음'); return; }
+    /* ★칸마다 쓴다★ — 값 칸이 섞여 있을 수 있어 열 통째 setFormulas 는 그 값을 지운다. 고칠 칸만 쓴다(최대 34회) */
+    for (let i = 0; i < ROWN; i++) if (next[i] !== null) sh.getRange(ROW0 + i, gCol).setFormula(next[i]);
+    SpreadsheetApp.flush();
+    const back = sh.getRange(ROW0, gCol, ROWN, 1).getFormulas();
+    let okc = 0;
+    for (let i = 0; i < ROWN; i++) if (next[i] !== null && norm(back[i][0]) === norm(next[i])) okc++;
+    wrote += d; bad += (d - okc);
+    lines.push((okc === d ? '✓ ' : '★ ') + mo + '월 ' + a1 + ' — 썼다 ' + d + ' · 대조 ' + okc + '/' + d + (okc === d ? '' : ' ★어긋난 칸이 있습니다★'));
+  });
+  return { ok: true, changed: changed, wrote: wrote, mismatch: bad, lines: lines };
+}
+
+function fixGradeRun(page, apply) {
+  const all = displayStores();
+  const p = Math.max(0, Number(page || 0) | 0);
+  const list = all.slice(p * FIX_GRADE_PER_PAGE, p * FIX_GRADE_PER_PAGE + FIX_GRADE_PER_PAGE);
+  const pages = Math.ceil(all.length / FIX_GRADE_PER_PAGE);
+  const t0 = Date.now();
+  const lines = ['=== 종합등급 수식 감싸기 ' + (apply ? '★적용★' : '미리보기') + ' · ' + (p + 1) + '/' + pages + '쪽 (매장 ' + list.length + '곳) ==='];
+  let dash = null;
+  if (p === 0) {
+    dash = fixGradeDashRun(apply);
+    lines.push('[통합시트]');
+    dash.lines.forEach(function (x) { lines.push('  ' + x); });
+  }
+  let stores = 0, tabs = 0, todo = 0, bad = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (Date.now() - t0 > 40 * 1000) { lines.push('★시간이 부족해 ' + i + '곳에서 멈췄습니다 — 같은 쪽을 다시 돌리십시오★'); break; }
+    const store = list[i];
+    try {
+      const id = storeFileId(store);
+      if (!id) { lines.push('✗ ' + store + ' — 파일 ID 없음'); bad++; continue; }
+      const ss2 = SpreadsheetApp.openById(id);
+      /* ★대상은 새 원본 탭과 2610~ 월 탭뿐★ — 1~9월은 끝난 기록이고 본사 자물쇠라 손도 못 댄다(fixTotalFormulaRun 과 같다) */
+      const names = ss2.getSheets().map(function (x) { return x.getName().trim(); })
+        .filter(function (n) { return n === TPL_NEW || (/^\d{4}$/.test(n) && n >= '2610'); });
+      if (!names.length) { lines.push('· ' + store + ' — 대상 탭 없음'); stores++; continue; }
+      const parts = [];
+      names.forEach(function (n) {
+        const sh2 = ss2.getSheetByName(n);
+        if (!sh2) return;
+        const r = fixGradeTabIn(sh2, apply);
+        if (r.mark === '✓') tabs++;
+        if (r.mark === '✗') bad++;
+        if (!apply && r.msg.indexOf('고칠 칸') === 0) todo++;
+        parts.push(r.mark + ' ' + n + ': ' + r.msg);
+      });
+      lines.push('· ' + store + ' — ' + parts.join(' | '));
+      stores++;
+    } catch (e) { lines.push('✗ ' + store + ' — ' + String(e).slice(0, 70)); bad++; }
+  }
+  lines.push('매장 ' + stores + '곳 · ' + (apply ? ('감싼 탭 ' + tabs + '개') : ('고칠 탭 ' + todo + '개')) + (bad ? ' · 못 한 곳 ' + bad : '') +
+    (dash ? (' · 통합시트 ' + (apply ? ('쓴 칸 ' + dash.wrote + ' · 어긋남 ' + dash.mismatch) : ('고칠 칸 ' + dash.changed))) : ''));
+  if (!apply) lines.push('실제로 하려면 {apply:true} 를 붙여 다시 부르십시오 (지금은 아무것도 안 바꿨습니다)');
+  if (p + 1 < pages) lines.push('다음 쪽: {page:' + (p + 1) + '}');
+  return { ok: true, apply: !!apply, page: p, pages: pages, stores: stores, tabs: tabs, todo: todo, bad: bad,
+    dash: dash ? { changed: dash.changed, wrote: dash.wrote, mismatch: dash.mismatch } : null, lines: lines };
+}
+
+function fnFixGrade(ctx, payload) {
+  const p = payload || {};
+  const apply = p.apply === true;
+  const out = fixGradeRun(p.page, apply);
+  if (apply && out && out.ok) {
+    auditLog(ctx, 'admin.fixGrade', '', '성공', '',
+      (out.page + 1) + '쪽 · 종합등급 수식 감싼 탭 ' + out.tabs + '개' + (out.dash ? (' · 통합시트 ' + out.dash.wrote + '칸') : '') +
+      (out.bad ? (' · 못 한 곳 ' + out.bad) : ''));
+  }
+  return out;
+}
+
 /* ★이름이 fnMonthClose 가 아니다★ (2026-09-04) — 그 이름은 이미 「그 달 개선요청 확정」
    (액션 month.close)이 쓰고 있었다. 같은 이름을 또 선언해서 ★뒤엣것이 이겨★ 이 기능이
    한 번도 안 돌았다. 등록표 검사는 「가리키는 함수가 있는가」만 보므로 이것을 못 잡았다
@@ -6876,7 +7211,8 @@ function fnShareProbe(ctx, payload) {
    2026-09-04 검수에서 찾은 것:
      호우주의보 이태원 2612  매장 파일 종합 87.2  ↔  통합시트 종합 97.2  (10점 차)
    월 탭에는 개선율 0 이 들어 있는데(종합 87.2 가 그 증거) 통합시트는 빈칸을 받고 있다.
-   통합시트 종합 수식이 =IF(COUNT(BV,BX)<2,"", … IF(BZ="",1,BZ)*0.1) 이라
+   통합시트 종합 수식이 =IF(NOT(ISNUMBER(BV)),"",BV*0.6+IF(ISNUMBER(BX),BX,0)*0.3+IF(ISNUMBER(BZ),BZ,1)*0.1) 이라
+   (2026-09-16 admin.fixDashTotal 로 갈아 끼운 지금 수식 · 옛 COUNT 수식도 이 점은 같았다)
    ★개선율이 비면 100%로 쳐서 10점이 더 붙는다★.
 
    값이 건너오는 길은 세 걸음이다. 그 세 걸음을 ★값과 수식을 나란히★ 찍어 어디서 끊기는지 본다.
@@ -7980,6 +8316,11 @@ function fnRateProbe(ctx, payload) {
       } else {
         const base = MONTH_COL[mon];
         const one = { 행: row };
+        /* 5행 머리글 — writeDashboard 가 쓰기 전에 대조하는 글자다(#25). 실물 확인용으로 함께 찍는다. */
+        try {
+          const h3 = function (c) { return dsh.getRange(3, c, 3, 1).getValues().map(function (r) { return r[0] == null ? '' : String(r[0]); }); };
+          one.머리글 = { QSC: h3(base), MS: h3(base + 2) };   // 3·4·5행 — writeDashboard 는 이 셋을 이어 붙여 본다
+        } catch (e) { one.머리글 = String(e).slice(0, 60); }
         [['QSC', 0], ['MS', 2], ['개선', 4], ['종합', 5]].forEach(function (pair) {
           const c = dsh.getRange(row, base + pair[1]);
           one[pair[0]] = { 칸: c.getA1Notation(), 값: c.getValue(),
@@ -8349,6 +8690,7 @@ function delRows(sh, rows) {
     else runs.push({ at: s[i], n: 1 });
   }
   for (let i = runs.length - 1; i >= 0; i--) sh.deleteRows(runs[i].at, runs[i].n);
+  gridForget(sh);   // 행이 줄었다 — grid() 메모를 버린다(옛 값을 쓰면 getRange 가 그리드를 넘어 예외)
   return runs.length;
 }
 
@@ -8627,7 +8969,7 @@ function fnUndoSubmit(ctx, payload) {
   const hit = round.rows.length + detail.rows.length + shop.rows.length + shopMemo.rows.length + na.rows.length;
   log.push('QSC_회차 ' + round.rows.length + '건 · QSC_상세 ' + detail.rows.length +
     '건 · ' + MS_DETAIL + ' ' + shop.rows.length + '줄' +
-    '건 · NA프리셋 ' + na.rows.length + '건');
+    ' · NA프리셋 ' + na.rows.length + '건');
 
   /* ★찾은 것이 하나도 없으면 여기서 끝낸다★ — 아래로 내려가면 안 된다.
      내려가면 "그 달에 남는 자료가 없다"가 참이 되어 ★매장 파일 탭을 지우겠다★고 나선다.
@@ -8651,7 +8993,8 @@ function fnUndoSubmit(ctx, payload) {
     ? ('매장 파일 ' + tab + ' 탭: 그 달에 남는 자료가 없어 통째로 지웁니다 (탭의 방문일이 ' + date + '일 때만)')
     : ('매장 파일 ' + tab + ' 탭: 탭은 그대로 두고 ' + scoreCols + ' 점수 칸을 비웁니다' +
       (oneSided ? ' (한쪽만 되돌리기라 탭 자체는 지우지 않습니다 — 빈 양식으로 남고 다음에 그대로 쓰입니다)'
-        : ' — 그 달에 QSC ' + round.monthLeft + '건 · 쇼퍼 ' + shop.monthLeft + '건이 남습니다')));
+        : ' — 그 달에 QSC ' + round.monthLeft + '건 · 쇼퍼 ' +
+          (shop.monthLeftSubmits == null ? shop.monthLeft : shop.monthLeftSubmits) + '건이 남습니다')));   // 제출 건수(38줄=1건 · #17)
   /* ★방문일·방문시간·개선요청은 QSC가 쓴 것이다★ — 그래서 그 달에 QSC가 하나도 안 남을 때만
      되돌린다. 남아 있으면 그 줄들이 남은 회차의 것일 수 있어 가릴 방법이 없다(행에 회차 표식이 없다). */
   if (doQsc && !monthEmpty) {
@@ -8670,163 +9013,182 @@ function fnUndoSubmit(ctx, payload) {
   }
   log.push('통합시트 ' + ym + ' ' + (doQsc ? 'QSC' : '') + (doQsc && doShop ? '·' : '') + (doShop ? 'MS' : '') + ' 점수 칸을 비웁니다');
 
-  if (!apply) return { ok: true, preview: true, store: store, date: date, plan: log };
-
-  /* ★사진 파일 ID를 행을 지우기 전에 모아 둔다★ — QSC_상세 사진열(13번째)에 주소가 남아 있고,
-     그 주소 안에 파일 ID가 들어 있다. 행을 먼저 지우면 어느 사진이 이 제출 것인지 영영 알 수 없다. */
-  const photoIds = [];
-  if (detail.sh && detail.rows.length) {
-    const lastD = detail.sh.getLastRow();
-    const colR = grid(detail.sh, 2, 13, Math.max(0, lastD - 1), 1);
-    const col = colR ? colR.getValues() : [];
-    detail.rows.forEach(function (r) {
-      String((col[r - 2] || [''])[0] || '').split(/\s+/).forEach(function (u) {
-        const m = u.match(/[-\w]{25,}/);
-        if (m && photoIds.indexOf(m[0]) < 0) photoIds.push(m[0]);
-      });
-    });
-  }
-
-  /* ★지운 뒤 그 칸에 무엇을 넣을 것인가★ (2026-08-27)
-
-     종전에는 무조건 빈칸('')으로 만들었다. 그 달에 다른 제출이 남아 있어도 그랬다.
-     특히 CS 점수는 원래 「그 달에 들어온 쇼퍼 응답 ★전부의 평균★」인데(shopperMonthAvg),
-     그 평균 함수를 부르는 곳이 저장할 때 한 곳뿐이라 되돌릴 때는 다시 계산되지 않았다.
-     그래서 손님 설문 3건 중 하루치만 되돌려도 나머지 2건이 멀쩡히 있는데 CS 가 사라지고,
-     종합점수 수식이 「QSC·MS 둘 다 있어야 뜬다」라서 ★종합까지 안 뜬다★.
-
-     ⚠빈칸과 0점은 다르다. 통합시트 수식은
-         =IF(COUNT(BV,BX)<2,"", BV*0.6 + BX*0.3 + IF(BZ="",1,BZ)*0.1)
-       이라, MS 칸에 0 이 들어가면 COUNT 가 2가 되어 ★종합이 0점으로 계산되어 뜬다★.
-       빈칸이어야 종합도 빈칸이 된다. 그래서 「남은 게 있나」를 점수가 아니라
-       ★남은 줄 수(monthLeft)★ 로 가린다. */
-  function qscAfter() {
-    if (!round.sh || !round.leftRows.length) return '';       // 그 달에 QSC 가 안 남는다 → 빈칸
-    /* 저장 경로는 제출할 때마다 그 칸을 덮어쓴다 — 즉 「마지막에 낸 것이 이긴다」.
-       되돌린 뒤에도 같은 규칙으로, 남은 것 중 가장 나중에 낸 회차의 점수를 쓴다. */
-    let best = null, bestT = -1;
-    round.leftRows.forEach(function (v) {
-      const raw = v[0];                                       // 1열 제출시각
-      const t = (raw instanceof Date) ? raw.getTime() : Date.parse(String(raw || '')) || 0;
-      if (t >= bestT) { bestT = t; best = v; }
-    });
-    const sc = best ? best[5] : null;                         // 6열 QSC점수 (0~100)
-    return (typeof sc === 'number') ? sc / 100 : '';
-  }
-  function msAfter() {
-    if (!shop.sh || shop.monthLeft <= 0) return '';           // 그 달에 쇼퍼가 안 남는다 → 빈칸
-    /* ★줄을 지운 뒤에 불러야 한다★ — 이 함수는 시트를 다시 읽는다. */
-    const avg = shopperMonthAvg(shop.sh, store, date, tz);
-    return (typeof avg === 'number') ? avg / 100 : '';
-  }
-  /* ★MS 를 쓰는 곳은 전부 한 번 더 거른다★ (2026-09-04 검수에서 찾은 구멍)
-     되돌리기는 남은 자료로 점수를 다시 계산해 쓴다. 그런데 그 달이 아직 안 끝났으면
-     ★쓰는 순간 지연이 무너진다★ — 월중에 MS 점수가 매장 화면에 뜬다.
-     그 달이 열리기 전에는 빈칸으로 둔다(월말 반영이 그때 채운다).
-     ★매장 파일과 통합시트에 똑같이 건다★ — 통합시트도 웹에 공개돼 매장이 본다. */
-  function msAfterVisible() { return monthClosed(date, tz) ? msAfter() : ''; }
-
-  /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
-  [round, detail, shop, shopMemo, na].forEach(function (t) {
-    if (!t.sh || !t.rows.length) return;
-    delRows(t.sh, t.rows);
-  });
-  done.push('응답 시트 ' + (round.rows.length + detail.rows.length + shop.rows.length +
-    shopMemo.rows.length + na.rows.length) + '행 삭제');
-  if (na.rows.length) dropNaCache();   // NA프리셋 줄을 지웠으면 캐시도 버린다
-
-  /* ★되돌리기는 늘 매장 파일과 통합시트를 정리한다★ — 건너뛰는 조건이 없다.
-     멈추는 수단은 「관리자 도구 → 제출 관리 → 제출 되돌리기」, 곧 이 함수 하나다. */
+  /* ★확정된 달은 되돌리지 않는다★ (2026-09-17 담당자 ②-3h) — 제출 경로(qscMonthClosed·writeStoreQscInto)와 같은 판단·문구.
+     미리보기는 그대로 되고 그 사실을 계획에 적는다 · 실행(apply)은 거부한다. 매장 파일을 못 찾으면(응답 시트만 있는 시험 자료)
+     판정할 수 없으므로 막지 않는다 — 그때는 아래 done 에 「매장 파일을 못 찾았습니다」가 남는다. */
   const fileId = storeFileId(store);
-  if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
-  else {
-    const ss2 = SpreadsheetApp.openById(fileId);
-    const sh2 = ss2.getSheetByName(tab);
-    if (!sh2) done.push('매장 파일 ' + tab + ' 탭이 원래 없습니다');
-    else if (monthEmpty && dateOfCell(labelValue(labelMap(sh2), ['방문일', '방문일자', '점검일', '점검일자']).v, fileTz(ss2)) !== date) {
-      /* ★탭의 방문일이 다르면 지우지 않는다★ — 응답 시트에서는 안 보이는 회차가 그 탭에
-         들어 있다는 뜻이다(담당자가 손으로 만든 탭 등). 지우면 되돌릴 수 없다. */
-      if (doQsc) setByLabelAny(sh2, L_QSC, qscAfter());
-      if (doShop) setByLabelAny(sh2, L_MS, msAfterVisible());
-      done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 고쳤습니다');
-    }
-    else if (monthEmpty) { ss2.deleteSheet(sh2); done.push('매장 파일 ' + tab + ' 탭 삭제'); }
-    else {
-      const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfterVisible() : '';
-      if (doQsc) setByLabelAny(sh2, L_QSC, qv);
-      if (doShop) setByLabelAny(sh2, L_MS, mv);
-      const parts = [(qv === '' && mv === '')
-        ? '점수 칸을 비웠습니다'
-        : ('점수 칸을 남은 자료로 다시 계산했습니다' +
-           (qv === '' ? '' : ' (QSC ' + round1(qv * 100) + '점)') +
-           (mv === '' ? '' : ' (MS ' + round1(mv * 100) + '점)'))];
-      /* 방문일·방문시간·개선요청은 QSC가 쓴 것이다. 그 달에 QSC가 하나도 안 남고, 탭의 방문일이
-         지금 되돌리는 날짜와 같을 때만 되돌린다 — 그 조건이면 표의 모든 줄이 이 제출 것이다. */
-      const tabDate = dateOfCell(labelValue(labelMap(sh2),
-        ['방문일', '방문일자', '점검일', '점검일자']).v, fileTz(ss2));
-      if (doQsc && round.monthLeft === 0 && tabDate === date) {
-        /* ★개선요청을 먼저 지우고, 성공했을 때만 방문일을 지운다★ (2026-08-27)
-           순서가 반대였다. 방문일을 먼저 비우면 — 개선요청을 못 지웠을 때 —
-           다음 제출이 '다른 회차'로 보고 남은 줄 ★아래에 이어 붙인다★.
-           그러면 개선요청이 두 벌이 되고 개선율이 반토막 난 채 종합점수에 들어간다.
-           방문일을 남겨 두면 다음 제출이 '같은 회차'로 보고 덮어쓰기를 시도하다가
-           매장이 적은 것을 보고 스스로 멈춘다 — 안전한 쪽으로 실패한다. */
-        const w = wipeImprove(sh2);
-        if (w.ok) {
-          setByLabel(sh2, '방문일', '');
-          setByLabel(sh2, '방문시간', '');
-          parts.push('방문일·방문시간을 비웠습니다');
-          parts.push(w.n
-            ? ('개선요청 ' + w.n + '행을 비웠습니다' +
-               (w.touched ? (' (매장이 적은 답 ' + w.touched + '건도 함께 지웠습니다 — 매장에 다시 요청하셔야 합니다)') : ''))
-            : '개선요청 행은 원래 없었습니다');
-        } else {
-          dirty = true; dirtyWhy = w.why || '';
-          parts.push('★개선요청 ' + (w.n || 0) + '행을 지우지 못했습니다★ — ' + w.why +
-            ' · 방문일도 그대로 두었습니다(다음 제출이 이어 붙지 않게)');
-        }
-      } else if (doQsc) {
-        parts.push('★개선요청 행은 손으로 지우십시오★ — ' + (round.monthLeft
-          ? '그 달에 QSC ' + round.monthLeft + '건이 남아 어느 줄이 이 제출 것인지 가릴 수 없습니다'
-          : '탭의 방문일이 ' + date + '가 아닙니다'));
-      }
-      done.push('매장 파일 ' + tab + ' 탭: ' + parts.join(' · '));
-    }
-  }
+  const closedAt = fileId ? monthClosedAt(ssOpen(fileId), tab) : '';
+  if (closedAt) log.push('★' + ymLabel(tab) + ' 채점이 ' + closedAt + '에 확정된 달입니다 — 되돌릴 수 없습니다(실행이 거부됩니다)★');
 
-  /* 통합시트 — writeDashboard 를 그대로 탄다. 빈 값을 쓰는 것뿐이라
-     '올해인가·그 칸이 수식인가' 두 검사도 똑같이 걸린다. */
-  if (DASHBOARD_ID) {
-    if (doQsc) {
-      const v = qscAfter();
-      const a = writeDashboard(store, date, v, 0);
-      done.push('통합시트 QSC 칸: ' + (a.ok
-        ? (a.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (남은 자료로 다시 계산)'))) : a.error));
+  if (!apply) return { ok: true, preview: true, store: store, date: date, plan: log, closedAt: closedAt || null };
+  if (closedAt) return err('MONTH_CLOSED', ymLabel(tab) + ' 채점이 확정되어 되돌릴 수 없습니다.');
+
+  /* ★스크립트 락★ (2026-09-17 #26) — 종전에는 락 없이 응답 행을 지웠다. 매장 파일 단계에서 예외가 나면 반쯤 지워진 채 재개할 수 없고,
+     같은 매장의 개선보고 저장(fnStoreSave · 락 20초)과 몇 초 겹칠 수 있었다. fnMonthClose 와 같은 모양으로 잡는다 —
+     못 잡으면 아무것도 지우지 않고 알린다. ★락을 쥔 채 이 함수를 부르는 곳은 없다★(guardResubmit 은 락 밖이다 · 앱스 스크립트 락은 재진입이 안 된다). */
+  const lock = LockService.getScriptLock();
+  let got = false;
+  try { got = lock.tryLock(20000); } catch (e) { got = false; }
+  if (!got) return err('CONFLICT', '다른 처리가 진행 중입니다. 잠시 후 다시 시도해 주세요.');
+  try {
+
+    /* ★사진 파일 ID를 행을 지우기 전에 모아 둔다★ — QSC_상세 사진열(13번째)에 주소가 남아 있고,
+       그 주소 안에 파일 ID가 들어 있다. 행을 먼저 지우면 어느 사진이 이 제출 것인지 영영 알 수 없다. */
+    const photoIds = [];
+    if (detail.sh && detail.rows.length) {
+      const lastD = detail.sh.getLastRow();
+      const colR = grid(detail.sh, 2, 13, Math.max(0, lastD - 1), 1);
+      const col = colR ? colR.getValues() : [];
+      detail.rows.forEach(function (r) {
+        String((col[r - 2] || [''])[0] || '').split(/\s+/).forEach(function (u) {
+          const m = u.match(/[-\w]{25,}/);
+          if (m && photoIds.indexOf(m[0]) < 0) photoIds.push(m[0]);
+        });
+      });
     }
-    if (doShop) {
-      const v = msAfterVisible();      // ★통합시트도 월중에는 빈칸으로 둔다★
-      const b = writeDashboard(store, date, v, 2);
-      done.push('통합시트 MS 칸: ' + (b.ok
-        ? (b.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (그 달 남은 ' +
-           (shop.monthLeftSubmits == null ? shop.monthLeft : shop.monthLeftSubmits) + '건 평균)'))) : b.error));
+
+    /* ★지운 뒤 그 칸에 무엇을 넣을 것인가★ (2026-08-27)
+
+       종전에는 무조건 빈칸('')으로 만들었다. 그 달에 다른 제출이 남아 있어도 그랬다.
+       특히 CS 점수는 원래 「그 달에 들어온 쇼퍼 응답 ★전부의 평균★」인데(shopperMonthAvg),
+       그 평균 함수를 부르는 곳이 저장할 때 한 곳뿐이라 되돌릴 때는 다시 계산되지 않았다.
+       그래서 손님 설문 3건 중 하루치만 되돌려도 나머지 2건이 멀쩡히 있는데 CS 가 사라지고,
+       종합점수 수식이 「QSC·MS 둘 다 있어야 뜬다」라서 ★종합까지 안 뜬다★.
+
+       ⚠빈칸과 0점은 다르다. 통합시트 종합 수식은(2026-09-16 부터)
+           =IF(NOT(ISNUMBER(BV)),"",BV*0.6+IF(ISNUMBER(BX),BX,0)*0.3+IF(ISNUMBER(BZ),BZ,1)*0.1)
+         이라, MS 칸이 비면 0 으로 치고 QSC 만으로 종합이 뜬다 — MS 에 0 을 넣어도 같은 종합이지만 ★「0점 받았다」로 읽힌다★.
+         QSC 칸은 비어야 종합도 빈다(0 이면 0점 종합이 뜬다). 그래서 「남은 게 있나」를 점수가 아니라
+         ★남은 줄 수(monthLeft)★ 로 가린다. (옛 수식 `IF(COUNT(BV,BX)<2,"",…)` 시절의 「MS 가 비면 종합도 빈다」는 이제 거짓이다 · #32) */
+    function qscAfter() {
+      if (!round.sh || !round.leftRows.length) return '';       // 그 달에 QSC 가 안 남는다 → 빈칸
+      /* 저장 경로는 제출할 때마다 그 칸을 덮어쓴다 — 즉 「마지막에 낸 것이 이긴다」.
+         되돌린 뒤에도 같은 규칙으로, 남은 것 중 가장 나중에 낸 회차의 점수를 쓴다. */
+      let best = null, bestT = -1;
+      round.leftRows.forEach(function (v) {
+        const raw = v[0];                                       // 1열 제출시각
+        const t = (raw instanceof Date) ? raw.getTime() : Date.parse(String(raw || '')) || 0;
+        if (t >= bestT) { bestT = t; best = v; }
+      });
+      const sc = best ? best[5] : null;                         // 6열 QSC점수 (0~100)
+      return (typeof sc === 'number') ? sc / 100 : '';
     }
-  }
-  /* ★지우지 않고 휴지통으로 보낸다★ — 되돌리기를 잘못 눌렀을 때 되찾을 수 있어야 한다
-     (구글 드라이브 휴지통 30일). 이 저장소의 "코드가 사진을 지우지 않는다" 정책은
-     '어느 사진이 어느 제출 것인지 모르는' 정리 작업을 두고 한 말이고, 여기는 정확히 안다. */
-  if (photoIds.length) {
-    let okN = 0, badN = 0;
-    photoIds.forEach(function (id) {
-      try { DriveApp.getFileById(id).setTrashed(true); okN++; } catch (e) { badN++; }
+    function msAfter() {
+      if (!shop.sh || shop.monthLeft <= 0) return '';           // 그 달에 쇼퍼가 안 남는다 → 빈칸
+      /* ★줄을 지운 뒤에 불러야 한다★ — 이 함수는 시트를 다시 읽는다. */
+      const avg = shopperMonthAvg(shop.sh, store, date, tz);
+      return (typeof avg === 'number') ? avg / 100 : '';
+    }
+    /* ★MS 를 쓰는 곳은 전부 한 번 더 거른다★ (2026-09-04 검수에서 찾은 구멍)
+       되돌리기는 남은 자료로 점수를 다시 계산해 쓴다. 그런데 그 달이 아직 안 끝났으면
+       ★쓰는 순간 지연이 무너진다★ — 월중에 MS 점수가 매장 화면에 뜬다.
+       그 달이 열리기 전에는 빈칸으로 둔다(월말 반영이 그때 채운다).
+       ★매장 파일과 통합시트에 똑같이 건다★ — 통합시트도 웹에 공개돼 매장이 본다. */
+    function msAfterVisible() { return monthClosed(date, tz) ? msAfter() : ''; }
+
+    /* ── 여기부터 실제로 지운다. 아래에서 위로 지워야 행 번호가 밀리지 않는다 ── */
+    [round, detail, shop, shopMemo, na].forEach(function (t) {
+      if (!t.sh || !t.rows.length) return;
+      delRows(t.sh, t.rows);
     });
-    done.push('사진 ' + okN + '장을 휴지통으로 보냈습니다' +
-      (badN ? ' (' + badN + '장은 못 찾았습니다 — 이미 지워졌을 수 있습니다)' : ''));
-  }
+    done.push('응답 시트 ' + (round.rows.length + detail.rows.length + shop.rows.length +
+      shopMemo.rows.length + na.rows.length) + '행 삭제');
+    if (na.rows.length) dropNaCache();   // NA프리셋 줄을 지웠으면 캐시도 버린다
 
-  dropDashCache(date);
-  dropStoreCache(store, tab);
-  auditLog(ctx, 'admin.undoSubmit', store, '성공', '', date + (time ? ' ' + time : '') + ' / ' + kind + ' / ' + done.join(' · '));
-  return { ok: true, preview: false, store: store, date: date, plan: log, done: done, dirty: dirty, why: dirtyWhy };
+    /* ★되돌리기는 늘 매장 파일과 통합시트를 정리한다★ — 건너뛰는 조건이 없다.
+       멈추는 수단은 「관리자 도구 → 제출 관리 → 제출 되돌리기」, 곧 이 함수 하나다. */
+    if (!fileId) done.push('★매장 파일을 못 찾았습니다★: ' + store);
+    else {
+      const ss2 = ssOpen(fileId);
+      const sh2 = ss2.getSheetByName(tab);
+      if (!sh2) done.push('매장 파일 ' + tab + ' 탭이 원래 없습니다');
+      else if (monthEmpty && dateOfCell(labelValue(labelMap(sh2), ['방문일', '방문일자', '점검일', '점검일자']).v, fileTz(ss2)) !== date) {
+        /* ★탭의 방문일이 다르면 지우지 않는다★ — 응답 시트에서는 안 보이는 회차가 그 탭에
+           들어 있다는 뜻이다(담당자가 손으로 만든 탭 등). 지우면 되돌릴 수 없다. */
+        if (doQsc) setByLabelAny(sh2, L_QSC, qscAfter());
+        if (doShop) setByLabelAny(sh2, L_MS, msAfterVisible());
+        done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 고쳤습니다');
+      }
+      else if (monthEmpty) { ss2.deleteSheet(sh2); done.push('매장 파일 ' + tab + ' 탭 삭제'); }
+      else {
+        const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfterVisible() : '';
+        if (doQsc) setByLabelAny(sh2, L_QSC, qv);
+        if (doShop) setByLabelAny(sh2, L_MS, mv);
+        const parts = [(qv === '' && mv === '')
+          ? '점수 칸을 비웠습니다'
+          : ('점수 칸을 남은 자료로 다시 계산했습니다' +
+             (qv === '' ? '' : ' (QSC ' + round1(qv * 100) + '점)') +
+             (mv === '' ? '' : ' (MS ' + round1(mv * 100) + '점)'))];
+        /* 방문일·방문시간·개선요청은 QSC가 쓴 것이다. 그 달에 QSC가 하나도 안 남고, 탭의 방문일이
+           지금 되돌리는 날짜와 같을 때만 되돌린다 — 그 조건이면 표의 모든 줄이 이 제출 것이다. */
+        const tabDate = dateOfCell(labelValue(labelMap(sh2),
+          ['방문일', '방문일자', '점검일', '점검일자']).v, fileTz(ss2));
+        if (doQsc && round.monthLeft === 0 && tabDate === date) {
+          /* ★개선요청을 먼저 지우고, 성공했을 때만 방문일을 지운다★ (2026-08-27)
+             순서가 반대였다. 방문일을 먼저 비우면 — 개선요청을 못 지웠을 때 —
+             다음 제출이 '다른 회차'로 보고 남은 줄 ★아래에 이어 붙인다★.
+             그러면 개선요청이 두 벌이 되고 개선율이 반토막 난 채 종합점수에 들어간다.
+             방문일을 남겨 두면 다음 제출이 '같은 회차'로 보고 덮어쓰기를 시도하다가
+             매장이 적은 것을 보고 스스로 멈춘다 — 안전한 쪽으로 실패한다. */
+          const w = wipeImprove(sh2);
+          if (w.ok) {
+            setByLabel(sh2, '방문일', '');
+            setByLabel(sh2, '방문시간', '');
+            parts.push('방문일·방문시간을 비웠습니다');
+            parts.push(w.n
+              ? ('개선요청 ' + w.n + '행을 비웠습니다' +
+                 (w.touched ? (' (매장이 적은 답 ' + w.touched + '건도 함께 지웠습니다 — 매장에 다시 요청하셔야 합니다)') : ''))
+              : '개선요청 행은 원래 없었습니다');
+          } else {
+            dirty = true; dirtyWhy = w.why || '';
+            parts.push('★개선요청 ' + (w.n || 0) + '행을 지우지 못했습니다★ — ' + w.why +
+              ' · 방문일도 그대로 두었습니다(다음 제출이 이어 붙지 않게)');
+          }
+        } else if (doQsc) {
+          parts.push('★개선요청 행은 손으로 지우십시오★ — ' + (round.monthLeft
+            ? '그 달에 QSC ' + round.monthLeft + '건이 남아 어느 줄이 이 제출 것인지 가릴 수 없습니다'
+            : '탭의 방문일이 ' + date + '가 아닙니다'));
+        }
+        done.push('매장 파일 ' + tab + ' 탭: ' + parts.join(' · '));
+      }
+    }
+
+    /* 통합시트 — writeDashboard 를 그대로 탄다. 빈 값을 쓰는 것뿐이라
+       '올해인가·그 칸이 수식인가' 두 검사도 똑같이 걸린다. */
+    if (DASHBOARD_ID) {
+      if (doQsc) {
+        const v = qscAfter();
+        const a = writeDashboard(store, date, v, 0);
+        done.push('통합시트 QSC 칸: ' + (a.ok
+          ? (a.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (남은 자료로 다시 계산)'))) : a.error));
+      }
+      if (doShop) {
+        const v = msAfterVisible();      // ★통합시트도 월중에는 빈칸으로 둔다★
+        const b = writeDashboard(store, date, v, 2);
+        done.push('통합시트 MS 칸: ' + (b.ok
+          ? (b.cell + (v === '' ? ' 비움' : (' → ' + round1(v * 100) + '점 (그 달 남은 ' +
+             (shop.monthLeftSubmits == null ? shop.monthLeft : shop.monthLeftSubmits) + '건 중 가장 최근 1건)'))) : b.error));
+      }
+    }
+    /* ★지우지 않고 휴지통으로 보낸다★ — 되돌리기를 잘못 눌렀을 때 되찾을 수 있어야 한다
+       (구글 드라이브 휴지통 30일). 이 저장소의 "코드가 사진을 지우지 않는다" 정책은
+       '어느 사진이 어느 제출 것인지 모르는' 정리 작업을 두고 한 말이고, 여기는 정확히 안다. */
+    if (photoIds.length) {
+      let okN = 0, badN = 0;
+      photoIds.forEach(function (id) {
+        try { DriveApp.getFileById(id).setTrashed(true); okN++; } catch (e) { badN++; }
+      });
+      done.push('사진 ' + okN + '장을 휴지통으로 보냈습니다' +
+        (badN ? ' (' + badN + '장은 못 찾았습니다 — 이미 지워졌을 수 있습니다)' : ''));
+    }
+
+    dropDashCache(date);
+    dropStoreCache(store, tab);
+    auditLog(ctx, 'admin.undoSubmit', store, '성공', '', date + (time ? ' ' + time : '') + ' / ' + kind + ' / ' + done.join(' · '));
+    return { ok: true, preview: false, store: store, date: date, plan: log, done: done, dirty: dirty, why: dirtyWhy };
+  } finally {
+    try { lock.releaseLock(); } catch (e) { }
+  }
 }
 
 /* 같은 일을 관리자 화면에서도 할 수 있게 — 편집기 함수 목록이 283개라 고르기가 어렵고,
@@ -9080,7 +9442,7 @@ function syncStoreAccountsCore(preview) {
     if (taken[key]) { skipped.push(name); return; }
     /* A~F만 쓴다. G~K(해시~최근접속)는 비워 두어 '비밀번호 미설정'으로 남긴다.
        ★preview 면 쓰지 않고 「추가될 것」 목록만 만든다★ */
-    if (!preview) sh.appendRow(safeRow([name, name, '매장담당자', name, STATUS_ON, '']));
+    if (!preview) { sh.appendRow(safeRow([name, name, '매장담당자', name, STATUS_ON, ''])); gridForget(sh); }
     taken[key] = true;
     mine[key] = name;
     added.push(name);
@@ -9167,6 +9529,7 @@ function archiveAuditLog(keep) {
     if (dst.getMaxRows() < at + chunk - 1) dst.insertRowsAfter(dst.getMaxRows(), at + chunk - 1 - dst.getMaxRows());
     dst.getRange(at, 1, chunk, AUDIT_COLS).setValues(vals);
     sh.deleteRows(2, chunk);           // 옮긴 만큼만 지운다 (머리글 1행은 그대로)
+    gridForget(sh); gridForget(dst);
     done += chunk;
   }
   const msg = '감사로그 ' + done + '줄을 「' + name + '」 탭으로 옮겼습니다. 남은 줄: ' + Math.max(0, sh.getLastRow() - 1);
@@ -9271,12 +9634,12 @@ function impGeo(sh) {
       last: Math.max(c.memo, c.roll || 0, c.waive || 0, c.redo || 0, c.audit || 0),
     };
   }
-  /* 옛 서식(2609 이하) — 종전에 박혀 있던 그 숫자들이다 */
+  /* 옛 서식(2609 이하) — 종전에 박혀 있던 그 숫자들이다. last 는 memo(16)까지 — 15 로 두면 비고 칸이 한 줄 읽기 범위 밖이었다 (2026-09-17 #33) */
   return {
     isNew: false, row0: 12, endRow: tableEndRow(sh),
     due: 2, state: 3, before: 4, body: 10,
     dept: 11, owner: 12, plan: 13, done: 14, after: 15, memo: 16,
-    audit: 0, redo: 0, waive: 0, roll: 0, last: 15,
+    audit: 0, redo: 0, waive: 0, roll: 0, last: 16,
   };
 }
 
@@ -9680,6 +10043,7 @@ function upgradeMonthTab(sh, dry) {
      그냥 그 칸에 써버리면 조용히 덮인다. 끼우면 시트가 수식 참조까지 같이 옮겨 준다. */
   if (!have) {
     sh.insertColumnsAfter(c.memo, 4);
+    gridForget(sh);
     SpreadsheetApp.flush();
     sh.getRange(c.hr, c.memo + 1, 1, 4).setValues([IMP_TAIL.slice()]);
     /* 머리글 서식은 기한 칸에서 복사한다 — 본사 몫 칸과 같은 색이 된다 */
@@ -10109,7 +10473,10 @@ function clearMonthBody(sh) {
     'QSC등급', 'MS등급', '위생등급', 'CS등급', '종합등급',
     '개선요청사항', '개선요청', '요청', '요청건수', '개선요청건수',
     '개선예정/진행', '개선예정', '개선진행', '진행중', '진행',
-    '개선완료', '조치완료', '완료', '미조치', '미이행'].forEach(function (label) {
+    '개선완료', '조치완료', '완료', '미조치', '미이행',
+    /* ★개선율★ (2026-09-17 #30) — 새 서식에서는 값 칸이다(recountSummary 가 값으로 적는다). 확정을 거친 달 탭에서 원본을
+       다시 뜨면(templateTabIn) 그 달 개선율이 박힌 채 물려받는다. 값이든 수식이든 지워도 안전하다 — 제출·저장·확정 때 다시 채워진다. */
+    '개선율'].forEach(function (label) {
       const p = labelValue(lm, [label]);
       if (!p.found || !p.row) return;
       const c = grid(sh, p.row, p.col, 1, 1);
@@ -10119,7 +10486,7 @@ function clearMonthBody(sh) {
 
 function tabSourceFor(ss, ym) {
   const shs = ss.getSheets();
-  const isTpl = function (n) { return !/^\d{4}$/.test(n) && n.indexOf('원본') >= 0; };
+  const isTpl = function (n) { return !/^\d{4}$/.test(n) && TPL_TAB_RE.test(n); };   // 원본 탭 판정은 TPL_TAB_RE 한 곳 (2026-09-17 #33)
   let neo = null, old = null;
   shs.forEach(function (x) {
     const n = x.getName().trim();
@@ -10855,6 +11222,11 @@ function fnImproveAudit(ctx, payload) {
   if (doWaive && !g.waive) {
     return err('CONFLICT', '이 달 탭에는 「감점제외」 칸이 없습니다 — 탭을 새 서식으로 올린 뒤 다시 시도해 주세요.');
   }
+  /* ★확정된 달은 검수·감점제외도 받지 않는다★ (2026-09-17 #27) — fnStoreSave 와 같은 문구·방식.
+     종전에는 화면의 closedAt() 하나에 기대고 있어(store-app.js 주석이 스스로 인정) 서버는 확정 뒤 검수를 그대로 받았다. */
+  if (monthClosedAt(ss, ym)) {
+    return err('FORBIDDEN', ymLabel(ym) + ' 채점이 확정되어 검수할 수 없습니다.');
+  }
 
   const lock = LockService.getScriptLock();
   let got = false;
@@ -11152,9 +11524,29 @@ function opErr(what, err) {
 /* 요청한 크기가 시트 그리드를 넘으면 Apps Script는 잘라주지 않고 예외를 던진다.
    매장 월 탭은 사람이 만든 것이라 행 수가 제각각이므로, 조용히 짧게 읽는 편이 항상 낫다.
    ★전 구간에서 raw getRange 대신 이것을 쓸 것★ */
+/* ★행·열 수를 시트 객체별로 실행 단위 기억한다★ (2026-09-17 ③-1 · find_S4 §1)
+   getMaxRows·getMaxColumns 는 각각 RPC 한 번이다. 제출 한 건이 writeStoreQscInto 에서만 grid 를 13번 불러 덤 RPC 26회,
+   매장 저장 ~18회, 되돌리기는 그 이상이었다(RPC 1회 ≈ 20~50ms). 같은 시트 객체면 한 번만 묻는다.
+   ★행·열을 늘리거나 줄이는 곳은 반드시 gridForget(sh)★ — appendRows·prependRows·delRows·insertColumnsAfter·deleteRow(s)·appendRow
+   뒤에 옛 값을 쓰면 줄었을 때는 getRange 가 그리드를 넘어 예외, 늘었을 때는 새 줄을 못 읽는다.
+   객체 단위(WeakMap)라 getSheetByName 을 다시 부른 새 객체는 다시 묻는다 — 낡을 수 있는 것은 같은 객체를 쥔 채 바꾼 경우뿐이고,
+   그 자리들이 gridForget 을 부른다. */
+const _gridMemo = (typeof WeakMap === 'function') ? new WeakMap() : null;
+function gridSize(sh) {
+  let m = null;
+  try { m = _gridMemo ? _gridMemo.get(sh) : null; } catch (e) { m = null; }
+  if (!m) {
+    m = { rows: sh.getMaxRows(), cols: sh.getMaxColumns() };
+    try { if (_gridMemo) _gridMemo.set(sh, m); } catch (e) { /* 객체가 아닌 것은 기억하지 않는다 */ }
+  }
+  return m;
+}
+function gridForget(sh) { try { if (_gridMemo) _gridMemo.delete(sh); } catch (e) { } }
+
 function grid(sh, row, col, nRows, nCols) {
-  const r = Math.max(0, Math.min(nRows, sh.getMaxRows() - row + 1));
-  const c = Math.max(0, Math.min(nCols, sh.getMaxColumns() - col + 1));
+  const g = gridSize(sh);
+  const r = Math.max(0, Math.min(nRows, g.rows - row + 1));
+  const c = Math.max(0, Math.min(nCols, g.cols - col + 1));
   if (r <= 0 || c <= 0) return null;
   return sh.getRange(row, col, r, c);
 }
@@ -11167,11 +11559,13 @@ function grid(sh, row, col, nRows, nCols) {
    (appendRow를 행마다 부르는 방식은 74회 왕복이라 쓰지 않는다.) */
 function appendRows(sh, rows) {
   if (!rows || !rows.length) return;
+  const g = gridSize(sh);
   const start = sh.getLastRow() + 1;
-  const need = start + rows.length - 1 - sh.getMaxRows();
-  if (need > 0) sh.insertRowsAfter(sh.getMaxRows(), need);
+  const need = start + rows.length - 1 - g.rows;
+  if (need > 0) sh.insertRowsAfter(g.rows, need);
   const width = rows[0].length;
-  if (sh.getMaxColumns() < width) sh.insertColumnsAfter(sh.getMaxColumns(), width - sh.getMaxColumns());
+  if (g.cols < width) sh.insertColumnsAfter(g.cols, width - g.cols);
+  gridForget(sh);   // 행·열이 늘었을 수 있다 — 다음 grid() 는 다시 묻는다
   sh.getRange(start, 1, rows.length, width).setValues(rows);
 }
 
@@ -11188,8 +11582,10 @@ function appendRows(sh, rows) {
 function prependRows(sh, rows) {
   if (!rows || !rows.length) return;
   const width = rows[0].length;
-  if (sh.getMaxColumns() < width) sh.insertColumnsAfter(sh.getMaxColumns(), width - sh.getMaxColumns());
+  const g = gridSize(sh);
+  if (g.cols < width) sh.insertColumnsAfter(g.cols, width - g.cols);
   sh.insertRowsBefore(2, rows.length);
+  gridForget(sh);   // 행(·열)이 늘었다 — 다음 grid() 는 다시 묻는다
   sh.getRange(2, 1, rows.length, width).setValues(rows);
 }
 
@@ -11277,9 +11673,26 @@ function revOf(no, values /* J~O 6칸 */, formulas /* J~O 6칸 */) {
   return sha256Hex(s).slice(0, 6);
 }
 
+/* ★새 탭을 조용히 만들지 않는다★ (2026-09-17 담당자 ②-5f)
+   관리자 시트의 탭 이름이 바뀌면(사람이 「QSC_상세」를 「QSC 상세」로 고치는 식) 이 함수가 ★빈 탭을 새로 만들고★
+   그 뒤 제출이 전부 빈 탭에 쌓인다 — 오류 하나 없이. 만든 사실을 감사로그에 한 줄 남겨 사람이 탭 이름을 되돌릴 수 있게 한다.
+   (운영 규칙: 관리자 시트 탭 이름은 손대지 않는다 — 현재상황 「하지 말 것」)
+   ★되돌아 들어오지 않게★ — auditLog 가 감사로그 탭을 못 찾으면 ensureAuthSheets 가 insertSheet 로 직접 만들지 이 함수를
+   부르지는 않지만, 만약을 위해 플래그로 한 겹 더 막는다. 로그 실패가 탭 만들기를 막지는 않는다. */
+let SHEET_NEW_LOGGING = false;
 function sheet(ss, name, headers) {
   let sh = ss.getSheetByName(name);
-  if (!sh) { sh = ss.insertSheet(name); sh.appendRow(headers); sh.setFrozenRows(1); }
+  if (!sh) {
+    sh = ss.insertSheet(name); sh.appendRow(headers); sh.setFrozenRows(1);
+    if (!SHEET_NEW_LOGGING) {
+      SHEET_NEW_LOGGING = true;
+      try {
+        auditLog({ id: '(시스템)', role: '' }, 'sheet.new', '', '경고', 'SHEET_NEW',
+          '탭 「' + name + '」 이 없어 새로 만들었습니다 — 탭 이름이 바뀐 것이면 되돌려 주십시오');
+      } catch (e) { }
+      SHEET_NEW_LOGGING = false;
+    }
+  }
   return sh;
 }
 
@@ -11984,7 +12397,13 @@ function unprotectStoreTabs(stores, page) {
    실제로 쓰는 10월 서식은 upgradeMonthTab 이 지난 달 탭을 올려 만든다. 부르는 곳 없음을 확인하고 지웠다.) */
 
 function testStoreCopy(srcId, ym) {
-  const SRC = srcId || '1mUSyz0ItpTa5HsUKVHWqxhD3wTobdP9xJO4NdNQ0InE'; // 금종제과_익산 (원본 — 읽기만)
+  /* ★원본 매장 파일 ID 는 코드에 적지 않는다★ (2026-09-17 #16 — 공개 저장소). 스크립트 속성 TEST_COPY_SRC_ID 에 두거나 인자로 준다. */
+  const SRC = srcId || prop('TEST_COPY_SRC_ID', '');
+  if (!SRC) {
+    const why = '★중단★ 원본 파일 ID 가 없습니다 — 스크립트 속성 TEST_COPY_SRC_ID 를 채우거나 testStoreCopy(srcId) 로 주십시오';
+    Logger.log(why);
+    return why;
+  }
   ym = ym || '2610';
   const out = [];
   const TAG = '_연동테스트';

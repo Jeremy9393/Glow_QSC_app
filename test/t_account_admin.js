@@ -50,7 +50,7 @@ function syncStoreAccountsCore(preview) {
     if (taken[key]) { skipped.push(name); return; }
     /* A~F만 쓴다. G~K(해시~최근접속)는 비워 두어 '비밀번호 미설정'으로 남긴다.
        ★preview 면 쓰지 않고 「추가될 것」 목록만 만든다★ */
-    if (!preview) sh.appendRow(safeRow([name, name, '매장담당자', name, STATUS_ON, '']));
+    if (!preview) { sh.appendRow(safeRow([name, name, '매장담당자', name, STATUS_ON, ''])); gridForget(sh); }
     taken[key] = true;
     mine[key] = name;
     added.push(name);
@@ -91,6 +91,7 @@ function fnAccountDelete(ctx, payload) {
     return err('CONFLICT', '같은 아이디 행이 둘 이상이라 지우지 않았습니다 — 시트에서 정리하십시오: ' + id);
   }
   sh.deleteRow(fresh[0].row);
+  gridForget(sh);
   try { pwStashClear(id); } catch (e) { }
   dropAccountCache(id);
   auditLog(ctx, 'account.delete', '', '성공', '',
@@ -130,6 +131,7 @@ function fnAccountRename(ctx, payload) {
       return err('CONFLICT', '새 이름의 계정 행이 하나가 아닙니다 — 시트에서 정리하십시오: ' + to);
     }
     sh.deleteRow(rows[0].row);
+    gridForget(sh);
     dropAccountCache(normId(to));
     auditLog(ctx, 'account.delete', '', '성공', '', '대상: ' + to + ' (동기화가 만든 빈 계정 · 이름 변경 전 정리)');
   }
@@ -156,6 +158,7 @@ var RENAME_FAIL = null;   // fnRenameStore 미리보기를 막고 싶을 때 오
 
 function normId(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }
 function normStore(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
+function gridForget() {}   // grid() 메모 비우기 (2026-09-17 ③) — 이 시험엔 grid 가 없다
 function validId(id) { return /^[^\s]/.test(id); }
 function err(code, msg) { return { ok: false, code: code, error: msg }; }
 function displayStores() { return LIVE.slice(); }

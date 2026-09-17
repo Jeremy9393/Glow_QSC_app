@@ -42,6 +42,9 @@ body = '\n\n'.join(cut(n) for n in ['colLetter', 'grid', 'goalBoxIn', 'dropGoalB
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
+/* grid() 실행 단위 메모(2026-09-17 ③) — 이 시험은 메모 없이 바로 묻는 대역으로 */
+function gridSize(sh) { return { rows: sh.getMaxRows(), cols: sh.getMaxColumns() }; }
+function gridForget() {}
 // ══ 가짜 시트 ═══════════════════════════════════════════════
 // cells['2,12'] = 값.  merges = [[r1,c1,r2,c2], …]  (실물 도넛정수 원본 탭 그대로)
 function mkSheet(cells, merges, opt) {

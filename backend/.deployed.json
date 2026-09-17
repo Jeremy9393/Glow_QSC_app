@@ -1,6 +1,6 @@
 {
- "sha256": "5c01c33ace9223bebd915df208a9107f2fcc4117d72b8ad98c1b9ca7e2de05bb",
- "version": 143,
- "when": "2026-09-17 14:25:48",
- "description": "같은 달 MS 2건 이상이면 가장 최근 제출 1건 (평균 → 최신)"
+ "sha256": "a9c8be58de84447f2a9953311a71b5809f926b434222ff36ec341bbabd478f78",
+ "version": 145,
+ "when": "2026-09-18 01:43:30",
+ "description": "통합시트 머리글 대조를 3~5행 이어 보기(두 줄 머리글) · rateProbe 머리글 3행 (1.45)"
 }

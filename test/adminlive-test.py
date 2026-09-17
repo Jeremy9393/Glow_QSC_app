@@ -19,7 +19,9 @@
 import io, subprocess, sys
 from pathlib import Path
 
-SRC = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
+import os
+# QSC_SRC 환경변수로 다른 Code.gs(예: 고치기 전 사본)를 가리키면 대조군 실행이 된다 (2026-09-17)
+SRC = Path(os.environ.get('QSC_SRC') or r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
 NODE = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\_도구\node\node.exe')
 OUT = Path(__file__).parent / 't_adminlive.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -40,7 +42,7 @@ def cutconst(name):
 
 
 body = '\n'.join([cut('daysInMonth'), cutconst('MONTH_OPEN_HOUR'), cutconst('MS_DEFER_FROM'),
-                  cut('monthClosed'), cut('attachAdminLive')])
+                  cut('monthClosed'), cut('attachAdminLive'), cut('dropStoreCache')])
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
@@ -73,7 +75,18 @@ function can(role, menu, act) { return { allow: (menu === ADMIN_MENU && IS_ADMIN
 function fileTz() { return 'Asia/Seoul'; }
 function round1(v) { return Math.round(v * 10) / 10; }
 function shopperMonthAvg(sh, store, dateStr, tz) { return AVG; }
+/* 60초 캐시(2026-09-17 ③-5) — 키를 매장 캐시와 따로 두는지, 제출·되돌리기의 dropStoreCache 가 이 키도 버리는지 본다 */
+var CACHE = {};
+var CacheService = { getScriptCache: function () { return {
+  get: function (k) { return Object.prototype.hasOwnProperty.call(CACHE, k) ? CACHE[k] : null; },
+  put: function (k, v) { CACHE[k] = String(v); },
+  removeAll: function (ks) { ks.forEach(function (k) { delete CACHE[k]; }); } }; } };
+function epoch() { return '1'; }
+function normStore(s) { return String(s == null ? '' : s).replace(/\s+/g, ''); }
+var OPENS = 0;                  // 응답 시트를 몇 번 열었나
+function ssOpen(id) { return SpreadsheetApp.openById(id); }
 var SpreadsheetApp = { openById: function () {
+  OPENS++;
   if (OPEN_THROWS) throw new Error('시트를 열 수 없습니다');
   return { getSheetByName: function (n) { return SHEET_OK ? { fake: n } : null; } };
 } };
@@ -87,6 +100,7 @@ function ok(name, got, want) {
 }
 function run(opts) {
   opts = opts || {};
+  if (!opts.keepCache) CACHE = {};        // 시험마다 새 실행처럼 — 캐시 시험([8])만 keepCache
   NOW = opts.now || '2026-10-15 10';
   IS_ADMIN = (opts.admin !== false);
   AVG = (opts.avg === undefined) ? 88 : opts.avg;
@@ -139,6 +153,21 @@ console.log('── 요약이 없는 응답 ──');
 var out2 = { ok: true, exists: false };      // 탭이 없는 달
 attachAdminLive(out2, { role: 'x' }, '금종제과', '2612');
 ok('[7-1] summary 가 없으면 아무것도 안 만든다', out2.summary, undefined);
+
+console.log('── 60초 캐시 (2026-09-17 ③-5) ──');
+CACHE = {}; OPENS = 0;
+ok('[8-1] 첫 호출은 시트를 연다', (run({ keepCache: true }), OPENS), 1);
+ok('[8-2] ★두 번째 호출은 시트를 안 연다★ (캐시)', (run({ keepCache: true, avg: 70 }), OPENS), 1);
+ok('[8-3] 캐시에 담긴 값(88)이 그대로 — 60초 안 재조회 없음', run({ keepCache: true, avg: 70 }).msLive, 88);
+ok('[8-4] 캐시 키는 매장 캐시(store:)와 따로다', Object.keys(CACHE).filter(function (k) { return k.indexOf('mslive:') === 0; }).length, 1);
+ok('[8-5] ★매장 계정에는 캐시가 있어도 안 간다★', run({ keepCache: true, admin: false }).msLive, undefined);
+dropStoreCache('금종제과', '2610');
+ok('[8-6] 제출·되돌리기의 dropStoreCache 가 이 키도 버린다', Object.keys(CACHE).length, 0);
+ok('[8-7] 버린 뒤엔 다시 읽는다(70)', run({ keepCache: true, avg: 70 }).msLive, 70);
+ok('[8-8] 그때 시트를 다시 연다', OPENS, 2);
+CACHE = {}; OPENS = 0;
+run({ keepCache: true, avg: 0 }); run({ keepCache: true, avg: 0 });
+ok('[8-9] 응답 없음(0)도 담는다 — 없는 달을 매번 다시 읽지 않는다', OPENS, 1);
 
 console.log('\n' + (fail ? '★' + fail + '개 실패★' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);

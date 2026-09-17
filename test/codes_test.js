@@ -15,13 +15,26 @@ const LockService = { getScriptLock: function () {
 const Utilities = { formatDate: function (d, tz, f) {
   const p = function (n) { return String(n).padStart(2, '0'); };
   if (f === 'yyyy-MM-dd') return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  if (f === 'yyyy-MM') return d.getFullYear() + '-' + p(d.getMonth() + 1);
   return String(d);
 } };
 
 // ── 가짜 시트 ────────────────────────────────────────────────
 let ROWS = [];      // 헤더 제외한 데이터 행들
+/* 2026-09-17 ②-2 — 그 달 MS 가 있으면 발급 거부. MS_상세 대역: MS_HAS[매장 + '|' + 'YYYY-MM'] = 건수 */
+const MS_DETAIL = 'MS_상세';
+let MS_HAS = {};
+let PICKED = [];    // msMonthPick 이 어떤 (매장·달)로 불렸나
+function msMonthPick(sh, store, ym, tz) {
+  PICKED.push(store + '|' + ym);
+  const n = MS_HAS[store + '|' + ym] || 0;
+  return { score: n ? 90 : null, at: n ? '2026-10-05 10:00' : '', n: n };
+}
+function ymLabel(ym) { return '20' + ym.slice(0, 2) + '년 ' + Number(ym.slice(2, 4)) + '월'; }
+function gridForget() {}
 const SS = {
   getSpreadsheetTimeZone: function () { return 'Asia/Seoul'; },
+  getSheetByName: function (n) { return n === MS_DETAIL ? { fake: n } : null; },
 };
 const SpreadsheetApp = { openById: function () { return SS; } };
 function sheet() {
@@ -66,7 +79,8 @@ function saveShopper(ss, p) {
 const CODE_SHEET = '쇼퍼_코드';
 const CODE_HEADER = ['회차', '매장', '코드', '발급시각', '만료시각', '상태', '사용시각', '메모'];
 const CODE_TTL = { '3h': 3 * 3600e3, 'today': -1, '15d': 15 * 86400e3 };   // -1 = 그날 23:59:59
-const CODE_FAIL_MAX = 15;      // 10분 안에 이만큼 틀리면 잠근다
+const CODE_FAIL_MAX = 15;      // 한 매장 · 10분 안에 이만큼 틀리면 그 매장을 잠근다
+const CODE_FAIL_ALL = 60;      // 전 매장 합산 · 10분 (매장 이름을 바꿔 가며 두드리는 것을 막는다 · 2026-09-17 ②-3c)
 const CODE_FAIL_MIN = 10;
 
 function codeSheet(ss) {
@@ -165,6 +179,22 @@ function fnCodesIssue(ctx, payload) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const tz = ss.getSpreadsheetTimeZone();
 
+  /* ★그 달 MS 가 이미 있으면 발급하지 않는다★ (2026-09-17 담당자 ②-2)
+     MS 는 한 달 한 매장 1회다. 그런데 관리자 제출도 고객 경로(survey.submit · 제출 코드)로 가므로 같은 달 두 번째
+     제출을 되묻는 장치(guardResubmit)가 MS 에는 하나도 안 걸렸다 — 12월 베타의 「부산역·신라당 MS 2건」이 이 길로 생겼다.
+     막는 자리는 ★코드 발급★이다(제출 순간에 막으면 손님이 헛걸음한다). 2026-08-26 「한 매장 몇 장이든」은 이걸로 바뀐다.
+     · 판정 자료는 「가장 최근 1건」 점수가 읽는 것과 같다(msMonthPick — MS_상세 · 앞 6,000줄)
+     · 달은 발급 시점의 달, ym 을 주면 그 달('2610' 또는 '2026-10')
+     · 되돌리기(admin.undoSubmit)로 지우면 그 줄이 없어지므로 다시 발급된다 */
+  const ymIn = String((payload && payload.ym) || '').trim();
+  const ym = /^\d{4}$/.test(ymIn) ? ('20' + ymIn.slice(0, 2) + '-' + ymIn.slice(2, 4))
+    : (/^\d{4}-\d{2}$/.test(ymIn) ? ymIn : Utilities.formatDate(new Date(), tz, 'yyyy-MM'));
+  const msSh = ss.getSheetByName(MS_DETAIL);
+  if (msSh && msMonthPick(msSh, store, ym, tz).n > 0) {
+    return err('CONFLICT', store + ' ' + ymLabel(ym.slice(2, 4) + ym.slice(5, 7)) +
+      '은 MS 가 이미 제출되어 코드를 발급할 수 없습니다. 잘못 낸 것이면 제출 관리에서 되돌린 뒤 발급하세요.');
+  }
+
   const lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
   try {
@@ -182,8 +212,10 @@ function fnCodesIssue(ctx, payload) {
     }
     const now = new Date();
     const exp = new Date(codeExpiry(ttl, tz));
-    codeSheet(ss).appendRow(safeRow([curYymm(), store, code, now, exp, '미사용', '',
+    const csh = codeSheet(ss);
+    csh.appendRow(safeRow([curYymm(), store, code, now, exp, '미사용', '',
       '발급: ' + (ctx ? ctx.id : '')]));
+    gridForget(csh);
     return {
       ok: true, store: store,
       rec: { code: code, store: store, issuedAt: now.getTime(), expiresAt: exp.getTime() },
@@ -214,19 +246,29 @@ function fnCodesRevoke(ctx, payload) {
 
 /* ---------- 제출 검표 ---------- */
 
-/* ★전역 실패 카운터★ — IP를 못 보므로 이것이 유일한 무작위 대입 방어다.
-   정상 사용자의 오타는 1~2회라 걸릴 일이 없다(10분에 15회). */
-function codeFailOk() {
-  try {
-    const k = 'codefail:' + Math.floor(Date.now() / (CODE_FAIL_MIN * 60000));
-    return Number(CacheService.getScriptCache().get(k) || 0) < CODE_FAIL_MAX;
-  } catch (e) { return true; }
+/* ★실패 카운터 — 매장별 + 전체 합산★ (2026-09-17 담당자 ②-3c) — IP를 못 보므로 이것이 유일한 무작위 대입 방어다.
+   종전에는 전역 카운터 하나(10분 15회)였다 — 누구나 survey 주소에 틀린 코드 15개면 ★전 매장★ 고객 제출이 10분 멈췄다.
+   이제 매장별 `codefail:<매장>:<10분 버킷>` 15회로 가르고, 매장 이름을 바꿔 가며 두드리는 것은
+   전체 합산 `codefail:*:<버킷>` 60회가 막는다. 둘 다 본다. 정상 사용자의 오타는 1~2회라 걸릴 일이 없다. */
+function codeFailKeys(store) {
+  const b = Math.floor(Date.now() / (CODE_FAIL_MIN * 60000));
+  return { all: 'codefail:*:' + b, one: 'codefail:' + normStore(store).slice(0, 100) + ':' + b };
 }
-function codeFailBump() {
+function codeFailOk(store) {
   try {
     const c = CacheService.getScriptCache();
-    const k = 'codefail:' + Math.floor(Date.now() / (CODE_FAIL_MIN * 60000));
-    c.put(k, String(Number(c.get(k) || 0) + 1), CODE_FAIL_MIN * 60 + 60);
+    const k = codeFailKeys(store);
+    if (Number(c.get(k.all) || 0) >= CODE_FAIL_ALL) return false;
+    return Number(c.get(k.one) || 0) < CODE_FAIL_MAX;
+  } catch (e) { return true; }
+}
+function codeFailBump(store) {
+  try {
+    const c = CacheService.getScriptCache();
+    const k = codeFailKeys(store);
+    [k.all, k.one].forEach(function (key) {
+      c.put(key, String(Number(c.get(key) || 0) + 1), CODE_FAIL_MIN * 60 + 60);
+    });
   } catch (e) { }
 }
 
@@ -236,11 +278,11 @@ function codeFailBump() {
 function submitWithCode(ss, p, ctx) {
   const code = String((p && p.code) || '').replace(/\D/g, '');
   if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
-  if (!codeFailOk()) {
-    return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
-  }
   const store = normStore(p && p.store);
   if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+    return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
+  }
 
   const lock = LockService.getScriptLock();
   try { lock.waitLock(25000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
@@ -250,7 +292,7 @@ function submitWithCode(ss, p, ctx) {
     const rec = codeFind(ss, code);
     /* ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
        다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
-    if (!rec || normStore(rec.store) !== store) { codeFailBump(); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
+    if (!rec || normStore(rec.store) !== store) { codeFailBump(store); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
     if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
     if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
     if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');
@@ -378,6 +420,34 @@ is('★코드는 아직 살아 있다★', submit('금종제과', g1.rec.code).o
 head('[12] 무작위 대입 방어');
 for (let i = 0; i < 20; i++) submit('금종제과', '000001');
 is('실패가 쌓이면 잠긴다', submit('금종제과', '000002').code, 'RATE_LIMITED');
+
+head('[13] ★실패 카운터는 매장별★ (2026-09-17 담당자 ②-3c) — 한 매장이 잠겨도 다른 매장 고객은 낸다');
+const m1 = issue('다른매장');
+is('금종제과가 잠긴 동안 다른 매장 제출은 통과', submit('다른매장', m1.rec.code).ok, true);
+is('다른 매장의 오타 1회는 아직 안 잠긴다', submit('다른매장', '000003').code, 'BAD_REQUEST');
+/* 전체 합산 60회 — 매장 이름을 바꿔 가며 두드리는 것을 막는다.
+   지금까지 센 실패: 금종제과 15(16번째부터는 잠긴 채라 세지 않는다) + 다른매장 1 = 16 */
+for (let i = 0; i < 44; i++) submit('매장' + i, '000004');     // 44개 매장에서 1회씩 → 합산 60
+is('합산 60회를 채우면 매장이 달라도 잠긴다', submit('새매장', '000005').code, 'RATE_LIMITED');
+const m2 = issue('세번째매장');
+is('★그때는 맞는 코드도 막힌다★ (전체 잠금)', submit('세번째매장', m2.rec.code).code, 'RATE_LIMITED');
+
+head('[14] ★그 달 MS 가 이미 있으면 발급하지 않는다★ (2026-09-17 담당자 ②-2)');
+const thisYm = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM');
+MS_HAS = {}; MS_HAS['금종제과|' + thisYm] = 1; PICKED = [];
+const n1 = issue('금종제과');
+is('이번 달 MS 가 있으면 CONFLICT', n1.code, 'CONFLICT');
+is('문구에 매장·달·되돌리기 안내', /금종제과 20\d\d년 \d+월은 MS 가 이미 제출되어 코드를 발급할 수 없습니다\. 잘못 낸 것이면 제출 관리에서 되돌린 뒤 발급하세요\./.test(n1.error), true);
+is('판정은 발급 시점의 달로 물었다', PICKED[0], '금종제과|' + thisYm);
+is('시트에 줄이 늘지 않았다', ROWS.filter(function (r) { return r[1] === '금종제과' && r[5] === '미사용' && r[7].indexOf('발급') === 0; }).length,
+   ROWS.filter(function (r) { return r[1] === '금종제과' && r[5] === '미사용'; }).length);
+is('다른 매장은 발급된다', issue('다른매장').ok, true);
+is('ym 을 주면 그 달로 본다 — 2610 에는 없으니 발급', fnCodesIssue(CTX, { store: '금종제과', ttl: '3h', ym: '2610' }).ok, true);
+is('그때 물은 달은 2026-10', PICKED[PICKED.length - 1], '금종제과|2026-10');
+MS_HAS['금종제과|2026-10'] = 2;
+is('ym:"2026-10" 모양도 받는다 — 있으면 거부', fnCodesIssue(CTX, { store: '금종제과', ttl: '3h', ym: '2026-10' }).code, 'CONFLICT');
+MS_HAS = {};
+is('★되돌리기로 지우면(자료가 없어지면) 다시 발급된다★', issue('금종제과').ok, true);
 
 console.log('\n─────────────────────────────');
 console.log(pass + '개 통과 · ' + fail + '개 실패');

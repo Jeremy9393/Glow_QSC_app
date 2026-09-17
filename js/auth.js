@@ -20,6 +20,13 @@
    단 서버 주소는 두 벌로 두면 이사할 때 한쪽만 고치는 사고가 나므로,
    호출 시점에 Api가 있으면 그쪽 CONFIG를 정본으로 쓰고 없을 때만 아래 상수를 쓴다.
    ─ '로드 순서 독립'과 '주소 단일 출처'를 둘 다 지키는 방법이 이것뿐이었다. */
+
+/* ★프레임 버스터★ (2026-09-17 · 최종검수 #33) — 남의 사이트가 이 앱을 iframe 에 넣고 위에 투명 겹을 씌워
+   버튼을 대신 누르게 하는 것(클릭재킹)을 막는다. GitHub Pages 는 X-Frame-Options 헤더를 못 얹으므로
+   화면 쪽에서 막는 수밖에 없다. 최상위로 빠져나오지 못하면(sandbox 등) 화면을 아예 감춘다.
+   auth.js 는 survey.html 을 뺀 모든 화면에 가장 먼저 실리므로 여기 한 줄이면 전 화면에 걸린다. */
+if (top !== self) { try { top.location = self.location; } catch (e) { document.documentElement.style.display = 'none'; } }
+
 const Auth = (function () {
   const SKEY = 'qsc-auth-v1';        // 세션(토큰 + 화면 조립용 사본). 앱이 보관하는 유일한 인증 흔적
   const PKEY = 'qsc-device-pass';    // 기기 통행증 {아이디: 통행증}. 로그아웃해도 남긴다 — passOf·keepPass 설명
@@ -41,7 +48,8 @@ const Auth = (function () {
      login-app.js와 로그아웃 링크가 같은 목록을 봐야 하므로 여기 한 곳에만 둔다.
      ★accounts.html(계정 관리)을 빼먹으면 login.html?next=accounts.html이 조용히 홈으로 떨어져,
        관리자가 저녁에 매장 비밀번호를 풀어 주려고 눌렀을 때 엉뚱한 화면이 열린다. */
-  const NEXT_OK = ['index.html', 'qsc.html', 'shopper.html', 'codes.html', 'dashboard.html', 'store.html', 'accounts.html'];
+  const NEXT_OK = ['index.html', 'qsc.html', 'shopper.html', 'codes.html', 'dashboard.html', 'store.html', 'accounts.html',
+    'admin.html', 'submits.html'];   // 관리자 도구·제출 관리 (2026-09-17 · #33 — 없으면 로그인 뒤 홈으로 떨어져 한 번 더 눌러야 했다)
 
   let cache = undefined;   // 파싱 결과 메모이즈 (한 화면에서 수십 번 읽힌다)
   /* undefined = 아직 모른다 · null = 공지 없음 · 객체 = 표시할 공지.
@@ -162,6 +170,40 @@ const Auth = (function () {
   function clear() {
     try { localStorage.removeItem(SKEY); } catch (e) { /* 무시 */ }
     cache = null;
+  }
+
+  /* ★로그아웃 때 기기에 남은 사본·임시저장을 함께 치운다★ (2026-09-17 · 최종검수 #23)
+     종전에는 세션(qsc-auth-v1)만 지워, 매장현황 사본(개선요청 본문·담당자명·사진 URL)·통합시트 사본·
+     점검 임시저장·IndexedDB 사진·홈 배지가 공용 폰에 그대로 남았다.
+     ★clear() 에 넣지 않는다★ — clear() 는 서버가 토큰을 거절했을 때(비밀번호 변경·TOKEN_MINV)도 불리는데,
+       그때 점검자의 74문항 임시저장까지 지우면 다시 로그인해도 작성분이 없다. 사람이 [로그아웃]을 눌렀을 때만 치운다.
+     남기는 것 둘 — 기기 통행증(PKEY · 로그아웃 뒤 같은 기기로 다시 들어올 때 남의 잠금에 안 막히게)과
+       아이디 기억(qsc-login-id-v1 · 로그인 화면의 「아이디 기억」). 나머지 qsc-*·shopper-* 는 전부 지운다. */
+  const KEEP_KEYS = { 'qsc-device-pass': 1, 'qsc-login-id-v1': 1 };
+  /* 작성 중인 임시저장 열쇠 — js/qsc-app.js DRAFT_KEY · js/shopper-core.js DRAFT_KEY(admin/guest) · js/store-app.js DRAFT_KEY.
+     열쇠 이름이 바뀌면 여기도 함께 고칠 것(안 고치면 되묻기만 빠지고 지우기는 그대로 된다 — 접두어로 지우므로). */
+  const DRAFT_KEYS = ['qsc-draft-v2', 'shopper-admin-v4', 'shopper-guest-v4', 'qsc-store-draft-v1'];
+  function hasDraft() {
+    try {
+      for (let i = 0; i < DRAFT_KEYS.length; i++) if (localStorage.getItem(DRAFT_KEYS[i])) return true;
+    } catch (e) { /* 저장소 못 읽음 — 지울 것도 없다 */ }
+    return false;
+  }
+  function wipeLocal() {
+    try {
+      const gone = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || KEEP_KEYS[k]) continue;
+        if (k.indexOf('qsc-') === 0 || k.indexOf('shopper-') === 0) gone.push(k);
+      }
+      for (let j = 0; j < gone.length; j++) localStorage.removeItem(gone[j]);   // 돌면서 지우면 index 가 밀린다
+    } catch (e) { /* 사생활 모드 등 — 남길 것도 없다 */ }
+    /* 점검 사진 임시저장(js/qsc-app.js PhotoDraft). ★기다리지 않는다★ — 다른 탭이 열어 두었으면 blocked 로
+       한참 걸릴 수 있고, 로그아웃이 그것 때문에 멈추면 안 된다. 실패해도 다음 점검 진입의
+       「임시저장이 없으면 사진도 비운다」 관문이 마무리한다. */
+    try { if (window.indexedDB) indexedDB.deleteDatabase('qsc-photo-draft'); } catch (e) { /* 무시 */ }
+    try { if (navigator.clearAppBadge) navigator.clearAppBadge().catch(function () { }); } catch (e) { /* 미지원 */ }
   }
 
   /* ★기기 통행증 (2026-09-15)★ — 서버가 로그인·세션 응답에 싣는 device 를 아이디별로 둔다.
@@ -322,7 +364,16 @@ const Auth = (function () {
       }
     }
     const r = await post('auth.session', null, s.t);
-    if (!r || !r.ok) return false;
+    if (!r || !r.ok) {
+      /* ★서버가 토큰 자체를 거절했으면 세션을 버린다★ (2026-09-17 · 최종검수 #22)
+         비밀번호 변경·계정 중지·TOKEN_MINV 올림이 전부 이 코드로 온다. 종전에는 그냥 false 라
+         죽은 토큰을 든 채 홈이 사본으로 그려지고, 다음 화면에서야 같은 오류를 또 맞았다.
+         NETWORK·MAINT·SERVER_ERROR 는 계정이 죽은 것이 아니므로 종전대로 세션을 남긴다.
+         화면 이동은 여기서 하지 않는다 — 부른 쪽(index.html)이 세션이 없어진 것을 보고 guard() 로 보낸다. */
+      const c = r && r.code;
+      if (c === 'AUTH_INVALID' || c === 'AUTH_EXPIRED' || c === 'AUTH_REQUIRED') clear();
+      return false;
+    }
     keepPass(r);   // 이미 로그인돼 있던 기기도 여기서 통행증을 받는다
     s.user = r.user || s.user;
     s.stores = r.stores || s.stores;
@@ -455,10 +506,33 @@ const Auth = (function () {
     if (key && menus() && !can(key, act)) return denyHome();
     return true;
   }
+  /* 사람이 누른 로그아웃. 부르는 쪽(상단바 버튼·홈 [로그아웃]·계정 관리)은 「로그아웃하시겠습니까?」를 이미 물었다.
+     ★작성 중인 임시저장이 있으면 한 번 더 묻는다★ — 이제 로그아웃이 임시저장까지 지우므로(wipeLocal),
+       현장에서 74문항을 적다가 무심코 누르면 그날 작성분이 통째로 날아간다. 취소하면 아무것도 안 지운다.
+     false 를 돌려주면 취소된 것이다. */
   function logout() {
+    if (hasDraft() && !confirm('작성 중인 내용이 지워집니다. 로그아웃할까요?')) return false;
+    wipeLocal();
     clear();
     location.replace('login.html');
+    return true;
   }
+
+  /* ★다른 탭에서 로그아웃하면 이 탭도 따라간다★ (2026-09-17 · 최종검수 #23)
+     session() 은 cache 로 메모이즈라, 다른 탭이 localStorage 를 지워도 이 탭은 메모리 사본으로 계속 제출할 수 있었다.
+     storage 이벤트는 ★다른 탭★의 변경에만 온다(같은 탭의 removeItem 은 안 온다) — 그래서 여기서 한 번 더 지울 필요가 없다.
+     key === null 은 localStorage.clear() — 세션도 함께 사라진 것이니 같은 갈래로 본다.
+     로그인 화면 자신은 제외한다(그 화면에서 또 로그인 화면으로 보내면 새로고침만 된다). */
+  try {
+    window.addEventListener('storage', function (e) {
+      if (!e || (e.key !== SKEY && e.key !== null)) return;
+      if (e.key === SKEY && e.newValue) return;   // 다른 탭의 sync 가 세션을 고쳐 쓴 것 — 로그아웃이 아니다
+      cache = undefined;                          // 다음 session() 이 저장소를 다시 읽게
+      if (session()) return;
+      if ((location.pathname.split('/').pop() || '') === 'login.html') return;
+      location.replace('login.html');
+    });
+  } catch (e) { /* 이벤트를 못 걸어도 종전 동작 그대로 */ }
 
   // ---------- 공지 배너 (서버 스크립트 속성 NOTICE) ----------
   /* ★점검 모드(MAINT)와 전혀 다른 것이다★
@@ -669,7 +743,7 @@ const Auth = (function () {
     session: session, save: save, clear: clear, storageOk: storageOk, saved: saved,
     token: token, user: user, stores: stores,
     can: can, hasMenu: hasMenu, menus: menus,
-    ensure: ensure, relogin: relogin, guard: guard, denyHome: denyHome, sync: sync, logout: logout,
+    ensure: ensure, relogin: relogin, guard: guard, denyHome: denyHome, sync: sync, logout: logout, hasDraft: hasDraft,
     login: login, post: post, endpoint: endpoint,
     safeNext: safeNext, loginUrl: loginUrl, mountLogout: mountLogout, mountBack: mountBack,
     canGoBack: canGoBack, goBack: goBack,
@@ -683,7 +757,7 @@ const Auth = (function () {
    "앱 화면 제일 하단에 버전정보 및 업데이트 날짜 표기"
 
    ★손으로 적는 자리를 만들지 않는다★ — 손으로 적는 버전은 반드시 낡는다.
-     · 버전 숫자: 이 파일이 불러와진 주소(js/auth.js?v=134)에서 뽑는다.
+     · 버전 숫자: 이 파일이 불러와진 주소(js/auth.js?v=135)에서 뽑는다.
        그 숫자는 tools/release.py 가 배포마다 자동으로 올리는 값이고,
        ★지금 이 화면이 실제로 불러온 것★ 이라 캐시에 묶인 폰은 옛 숫자를 보여 준다 —
        매장이 낡은 화면을 붙들고 있는지 그 자리에서 알 수 있다.
@@ -693,12 +767,12 @@ const Auth = (function () {
      DOMContentLoaded 콜백 안에서 꺼내면 null 이라 TypeError 가 난다.
      그래서 여기서 지금 붙잡아 둔다.
    ══════════════════════════════════════════════════════════════ */
-var BUILT = '2026-09-17';   /* release.py 가 고쳐 쓴다 — 손으로 고치지 말 것 */
+var BUILT = '2026-09-18';   /* release.py 가 고쳐 쓴다 — 손으로 고치지 말 것 */
 (function () {
   /* ★사람이 보는 이름은 「1.12」다★ (2026-09-08 담당자)
        *"버전이름 사용할때 지금 110 막 이런식이잖아 그렇게 쓰지말고 1.10 이런식으로 해줘
          (사람들이 보기에 너무 많이 앱을 수정한거 같아서)"*
-     내부 숫자는 그대로 둔다 — `?v=134` 는 캐시를 갈아 끼우는 열쇠이고 배포 도구가 세는 값이라
+     내부 숫자는 그대로 둔다 — `?v=135` 는 캐시를 갈아 끼우는 열쇠이고 배포 도구가 세는 값이라
      건드리면 도구가 꼬인다. ★보여 줄 때만★ 100으로 나눈다: 112 → 1.12 · 99 → 0.99 · 200 → 2.00.
      그래서 매장 폰이 낡은 화면을 붙들고 있는지도 여전히 이 숫자로 알 수 있다. */
   var ver = '';

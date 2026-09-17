@@ -3,12 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 앱스 스크립트 주소에 미리 연결해 둔다(DNS·TLS · 2026-09-17 속도 ③) — 첫 요청이 그만큼 빨라진다. 응답은 googleusercontent 로 넘어온다 -->
+<link rel="preconnect" href="https://script.google.com" crossorigin>
+<link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
 <title>GLOW SEOUL QSC</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=134">
+<link rel="stylesheet" href="css/app.css?v=135">
 </head>
 <body>
 <div class="home">
@@ -97,11 +100,11 @@
      api.js는 이 화면이 직접 부르지는 않지만 계속 싣는다 — window.Api를 붙여
      auth.js가 서버 주소를 자기 폴백 상수가 아니라 CONFIG에서 읽게 하기 위해서다.
      (endpoint()는 호출 시점에 읽으므로 auth.js보다 뒤에 실려도 된다) -->
-<script src="js/maint.js?v=134"></script>
-<script src="js/ui-busy.js?v=134"></script>
-<script src="js/auth.js?v=134"></script>
-<script src="js/menu.js?v=134"></script>
-<script src="js/api.js?v=134"></script>
+<script src="js/maint.js?v=135"></script>
+<script src="js/ui-busy.js?v=135"></script>
+<script src="js/auth.js?v=135"></script>
+<script src="js/menu.js?v=135"></script>
+<script src="js/api.js?v=135"></script>
 <script>
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
@@ -491,15 +494,18 @@
     if (!confirm('로그아웃하시겠습니까?')) return;
     /* 세션이 무기한이라 로그아웃은 사용자가 세션을 끊을 수 있는 유일한 수단이다.
        ★Auth.logout()을 먼저 쓴다 — 저장물 정리와 화면 이동이 거기 한곳에 모여 있다.
-         구버전 auth.js가 캐시에 남아 logout()이 없을 때만 clear()로 내려간다. */
-    // 남의 매장 건수가 다음 사람 화면에 남지 않게, 세션보다 먼저 배지 사본을 지운다
+         배지·종 사본(qsc-badge-v1·qsc-bell-v1)도 거기서 qsc-* 접두어로 함께 지워진다 (2026-09-17 · #23 —
+         종전에는 이 버튼만 지우고 상단바 로그아웃은 안 지워 다음 사람 홈에 앞 계정 건수가 잠깐 비쳤다).
+         작성 중인 임시저장이 있으면 logout() 이 한 번 더 묻고, 취소하면 false 라 여기서도 그냥 멈춘다.
+         구버전 auth.js가 캐시에 남아 logout()이 없을 때만 아래 폴백으로 내려간다. */
+    try {
+      if (hasAuth && typeof Auth.logout === 'function') { Auth.logout(); return; }
+    } catch (e) { /* 폴백으로 */ }
+    // 폴백(구버전 auth.js): 남의 매장 건수가 다음 사람 화면에 남지 않게, 세션보다 먼저 배지 사본을 지운다
     saveBadge(null);
     saveBell(null);
     appBadge(0);
-    try {
-      if (hasAuth && typeof Auth.logout === 'function') { Auth.logout(); return; }
-      if (hasAuth && typeof Auth.clear === 'function') Auth.clear(true);
-    } catch (e) { /* 무시 */ }
+    try { if (hasAuth && typeof Auth.clear === 'function') Auth.clear(true); } catch (e) { /* 무시 */ }
     location.replace('login.html');
   };
 
@@ -524,9 +530,21 @@
            서버가 세션 응답에 maint 칸을 실어 주면 여기서 그 문구가 뜨고, 담당자는 자기 화면에서
            "내가 점검을 켜 둔 채였구나"를 즉시 안다. 칸이 없는 지금은 ''이라 종전처럼 안내가 내려간다. */
         showMaint(maintNow());
-      } else {
-        showMaint(await maintMsg());
+      } else if (typeof Auth.session === 'function' && Auth.session()) {
+        showMaint(await maintMsg());   // 세션이 남아 있는 실패(네트워크·점검) — 종전대로 점검 안내만
       }
+    }
+    /* ★서버가 토큰을 거절해 세션이 사라졌으면 로그인 화면으로 보낸다★ (2026-09-17 · 최종검수 #22)
+       비밀번호 변경·계정 중지·전원 강제 로그아웃(TOKEN_MINV)이 여기로 온다. 종전에는 죽은 토큰을 든 채
+       홈이 사본으로 계속 그려지고, 카드를 눌러 들어간 화면에서야 같은 오류를 또 맞았다.
+       ★sync() 의 else 안이 아니라 밖에서 본다★ — 같은 순간 나간 배지·종 요청(notify.*)이 먼저 거절당하면
+         api.js 의 relogin() 이 세션을 지워, 위 if 의 Auth.token() 이 이미 비어 sync 자체가 안 돈다(실측).
+         들어올 때는 토큰이 있었는데(hasToken) 지금 없으면 어느 경로로 지워졌든 같은 일이다.
+       앞 계정의 배지·종 사본은 먼저 비운다(다음 사람 홈에 비치지 않게). guard() 가 login.html 로 옮긴다.
+       네트워크·점검(MAINT) 실패는 세션이 남아 있으므로 이 갈래를 타지 않는다. */
+    if (hasAuth && hasToken && typeof Auth.session === 'function' && !Auth.session()) {
+      saveBadge(null); saveBell(null); appBadge(0);
+      if (typeof Auth.guard === 'function' && !(await Auth.guard())) return;
     }
   } catch (e) { /* 갱신 실패는 치명적이지 않다 */ }
 

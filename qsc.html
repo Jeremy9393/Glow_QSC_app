@@ -3,12 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 앱스 스크립트 주소에 미리 연결해 둔다(DNS·TLS · 2026-09-17 속도 ③) -->
+<link rel="preconnect" href="https://script.google.com" crossorigin>
+<link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
 <title>QSC 평가표 — GLOW SEOUL</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=134">
+<link rel="stylesheet" href="css/app.css?v=135">
 </head>
 <body>
 <header class="topbar">
@@ -67,14 +70,14 @@
      ★이 화면에서는 auth.js의 guard()를 절대 부르지 않는다 — 리다이렉트는 금지다.
        앱 주소가 공개라 언젠가 AUTH_ENFORCE를 켜야 하는데, 이때 이 화면이 토큰을 못 붙이면
        관리자 본인의 제출까지 막힌다. 그래서 '싣되 튕기지는 않는' 절충이 이 구조다. -->
-<script src="js/maint.js?v=134"></script>
-<script src="js/ui-busy.js?v=134"></script>
-<script src="js/auth.js?v=134"></script>
-<script src="js/scoring.js?v=134"></script>
-<script src="js/api.js?v=134"></script>
-<script src="js/ui-time.js?v=134"></script>
-<script src="js/ui-photo.js?v=134"></script>
-<script src="js/qsc-app.js?v=134"></script>
+<script src="js/maint.js?v=135"></script>
+<script src="js/ui-busy.js?v=135"></script>
+<script src="js/auth.js?v=135"></script>
+<script src="js/scoring.js?v=135"></script>
+<script src="js/api.js?v=135"></script>
+<script src="js/ui-time.js?v=135"></script>
+<script src="js/ui-photo.js?v=135"></script>
+<script src="js/qsc-app.js?v=135"></script>
 <script>
 /* 부드러운 가드 — 리다이렉트하지 않는다. 로그인하지 않았거나 권한 없는 계정이면 문항을 감추고(2026-09-17) 제출을 잠근다.
    ★js/qsc-app.js는 한 줄도 고치지 않는다. 그 파일은 제출을 시도한 뒤에만 disabled를 되돌리므로,
@@ -103,8 +106,7 @@
      로그인 없이 74문항·★·감점 크기가 그대로 보였다 — 매장은 평가표를 볼 수 없다는 원칙과 어긋난다.
      이제 ★토큰이 있어야만★ 문항이 보인다. 토큰 판정은 localStorage 만 보므로 오프라인에서도 된다.
      저장소가 막혔거나 auth.js 를 못 읽었으면 로그인을 남길 수 없으니 「로그인 안 함」으로 본다.
-     ★지우지 않고 감추기만 한다★ — 작성 중 임시저장은 그대로 남아, 로그인하고 돌아오면 이어진다.
-     로그인한 점검자는 아래에서 오프라인이면 그대로 통과한다(현장 점검 보호는 그쪽이 맡는다). */
+     ★지우지 않고 감추기만 한다★ — 작성 중 임시저장은 그대로 남아, 로그인하고 돌아오면 이어진다. */
   var signedIn = false;
   try {
     localStorage.setItem('qsc-probe', '1');
@@ -117,16 +119,17 @@
     return;
   }
 
-  /* 로그인한 점검자는 오프라인이면 잠그지 않는다 (확정사항 8) — 지하 매장·전파 없는 창고에서
-     권한을 다시 확인할 방법이 없다. 서버가 토큰 없는·권한 없는 요청을 거절하므로 데이터는 나가지 않는다. */
-  if (navigator.onLine === false) return;
-
   /* ② 로그인은 되어 있으나 이 화면 권한이 없는 계정(매장 등)이 주소를 직접 친 경우.
      ★여기서도 리다이렉트는 하지 않는다★ — 이 화면의 설계 원칙이고, 담당자가 잘못 걸렸을 때
        작성 중이던 74문항이 날아가는 사고는 권한 문제보다 훨씬 비싸다. 안내하고 버튼만 잠근다.
      ★menus()가 null이면 손대지 않는다★ — '권한이 0개'와 '아직 모른다'는 다르다
        (auth.js guard()·dashboard-app.js와 같은 규칙). 사본을 못 읽었다는 이유로
        담당자를 잠그면 저장소가 비워진 아이폰에서 그날 점검이 막힌다.
+     ★오프라인 예외는 없앴다★ (2026-09-17 담당자 · 최종검수 #15) — 종전에는 이 판정 앞에
+       「오프라인이면 잠그지 않는다」가 있어, 로그인한 매장 계정이 비행기 모드로 켜면 74문항이 그대로 보였다.
+       권한 판정은 localStorage 의 메뉴 사본만 보므로 왕복이 없다 — 오프라인에서도 똑같이 된다.
+       권한 있는 점검자는 오프라인이어도 종전처럼 통과하고(아래 return), 사본을 모르면(known === null)
+       종전처럼 손대지 않는다. 그러니 오프라인이라는 이유로 따로 비켜 줄 것이 없다.
      진짜 차단은 서버가 한다 — qsc.submit은 등록표에서 menu:'qsc' 쓰기라 매장 토큰으로는
      어차피 통과하지 않는다. 이 안내는 '74문항을 다 적고 제출을 눌러서야 알게 되는 일'을
      화면에 들어온 순간으로 앞당기는 장치다. */

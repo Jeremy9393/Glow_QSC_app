@@ -60,7 +60,9 @@ var PhotoPick = (function () {
   function mount(box, opts) {
     opts = opts || {};
     var max = opts.max || 3;
-    var id = opts.id || 'photo';
+    /* id 는 아래 innerHTML 문자열의 id 속성에 그대로 들어간다. 매장현황은 시트 NO 칸을 'af'+no 로 넘기므로(store-app.js)
+       시트에 따옴표·꺾쇠가 들어오는 날 화면이 깨진다 — 속성에 안전한 글자만 남긴다 (2026-09-17 · 최종검수 #33) */
+    var id = String(opts.id || 'photo').replace(/[^0-9A-Za-z_-]/g, '') || 'photo';
     var list = [];
     box.classList.add('photoField');
     box.innerHTML =

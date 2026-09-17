@@ -23,7 +23,7 @@
      관리 화면이 셋 다 같은 모습(목록 한 줄 → 눌러서 들어가기)이 되도록.
 
    권한은 서버가 정한다. admin.* 액션이 전부 menu:'accounts' 라 이 화면도 같은 열쇠를 쓴다
-   (admin.html 의 Auth.guard('accounts')). 여기서 역할 이름을 비교하지 않는다. */
+   (admin.html·submits.html 의 Auth.guard('accounts', '쓰기')). 여기서 역할 이름을 비교하지 않는다. */
 (async function () {
   const $ = function (s, el) { return (el || document).querySelector(s); };
   const KIND = { qsc: 'QSC 평가표', shopper: 'MS 평가표 · 고객 설문' };

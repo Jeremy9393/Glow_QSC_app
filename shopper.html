@@ -3,12 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 앱스 스크립트 주소에 미리 연결해 둔다(DNS·TLS · 2026-09-17 속도 ③) -->
+<link rel="preconnect" href="https://script.google.com" crossorigin>
+<link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
 <title>MS 평가표 — GLOW SEOUL</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=134">
+<link rel="stylesheet" href="css/app.css?v=135">
 </head>
 <body>
 <header class="topbar">
@@ -59,13 +62,13 @@
      ★이 화면에서도 guard()는 절대 부르지 않는다 — 리다이렉트 금지.
        고객용 survey.html과 달리 이 화면은 관리자용이지만, 현장에서 작성 중이던 내용이
        로그인 화면으로 튕기며 날아가는 사고는 똑같이 비싸다. -->
-<script src="js/maint.js?v=134"></script>
-<script src="js/ui-busy.js?v=134"></script>
-<script src="js/auth.js?v=134"></script>
-<script src="js/scoring.js?v=134"></script>
-<script src="js/api.js?v=134"></script>
-<script src="js/ui-time.js?v=134"></script>
-<script src="js/shopper-core.js?v=134"></script>
+<script src="js/maint.js?v=135"></script>
+<script src="js/ui-busy.js?v=135"></script>
+<script src="js/auth.js?v=135"></script>
+<script src="js/scoring.js?v=135"></script>
+<script src="js/api.js?v=135"></script>
+<script src="js/ui-time.js?v=135"></script>
+<script src="js/shopper-core.js?v=135"></script>
 <script>
 /* ★고객용 화면으로 통일했다★ (2026-08-27 담당자 결정)
      "관리자가 보는MS평가표랑 고객용MS평가표가 일부 구조가 다를꺼야
@@ -112,11 +115,10 @@ initShopperForm({ admin: false });
     return;
   }
 
-  /* 로그인한 평가자는 오프라인이면 잠그지 않는다 (확정사항 8) — 서버가 권한 없는 요청을 거절한다 */
-  if (navigator.onLine === false) return;
-
   /* ② 로그인은 되어 있으나 이 화면 권한이 없는 계정(매장 등). qsc.html과 같은 규칙이다 —
      리다이렉트하지 않고, menus()가 null이면(=아직 모른다) 손대지 않는다.
+     ★오프라인 예외는 없앴다★ (2026-09-17 담당자 · 최종검수 #15 · qsc.html 과 같은 이유) — 권한 판정은
+       localStorage 의 메뉴 사본만 보므로 오프라인에서도 되고, 권한 있는 평가자는 오프라인이어도 아래에서 통과한다.
      진짜 차단은 서버가 한다(shopper.submit은 등록표에서 menu:'shopper' 쓰기). */
   var known = null;
   try {

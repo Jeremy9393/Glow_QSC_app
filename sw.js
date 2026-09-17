@@ -8,7 +8,7 @@
 /* ⚠버전은 여기 한 곳만 고친다. html 쪽 ?v=N 과 숫자를 맞출 것.
    예전엔 아래 목록에도 ?v=30 을 일일이 적어서, VER만 올리고 목록을 안 고쳐
    새 파일이 캐시에 안 담기는 사고가 반복됐다. 이제 v()가 붙여주므로 어긋날 수 없다. */
-const VER = 'v134';
+const VER = 'v135';
 const CACHE = 'qsc-app-' + VER;
 const QS = '?v=' + VER.slice(1); // 'v36' → '?v=45'
 function v(path) { return path + QS; }
@@ -19,7 +19,8 @@ const ASSETS = [
      부르는데, caches.match는 주소가 한 글자라도 다르면 안 맞는다. 여기에 ?v=N을 붙여두면
      설치 직후 오프라인 진입에서 매장 목록이 통째로 빈다. */
   'data/master.json', 'data/qr.json',
-  'fonts/NanumSquareL.woff2', 'fonts/NanumSquareR.woff2', 'fonts/NanumSquareB.woff2', 'fonts/NanumSquareEB.woff2',
+  /* L(300) 은 2026-09-17 부터 안 싣는다(css/app.css @font-face 에서 뺐다 — 파일은 남아 있지만 아무도 안 부른다) */
+  'fonts/NanumSquareR.woff2', 'fonts/NanumSquareB.woff2', 'fonts/NanumSquareEB.woff2',
   'icons/icon-192-v2.png', 'icons/icon-512-v2.png',
 ].concat([
   'css/app.css',

@@ -4,10 +4,11 @@
 ★Code.gs 의 진짜 fnUndoSubmit 본문을 잘라내서 돌린다★ (사본 아님).
 구글 API 는 전부 가짜로 갈아 끼우고, 시트는 2차원 배열로 흉내 낸다.
 """
-import io, re, sys, subprocess
+import io, os, re, sys, subprocess
 from pathlib import Path
 
-SRC = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
+# QSC_SRC 환경변수로 다른 Code.gs(예: 고치기 전 사본)를 가리키면 대조군 실행이 된다 (2026-09-17)
+SRC = Path(os.environ.get('QSC_SRC') or r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
 NODE = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\_도구\node\node.exe')
 OUT = Path(__file__).parent / 't_undo.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -23,7 +24,15 @@ def cut(name):
     raise SystemExit('%s 끝 못 찾음' % name)
 
 
-body = cut('fnUndoSubmit') + '\n\n' + cut('shopperMonthAvg') + '\n\n' + cut('stampOf')
+def cut_opt(name):
+    """없으면 빈 줄 — 고치기 전 사본(대조군)에는 아직 없는 함수라서"""
+    try:
+        return cut(name)
+    except StopIteration:
+        return '/* %s 없음 (옛 사본) */' % name
+
+
+body = cut('fnUndoSubmit') + '\n\n' + cut_opt('msMonthPick') + '\n\n' + cut('shopperMonthAvg') + '\n\n' + cut('stampOf')
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
@@ -88,6 +97,15 @@ function delRows(sh, rows) {
 function dropNaCache() {} function dropDashCache() {} function dropStoreCache() {}
 function auditLog() {}
 function storeFileId() { return 'FAKE'; }
+/* 2026-09-17 저녁 — 확정된 달 거부(②-3h) · 스크립트 락(#26) 대역 */
+var CLOSED_AT = '';                              // 날짜를 넣으면 그 달이 확정된 것으로 본다
+function monthClosedAt() { return CLOSED_AT; }
+function ymLabel(ym) { return '20' + ym.slice(0, 2) + '년 ' + Number(ym.slice(2, 4)) + '월'; }
+function ssOpen(id) { return SpreadsheetApp.openById(id); }
+var LOCK_OK = true, LOCK_GOT = 0, LOCK_REL = 0;  // 락을 잡을 수 있는가 · 잡은 횟수 · 놓은 횟수
+var LockService = { getScriptLock: function () { return {
+  tryLock: function () { if (LOCK_OK) LOCK_GOT++; return LOCK_OK; },
+  releaseLock: function () { LOCK_REL++; } }; } };
 function labelMap() { return {}; }
 function labelValue() { return { v: VISIT_DATE }; }
 function setByLabel(sh, label, v) { WROTE.push(['매장파일:' + label, v]); return true; }
@@ -238,6 +256,50 @@ reset([
 ]);
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
 ok('통합시트 MS = 0.90', Math.abs(wroteOf('통합시트:MS') - 0.9) < 1e-9, '값=' + wroteOf('통합시트:MS'));
+
+console.log('\n[10] ★스크립트 락★ (2026-09-17 #26) — 못 잡으면 아무것도 안 지운다 · 잡았으면 끝에 놓는다');
+reset([['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60]]);
+LOCK_OK = false; LOCK_GOT = 0; LOCK_REL = 0;
+r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
+ok('락을 못 잡으면 CONFLICT', r.ok === false && r.code === 'CONFLICT', JSON.stringify(r));
+ok('★응답 시트 줄이 그대로다★', SHEETS[MS_DETAIL].length === 2, '남은 줄=' + SHEETS[MS_DETAIL].length);
+ok('매장 파일·통합시트에 아무것도 안 썼다', WROTE.length === 0, JSON.stringify(WROTE));
+LOCK_OK = true;
+r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: false, route: '관리자 입력' });
+ok('미리보기는 락을 잡지 않는다', r.preview === true && LOCK_GOT === 0, 'got=' + LOCK_GOT);
+r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
+ok('실행은 락을 잡고(1) 끝에 놓는다(1)', r.ok === true && LOCK_GOT === 1 && LOCK_REL === 1, 'got=' + LOCK_GOT + ' rel=' + LOCK_REL);
+ok('지워졌다', SHEETS[MS_DETAIL].length === 1);
+
+console.log('\n[11] ★확정된 달은 되돌리지 않는다★ (2026-09-17 담당자 ②-3h) — 미리보기는 되고 실행은 거부');
+reset([['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60]]);
+CLOSED_AT = '2026-11-02'; LOCK_GOT = 0;
+r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: false, route: '관리자 입력' });
+ok('미리보기는 된다', r.ok === true && r.preview === true, JSON.stringify(r));
+ok('계획에 「확정된 달」 줄이 있다', r.plan.some(function (l) { return l.indexOf('2026년 10월 채점이 2026-11-02에 확정된 달입니다') >= 0; }), JSON.stringify(r.plan));
+ok('closedAt 을 돌려준다', r.closedAt === '2026-11-02', JSON.stringify(r.closedAt));
+r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
+ok('실행은 MONTH_CLOSED', r.ok === false && r.code === 'MONTH_CLOSED', JSON.stringify(r));
+ok('문구 「2026년 10월 채점이 확정되어 되돌릴 수 없습니다.」', r.error === '2026년 10월 채점이 확정되어 되돌릴 수 없습니다.', JSON.stringify(r.error));
+ok('★응답 시트 줄이 그대로다★', SHEETS[MS_DETAIL].length === 2, '남은 줄=' + SHEETS[MS_DETAIL].length);
+ok('아무것도 안 썼다 · 락도 안 잡았다', WROTE.length === 0 && LOCK_GOT === 0, JSON.stringify(WROTE) + ' got=' + LOCK_GOT);
+CLOSED_AT = '';
+r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
+ok('확정 안 된 달은 종전대로 지운다', r.ok === true && SHEETS[MS_DETAIL].length === 1, JSON.stringify(r.error || ''));
+
+console.log('\n[12] 미리보기 문구 (2026-09-17 #17 · #19 · #18)');
+reset([
+  ['2026-10-05T10:00','2026-10-05','','금종제과','','','','고객 직접',90],
+  ['2026-10-05T10:00','2026-10-05','','금종제과','','','','고객 직접',90],   // 같은 제출의 둘째 줄(38줄 중 하나)
+  ['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60],
+], [['2026-10-25T09:00','2026-10-25','10:00','금종제과','신문수',80]]);
+r = fnUndoSubmit({}, { store: S, date: '2026-10-25', apply: false });
+var plan = r.plan.join('\n');
+ok('#19 「MS_상세 1줄 · NA프리셋」 — 「줄건」 오타 없음', plan.indexOf('줄건') < 0 && plan.indexOf(MS_DETAIL + ' 1줄 · NA프리셋') >= 0, plan);
+ok('#17 「쇼퍼 1건이 남습니다」 — 줄 수(2)가 아니라 제출 건수(1)', plan.indexOf('쇼퍼 1건이 남습니다') >= 0 && plan.indexOf('쇼퍼 2건') < 0, plan);
+r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
+var doneTxt = r.done.join('\n');
+ok('#18 「그 달 남은 1건 중 가장 최근 1건」 — 「평균」이라는 말이 없다', doneTxt.indexOf('건 중 가장 최근 1건') >= 0 && doneTxt.indexOf('평균') < 0, doneTxt);
 
 console.log('\n' + (fail ? 'X 실패 ' + fail + '건' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);

@@ -115,6 +115,10 @@ var CacheService = { getScriptCache: function () { return {
   removeAll: function (ks) { ks.forEach(function (k) { delete CACHE[k]; }); } }; } };
 var LockService = { getScriptLock: function () { return { tryLock: function () { return true; }, releaseLock: function () {} }; } };
 var DriveApp = { getFileById: function () { return { setTrashed: function () {} }; } };
+/* grid() 실행 단위 메모(2026-09-17 ③) — 이 시험은 메모 없이 바로 묻는 대역으로 · sheet() 의 새 탭 감사로그 플래그 */
+function gridSize(sh) { return { rows: sh.getMaxRows(), cols: sh.getMaxColumns() }; }
+function gridForget() {}
+var SHEET_NEW_LOGGING = false;
 function pad(n) { return (n < 10 ? '0' : '') + n; }
 var Utilities = { formatDate: function (d, tz, fmt) {
   var m = { yyyy: d.getUTCFullYear(), yy: String(d.getUTCFullYear()).slice(2), MM: pad(d.getUTCMonth() + 1),
