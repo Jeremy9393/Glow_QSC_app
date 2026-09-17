@@ -154,8 +154,9 @@ async function initShopperForm(opts) {
   const DRAFT_KEY = ADMIN ? 'shopper-admin-v4' : 'shopper-guest-v4';
   const state = { answers: {}, memos: {} };
   const allQs = [];
-  /* ★카테고리 이름을 문항에 붙여 둔다★ (2026-09-08) — MS_상세 시트의 「구분」 열이 이것이다.
-     서버는 평가표를 갖고 있지 않아 카테고리를 알 수 없다. 그래서 앱이 실어 보낸다. */
+  /* ★카테고리 이름을 문항에 붙여 둔다★ (2026-09-08) — 제출 payload 의 items[].cat 으로 실어 보낸다.
+     ★시트에는 안 실린다★ (2026-09-17 확인 · 최종검수 #32) — MS_상세 시트에 「구분」 열이 없고 서버도 cat 을 읽지 않는다.
+     서버는 평가표를 갖고 있지 않아 카테고리를 알 수 없으니, 나중에 시트 열을 만들 때 쓸 수 있게 보내 두는 것뿐이다. */
   master.shopper_categories.forEach(function (c) {
     c.questions.forEach(function (q) { q.cat = c.name; allQs.push(q); });
   });
@@ -248,7 +249,8 @@ async function initShopperForm(opts) {
       if (card) card.hidden = !!excluded[q.no];
     });
     /* 카테고리가 통째로 비면 제목 줄도 감춘다 — 「예 / 아니오」만 뜬 빈 상자가 남지 않게.
-       (지금 설정으로는 3-3 이 남아 안 비지만, 뺄 문항이 늘면 바로 생긴다) */
+       (키오스크 매장은 7번(결제) 3문항이 전부 빠져 통째로 비므로 이 감추기가 실제로 동작한다 — 2026-09-17 확인.
+        3번은 3-3 이 남아 제목 줄이 유지된다. data/store-types.json kioskExcludes) */
     master.shopper_categories.forEach(function (c) {
       const sec = secOf[c.name];
       if (!sec) return;
@@ -460,8 +462,9 @@ async function initShopperForm(opts) {
      종전에는 관리자 전용이었다. 고객은 잘못 고른 답을 되돌릴 길이 없어 브라우저 데이터를
      통째로 지우는 수밖에 없었다. 지우는 것은 ★이 기기의 임시저장뿐★이다 — 제출 전 화면이라
      서버에는 애초에 아무것도 가 있지 않다.
-     ★DRAFT_KEY가 관리자·고객으로 갈려 있다★(shopper-admin-v4 / shopper-guest-v4) —
-     한쪽에서 눌러도 다른 쪽 작성 내용은 그대로 남는다.
+     ★DRAFT_KEY 는 두 화면이 같다★ — shopper.html·survey.html 이 둘 다 admin:false 로 부르므로 열쇠가 둘 다
+     shopper-guest-v4 다(shopper-admin-v4 는 지금 아무 화면도 안 쓴다). 그래서 한쪽에서 [초기화]하면 다른 쪽 작성분도
+     지워진다. 2026-09-17 담당자 결정으로 그대로 둔다(최종검수 #20 — 한 기기에서 두 화면을 같이 쓰는 일이 없다).
      location.reload()는 주소의 ?store= 같은 값을 그대로 두므로 매장 지정은 유지된다. */
   if ($('#resetBtn')) $('#resetBtn').onclick = function () {
     if (!confirm(ADMIN ? '모든 응답을 지우고 새로 입력할까요?'
@@ -586,8 +589,8 @@ async function initShopperForm(opts) {
 
   // ---------- 진행률(공통) + 점수·집계(관리자 전용) ----------
   function recompute() {
-    /* ★빠진 문항은 세지 않는다★ — 「0 / 36 응답」이 되어야 한다.
-       38 로 두면 손님이 영영 못 채우는 두 칸을 찾아 헤맨다. */
+    /* ★빠진 문항은 세지 않는다★ — 키오스크 매장은 「0 / 33 응답」이 되어야 한다(38 − 키오스크 제외 5문항).
+       38 로 두면 손님이 영영 못 채우는 다섯 칸을 찾아 헤맨다. */
     const act = activeQs();
     const n = act.filter(function (q) { return isFilled(q.no); }).length;
     $('#prog').textContent = n + ' / ' + act.length + ' 응답';
@@ -724,7 +727,8 @@ async function initShopperForm(opts) {
          고객 설문(survey.html)은 주소만 알면 누구나 열 수 있으므로 서버에서 '익명 허용' 액션으로
          따로 받아야 한다. 둘 다 'shopper'로 보내면, 로그인 강제(AUTH_ENFORCE)를 켜는 순간
          토큰이 없는 고객 설문이 전부 거부되어 조사 자체가 멈춘다.
-         서버는 survey.submit을 anon으로 열어 두고, 그 응답은 공식 CS 평균 집계에서 제외한다. */
+         서버는 survey.submit을 anon으로 열어 둔다. ★집계는 두 경로를 구별하지 않는다★ — 2026-08-20 부터
+         고객 직접·관리자 입력을 같이 집계하고(본사=고객), 시트의 「입력경로」는 기록용일 뿐이다 (2026-09-17 정정 · #32). */
       let r = await Api.submit(ADMIN ? 'shopper' : 'survey', payload);
       /* ★이번 달에 이미 낸 기록이 있으면 서버가 멈추고 되묻는다★ (2026-08-26) — QSC 점검과
          같은 규칙이다. 매장을 잘못 고르는 사고를 여기서 잡는다.
@@ -744,9 +748,11 @@ async function initShopperForm(opts) {
         if (ADMIN) {
           let done = '저장 완료' + (r.mock ? ' (모의 저장 — 구글 연동 전)' : '') +
             (res.score != null ? '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade : '');
-          // 같은 달에 쇼퍼가 여러 명이면 통합시트에는 '월 평균'이 들어가므로 그 값을 알려준다
+          /* 같은 달에 실수로 2건 이상이면 통합시트에는 ★제출시각이 가장 늦은 1건★이 들어간다(평균이 아니다 —
+             2026-09-17 담당자 · 백엔드 1.43). 이 안내는 dashboard.skipped 가 올 때만 뜨는데, 쓰기 밸브를 없앤
+             2026-08-27 뒤로는 오지 않아 사실상 죽은 줄이다 — 그래도 문구는 사실대로 둔다(#18). */
           if (r.dashboard && r.dashboard.skipped && r.dashboard.monthAvg != null) {
-            done += '\n\n▶ 통합시트 CS 칸에 입력\n   ' + Number(r.dashboard.monthAvg).toFixed(1) + '% (이번 달 평균)';
+            done += '\n\n▶ 통합시트 CS 칸에 입력\n   ' + Number(r.dashboard.monthAvg).toFixed(1) + '% (가장 최근 제출 1건)';
           }
           /* 기록하지 못했으면 반드시 말한다 — QSC 점검 화면과 같은 규칙(js/qsc-app.js).
              (2026-08-27: 쓰기 밸브를 없앴으므로 skipped 는 이제 안 온다.) */
@@ -841,7 +847,7 @@ async function initShopperForm(opts) {
   }
   /* ★여기가 마지막 관문이다★ (2026-09-08) — 카드가 다 만들어지고 임시저장까지 되살아난
      지금에야 문항을 실제로 여닫을 수 있다. fillStores 안에서 부른 것은 excluded 만 정했다.
-     ★recompute 보다 먼저★ — 그래야 첫 화면의 「0 / 36」이 처음부터 맞는 숫자로 뜬다. */
+     ★recompute 보다 먼저★ — 그래야 첫 화면의 「0 / 33」(키오스크 매장)이 처음부터 맞는 숫자로 뜬다. */
   applyExclusions();
   recompute();
 }

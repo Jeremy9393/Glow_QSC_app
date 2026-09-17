@@ -58,6 +58,7 @@ var DASHBOARD_ID = '';    // 통합시트는 이 시험에서 다루지 않는�
 function safeRow(r) { return r; }
 function round1(n) { return Math.round(n * 10) / 10; }
 function normStore(s) { return String(s == null ? '' : s).trim(); }
+function gridForget() {}   // grid() 메모 비우기 (2026-09-17 ③) — 이 시험엔 grid 가 없다
 var HDRW = 0;              // 지금 시트 머리글이 몇 열인가 (msFixHeader 가 늘린다)
 function sheet(ss, name, header) {
   HEADER = header;

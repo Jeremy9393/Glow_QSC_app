@@ -1,4 +1,7 @@
-@font-face { font-family: 'NanumSquare'; src: url('../fonts/NanumSquareL.woff2') format('woff2'); font-weight: 300; font-display: swap; }
+/* 나눔스퀘어 R·B·EB 세 벌 — ★L(300) 은 뺐다★ (2026-09-17 · 최종검수 ③ 속도) — 쓰는 곳이 .homeBrand 한 줄뿐이라 400 으로 바꾸고
+   198KB 를 안 받게 했다. 세 벌은 KS X 1001 한글 2,350자 + ASCII + 라틴1 + 앱이 쓰는 특수문자로 서브셋한 것이다
+   (원본 전체 글자는 fonts/_full/ 에 보관). 서브셋 밖 글자(희귀 한글 음절 등)는 기기 글꼴로 떨어진다.
+   font-display: swap — 글꼴이 늦게 와도 글자가 먼저 뜬다. */
 @font-face { font-family: 'NanumSquare'; src: url('../fonts/NanumSquareR.woff2') format('woff2'); font-weight: 400; font-display: swap; }
 @font-face { font-family: 'NanumSquare'; src: url('../fonts/NanumSquareB.woff2') format('woff2'); font-weight: 700; font-display: swap; }
 @font-face { font-family: 'NanumSquare'; src: url('../fonts/NanumSquareEB.woff2') format('woff2'); font-weight: 800; font-display: swap; }
@@ -266,7 +269,7 @@ input.why { border-color: #3a3a3a; font-size: 13px; }
 
 /* ---------- 홈 (런처) ---------- */
 .home { position: relative; min-height: 100vh; display: flex; flex-direction: column; padding: 76px 22px 34px; max-width: 520px; margin: 0 auto; }
-.homeBrand { text-align: center; font-size: 27px; font-weight: 300; letter-spacing: .19em; line-height: 1.2; color: #fff; text-indent: .19em; }
+.homeBrand { text-align: center; font-size: 27px; font-weight: 400; letter-spacing: .19em; line-height: 1.2; color: #fff; text-indent: .19em; }   /* 300→400 (2026-09-17) — L 글꼴을 안 싣기 위해 */
 .homeSub { text-align: center; font-size: 11px; font-weight: 400; color: var(--sub); letter-spacing: .32em; margin-top: 14px; text-indent: .32em; }
 .menu { margin-top: 52px; display: flex; flex-direction: column; gap: 11px; }
 .menuCard {
@@ -580,3 +583,6 @@ details[open] > .foldHead::before { content: '▾ '; }
 /* 평가표 화면에 권한 없는 계정(매장 등)이 들어왔을 때 — 안내문만 남기고 문항·점수·제출 줄을 감춘다
    (2026-09-17 담당자 · qsc.html / shopper.html 의 권한 안내 스크립트가 body 에 noAccess 를 붙인다) */
 body.noAccess .wrap > :not(.authNote), body.noAccess .bottombar { display: none !important; }
+/* 잠긴 화면에서는 상단바의 [초기화]도 감춘다 (2026-09-17 · 최종검수 #33) — 상단바는 .wrap 밖이라 위 규칙에 안 걸려,
+   로그인 안 한 사람이 눌러 점검자의 임시저장·사진을 지울 수 있었다(「지우지 않고 감추기만 한다」와 어긋남). */
+body.noAccess .topbar .resetBtn { display: none !important; }

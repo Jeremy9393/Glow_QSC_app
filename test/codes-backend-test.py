@@ -7,9 +7,10 @@
 복사본이 아니라 실제로 쓰는 코드를 잘라 오므로, Code.gs 를 고치면 이 점검도 따라 바뀐다.
 앱스 스크립트 대역(시트·락·캐시)만 가짜다.
 """
-import io, sys
+import io, os, sys
 from pathlib import Path
-SRC = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
+# QSC_SRC 환경변수로 다른 Code.gs(예: 고치기 전 사본)를 가리키면 대조군 실행이 된다 (2026-09-17)
+SRC = Path(os.environ.get('QSC_SRC') or r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).parent) / 'codes_test.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -36,13 +37,26 @@ const LockService = { getScriptLock: function () {
 const Utilities = { formatDate: function (d, tz, f) {
   const p = function (n) { return String(n).padStart(2, '0'); };
   if (f === 'yyyy-MM-dd') return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  if (f === 'yyyy-MM') return d.getFullYear() + '-' + p(d.getMonth() + 1);
   return String(d);
 } };
 
 // ── 가짜 시트 ────────────────────────────────────────────────
 let ROWS = [];      // 헤더 제외한 데이터 행들
+/* 2026-09-17 ②-2 — 그 달 MS 가 있으면 발급 거부. MS_상세 대역: MS_HAS[매장 + '|' + 'YYYY-MM'] = 건수 */
+const MS_DETAIL = 'MS_상세';
+let MS_HAS = {};
+let PICKED = [];    // msMonthPick 이 어떤 (매장·달)로 불렸나
+function msMonthPick(sh, store, ym, tz) {
+  PICKED.push(store + '|' + ym);
+  const n = MS_HAS[store + '|' + ym] || 0;
+  return { score: n ? 90 : null, at: n ? '2026-10-05 10:00' : '', n: n };
+}
+function ymLabel(ym) { return '20' + ym.slice(0, 2) + '년 ' + Number(ym.slice(2, 4)) + '월'; }
+function gridForget() {}
 const SS = {
   getSpreadsheetTimeZone: function () { return 'Asia/Seoul'; },
+  getSheetByName: function (n) { return n === MS_DETAIL ? { fake: n } : null; },
 };
 const SpreadsheetApp = { openById: function () { return SS; } };
 function sheet() {
@@ -184,6 +198,34 @@ is('★코드는 아직 살아 있다★', submit('금종제과', g1.rec.code).o
 head('[12] 무작위 대입 방어');
 for (let i = 0; i < 20; i++) submit('금종제과', '000001');
 is('실패가 쌓이면 잠긴다', submit('금종제과', '000002').code, 'RATE_LIMITED');
+
+head('[13] ★실패 카운터는 매장별★ (2026-09-17 담당자 ②-3c) — 한 매장이 잠겨도 다른 매장 고객은 낸다');
+const m1 = issue('다른매장');
+is('금종제과가 잠긴 동안 다른 매장 제출은 통과', submit('다른매장', m1.rec.code).ok, true);
+is('다른 매장의 오타 1회는 아직 안 잠긴다', submit('다른매장', '000003').code, 'BAD_REQUEST');
+/* 전체 합산 60회 — 매장 이름을 바꿔 가며 두드리는 것을 막는다.
+   지금까지 센 실패: 금종제과 15(16번째부터는 잠긴 채라 세지 않는다) + 다른매장 1 = 16 */
+for (let i = 0; i < 44; i++) submit('매장' + i, '000004');     // 44개 매장에서 1회씩 → 합산 60
+is('합산 60회를 채우면 매장이 달라도 잠긴다', submit('새매장', '000005').code, 'RATE_LIMITED');
+const m2 = issue('세번째매장');
+is('★그때는 맞는 코드도 막힌다★ (전체 잠금)', submit('세번째매장', m2.rec.code).code, 'RATE_LIMITED');
+
+head('[14] ★그 달 MS 가 이미 있으면 발급하지 않는다★ (2026-09-17 담당자 ②-2)');
+const thisYm = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM');
+MS_HAS = {}; MS_HAS['금종제과|' + thisYm] = 1; PICKED = [];
+const n1 = issue('금종제과');
+is('이번 달 MS 가 있으면 CONFLICT', n1.code, 'CONFLICT');
+is('문구에 매장·달·되돌리기 안내', /금종제과 20\d\d년 \d+월은 MS 가 이미 제출되어 코드를 발급할 수 없습니다\. 잘못 낸 것이면 제출 관리에서 되돌린 뒤 발급하세요\./.test(n1.error), true);
+is('판정은 발급 시점의 달로 물었다', PICKED[0], '금종제과|' + thisYm);
+is('시트에 줄이 늘지 않았다', ROWS.filter(function (r) { return r[1] === '금종제과' && r[5] === '미사용' && r[7].indexOf('발급') === 0; }).length,
+   ROWS.filter(function (r) { return r[1] === '금종제과' && r[5] === '미사용'; }).length);
+is('다른 매장은 발급된다', issue('다른매장').ok, true);
+is('ym 을 주면 그 달로 본다 — 2610 에는 없으니 발급', fnCodesIssue(CTX, { store: '금종제과', ttl: '3h', ym: '2610' }).ok, true);
+is('그때 물은 달은 2026-10', PICKED[PICKED.length - 1], '금종제과|2026-10');
+MS_HAS['금종제과|2026-10'] = 2;
+is('ym:"2026-10" 모양도 받는다 — 있으면 거부', fnCodesIssue(CTX, { store: '금종제과', ttl: '3h', ym: '2026-10' }).code, 'CONFLICT');
+MS_HAS = {};
+is('★되돌리기로 지우면(자료가 없어지면) 다시 발급된다★', issue('금종제과').ok, true);
 
 console.log('\n─────────────────────────────');
 console.log(pass + '개 통과 · ' + fail + '개 실패');

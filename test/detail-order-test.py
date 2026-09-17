@@ -91,6 +91,10 @@ function ok(name, got, want) {
 
 __CODE__
 
+/* grid() 실행 단위 메모(2026-09-17 ③) — prependRows 가 gridSize 를 묻는다. 이 시험은 메모 없이 바로 묻는 대역으로 */
+function gridSize(sh) { return { rows: sh.getMaxRows ? sh.getMaxRows() : 1000000, cols: sh.getMaxColumns() }; }
+function gridForget() {}
+
 /* ── 가짜 시트 ── */
 function mkSheet(maxCols, lastCol) {
   var S = { rows: {}, inserted: [], widened: 0, headWrites: 0,

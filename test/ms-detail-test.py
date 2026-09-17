@@ -62,7 +62,7 @@ def cutcall(mark):
 
 body = '\n'.join([cutconst('MS_DETAIL'), cutconst('MS_HEADER'), cutconst('MS_COL'),
                   cut('msCodeOf'), cut('msConvert'), cut('msKindOf'),
-                  cut('shopperMonthAvg'), cut('submittedStores'), cut('stampOf')])
+                  cut('msMonthPick'), cut('shopperMonthAvg'), cut('submittedStores'), cut('stampOf')])
 # status.month 가 MS_상세를 부르는 자리 — 인자를 그대로 시험에 넘긴다
 CALLSITE = cutcall('shopperSet = submittedStores(')
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
@@ -71,6 +71,8 @@ HARNESS = r'''
 // ══ 가짜 세계 ═══════════════════════════════════════════════
 function normStore(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
 function ymOfCell(v, tz) { return String(v == null ? '' : v).slice(0, 7); }
+if (typeof dateOfCell !== 'function') { globalThis.dateOfCell = function (v) { return String(v == null ? '' : v).slice(0, 10); }; }
+if (typeof timeKeyOf !== 'function') { globalThis.timeKeyOf = function (v) { return String(v == null ? '' : v).trim(); }; }
 function grid(sh, r, c, nr, nc) {
   if (nr <= 0) return null;
   return {

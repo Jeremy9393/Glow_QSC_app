@@ -38,6 +38,9 @@ print('잘라낸 줄 수: %d' % len(body.split('\n')))
 HARNESS = r'''
 // ══ 가짜 세계 ═══════════════════════════════════════════════
 var TPL_NEW = '0QSC현황(원본_2610~)';
+/* grid() 실행 단위 메모(2026-09-17 ③) — 이 시험은 메모 없이 바로 묻는 대역으로 */
+function gridSize(sh) { return { rows: sh.getMaxRows(), cols: sh.getMaxColumns() }; }
+function gridForget() {}
 
 function mkSheet(name, rows) {
   var sh = {

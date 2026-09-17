@@ -17,7 +17,9 @@
 import io, re, subprocess, sys
 from pathlib import Path
 
-SRC = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
+import os
+# QSC_SRC 환경변수로 다른 Code.gs(예: 고치기 전 사본)를 가리키면 대조군 실행이 된다 (2026-09-17)
+SRC = Path(os.environ.get('QSC_SRC') or r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app\backend\Code.gs')
 NODE = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\_도구\node\node.exe')
 OUT = Path(__file__).parent / 't_split.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -45,6 +47,10 @@ var ROWS = 0, HEADROW = 11, LASTROW = 25;
 function safe(s) { return s; }
 function epoch() { return 1; }
 function fileTz() { return 'Asia/Seoul'; }
+/* 확정된 달 거부(2026-09-17 ②-3h) — CLOSED_AT 에 날짜를 넣으면 그 달이 확정된 것으로 본다 */
+var CLOSED_AT = '';
+function monthClosedAt() { return CLOSED_AT; }
+function ymLabel(ym) { return '20' + ym.slice(0, 2) + '년 ' + Number(ym.slice(2, 4)) + '월'; }
 function impDueOf() { return '2026-12-31'; }
 function cellImageOf() { return null; }
 function setByLabel() { return true; }
@@ -172,6 +178,18 @@ ok('★2건에만 사진이 있으면 1건 줄은 비운다★ (앞으로 밀지
 
 run([{ no: 'C-01', code: 'C-01', value: 2, memo: '라벨', notes: ['월 누락', ''] }], {});
 ok('건별 문장이 비면 문항 문장으로 채운다', rowsJ(3), ['월 누락', '라벨']);
+
+// ── ③ 확정된 달에는 쓰지 않는다 (2026-09-17 담당자 ②-3h) ─────────
+console.log('\n③ 확정된 달 — 매장 파일에 아무것도 쓰지 않고 MONTH_CLOSED');
+CLOSED_AT = '2027-01-02';
+r = run([{ no: 'C-03', code: 'C-03', value: 2, memo: '소비기한 표기 미흡' }], { 'C-03': [{ url: 'U1', id: 'I1' }] });
+ok('ok:false · code MONTH_CLOSED', [r.ok, r.code], [false, 'MONTH_CLOSED']);
+ok('문구 「2026년 12월 채점이 확정되어 제출할 수 없습니다.」', r.error, '2026년 12월 채점이 확정되어 제출할 수 없습니다.');
+ok('★표에 한 줄도 안 썼다★', rowsJ(4), []);
+ok('사진 칸도 비어 있다', rowsD(2), ['', '']);
+CLOSED_AT = '';
+r = run([{ no: 'C-03', code: 'C-03', value: 1, memo: '소비기한 표기 미흡' }], {});
+ok('확정 안 된 달은 종전대로 쓴다', [r.ok, r.tickets], [true, 1]);
 
 run([{ no: 'C-01', code: 'C-01', value: 1, memo: '라벨', notes: ['월 누락'] }],
     { 'C-01': [{ url: 'P1', id: 'p1', slot: 0 }, { url: 'P9', id: 'p9', slot: 5 }] });

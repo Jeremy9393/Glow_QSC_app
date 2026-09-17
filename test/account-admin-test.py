@@ -56,6 +56,7 @@ var RENAME_FAIL = null;   // fnRenameStore 미리보기를 막고 싶을 때 오
 
 function normId(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }
 function normStore(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
+function gridForget() {}   // grid() 메모 비우기 (2026-09-17 ③) — 이 시험엔 grid 가 없다
 function validId(id) { return /^[^\s]/.test(id); }
 function err(code, msg) { return { ok: false, code: code, error: msg }; }
 function displayStores() { return LIVE.slice(); }

@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 앱스 스크립트 주소에 미리 연결해 둔다(DNS·TLS · 2026-09-17 속도 ③) -->
+<link rel="preconnect" href="https://script.google.com" crossorigin>
+<link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
 <!-- 화면 이름은 '계정 관리'로 통일한다 (index.html 카드 문구 · js/menu.js REG와 글자까지 동일).
      누른 카드 이름과 들어간 화면 제목이 다르면 "다른 화면에 왔다"는 문의가 생긴다. -->
 <title>계정 관리 — GLOW SEOUL</title>
@@ -10,7 +13,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=134">
+<link rel="stylesheet" href="css/app.css?v=135">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼.
@@ -113,13 +116,14 @@
      ★메뉴 키를 넘긴다★ (2026-08-16 지시 §4) — 인자 없는 guard()는 '로그인했는가'만 보므로,
      매장 계정이 이 주소를 직접 치면 accounts-app.js가 다 돈 뒤에야 막혔다. 키를 주면
      앱 스크립트가 실리기 전에 안내 후 홈으로 간다. 권한 사본이 없을 때(menus()===null)는
-     guard가 막지 않으므로, accounts-app.js 쪽 판정도 그대로 남겨 두 겹으로 둔다. -->
-<script src="js/maint.js?v=134"></script>
-<script src="js/ui-busy.js?v=134"></script>
-<script src="js/auth.js?v=134"></script>
-<script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts');</script>
-<script src="js/api.js?v=134"></script>
-<script src="js/accounts-app.js?v=134"></script>
+     guard가 막지 않으므로, accounts-app.js 쪽 판정도 그대로 남겨 두 겹으로 둔다.
+     ★'쓰기'까지 본다★ (2026-09-17 · 최종검수 #21) — 계정 관리는 전부 쓰는 일(발급·중지·비밀번호)이라 읽기만 있는 계정은 돌려보낸다. -->
+<script src="js/maint.js?v=135"></script>
+<script src="js/ui-busy.js?v=135"></script>
+<script src="js/auth.js?v=135"></script>
+<script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts', '쓰기');</script>
+<script src="js/api.js?v=135"></script>
+<script src="js/accounts-app.js?v=135"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

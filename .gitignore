@@ -20,3 +20,6 @@
 # clasp pull 이 Code.gs 를 Code.js 로 한 벌 더 내려받는다 (구글 쪽 파일형식이 SERVER_JS).
 # 대조용으로만 쓰고 지우므로 저장소에는 두지 않는다.
 backend/Code.js
+
+# 폰트 서브셋 원본(2026-09-17 · 배포 제외 · 원본은 git 역사에도 있다)
+fonts/_full/
