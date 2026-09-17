@@ -213,7 +213,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v145', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v146', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -334,6 +334,10 @@ function actionTable() {
        담기는 것은 매장명뿐이다 — 이미 간판·QR·카톡으로 공개된 값이고, naPresets는 싣지 않는다.
        버킷은 survey와 같은 'anon'이라 이 요청이 몰려도 로그인(auth 버킷)은 막히지 않는다. */
     'config.stores':      { menu: '', act: '', scope: 'none', anon: true, max: 1 * KB, fn: fnConfigStores },
+    /* ★QSC 74문항은 서버가 내려준다★ (2026-09-18 담당자 ②-1) — 공개 파일 data/master.json 에서 문항을 뺐다.
+       menu:'qsc' act:'' → `역할` 탭에서 qsc 읽기 또는 쓰기가 있는 역할만(7단계 can). legacy 가 아니므로 토큰이 없으면 AUTH_REQUIRED.
+       상수(QUESTIONS 블록 · 파일 끝)라 시트를 열지 않는다. 쇼퍼 문항은 여기 없다 — 그쪽 열쇠는 제출 코드다(survey.questions). */
+    'config.questions':   { menu: 'qsc', act: '', scope: 'none', max: 1 * KB, fn: fnConfigQuestions },
     'qsc.submit':         { menu: 'qsc', act: '쓰기', scope: 'none', legacy: true, idem: true, max: 12 * MB, fn: fnQscSubmit },
     /* ★가벼운 사전 조회★ (2026-08-26) — 매장을 고르는 순간 '이번 달에 이미 있나'를 묻는다.
        제출과 같은 권한(쓰기)을 요구한다: 낼 수 있는 사람만 물어볼 수 있으면 충분하고,
@@ -342,6 +346,10 @@ function actionTable() {
     'shopper.status':     { menu: 'shopper', act: '쓰기', scope: 'none', max: 1 * KB, fn: fnShopperStatus },
     'shopper.submit':     { menu: 'shopper', act: '쓰기', scope: 'none', legacy: true, idem: true, max: 3 * MB, fn: fnShopperSubmit },
     'survey.submit':      { menu: '', act: '', scope: 'none', anon: true, idem: true, max: surveyMax, fn: fnSurveySubmit },
+    /* ★MS 38문항은 살아 있는 제출 코드를 낸 요청에만★ (2026-09-18 담당자 ②-1 — "ms평가표는 신뢰가는사람들만").
+       anon 이라 survey 와 같은 버킷의 스로틀을 탄다. 코드는 검사만 하고 ★소진하지 않는다★(소진은 survey.submit).
+       틀린 코드는 매장별 실패 카운터를 올린다(codeVerify — 제출과 같은 판정). payload {code, store?} 라 1KB 면 넉넉하다. */
+    'survey.questions':   { menu: '', act: '', scope: 'none', anon: true, max: 1 * KB, fn: fnSurveyQuestions },
     'dashboard.get':      { menu: 'dashboard', act: '읽기', scope: 'list', max: 2 * KB, fn: fnDashboard },
     'store.get':          { menu: 'store', act: '읽기', scope: 'target', max: 2 * KB, fn: fnStoreGet },
     'store.saveImprove':  { menu: 'store', act: '쓰기', scope: 'target', idem: true, max: 400 * KB, fn: fnStoreSave },
@@ -3732,6 +3740,33 @@ function codeFailBump(store) {
   } catch (e) { }
 }
 
+/* ★검사만 한다 — 소진하지 않는다★ (2026-09-18 ②-1) — 제출(submitWithCode)과 문항 열기(fnSurveyQuestions)가
+   ★같은 판정★을 쓴다. 판정 순서·문구는 종전 submitWithCode 그대로 옮겨 왔다(두 곳이 다르면 "열리는데 안 내지는" 코드가 생긴다).
+   · store 를 주면 코드에 적힌 매장과 같아야 한다. 비우면 코드의 매장을 그대로 받는다(문항 열기 전용 — 제출은 반드시 준다).
+   · missCode = 「없는 코드·다른 매장 코드」일 때의 오류 코드 — 제출은 BAD_REQUEST(종전 그대로), 문항 열기는 NOT_FOUND. 문구는 같다.
+   · 실패 카운터(codeFailBump · 매장별 15 + 전체 60 · ②-3c)는 여기서 올린다. 잠겨 있으면 시트도 읽지 않는다.
+   ★코드 번호로 찾는다★ (2026-08-26) — 예전에는 (회차·매장)으로 찾았고, 그래서 방문날짜가 발급한 달과 다르면
+   멀쩡한 코드가 '맞지 않는다'로 튕겼다. 이제 날짜는 아무 상관이 없다.
+   ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
+   다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
+function codeVerify(ss, code, store, missCode) {
+  code = String(code || '').replace(/\D/g, '');
+  if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
+  store = normStore(store);
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+    return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
+  }
+  const rec = codeFind(ss, code);
+  if (!rec || (store && normStore(rec.store) !== store)) {
+    codeFailBump(store);
+    return err(missCode || 'BAD_REQUEST', '제출 코드가 맞지 않습니다.');
+  }
+  if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
+  if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
+  if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');
+  return { ok: true, rec: rec, code: code, store: normStore(rec.store) };
+}
+
 /* 검사 → 소진 → 저장을 한 덩어리로 (설계 §5-2).
    ★저장이 끝난 뒤에 소진 표시를 한다★ — 순서를 뒤집으면 저장이 실패했을 때
    쇼퍼는 코드를 잃고 응답도 잃는다. 반대로 두면 최악이 '코드가 한 번 더 쓰일 수 있음'이다. */
@@ -3740,22 +3775,17 @@ function submitWithCode(ss, p, ctx) {
   if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
   const store = normStore(p && p.store);
   if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
-  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c) — 잠겨 있으면 락을 기다리지도 않는다
     return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
   }
 
   const lock = LockService.getScriptLock();
   try { lock.waitLock(25000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
   try {
-    /* ★코드 번호로 찾는다★ (2026-08-26) — 예전에는 (회차·매장)으로 찾았고, 그래서 방문날짜가
-       발급한 달과 다르면 멀쩡한 코드가 '맞지 않는다'로 튕겼다. 이제 날짜는 아무 상관이 없다. */
-    const rec = codeFind(ss, code);
-    /* ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
-       다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
-    if (!rec || normStore(rec.store) !== store) { codeFailBump(store); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
-    if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
-    if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
-    if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');
+    /* 판정은 codeVerify 한 곳 (2026-09-18) — 문항 열기(survey.questions)와 같은 규칙·같은 문구 */
+    const v = codeVerify(ss, code, store, 'BAD_REQUEST');
+    if (!v.ok) return v;
+    const rec = v.rec;
 
     const saved = saveShopper(ss, p, ctx, true);
     if (!saved || saved.ok !== true) return saved;
@@ -3785,6 +3815,62 @@ function fnSurveySubmit(ctx, payload) {
   /* ★익명 제출은 반드시 검표를 지난다★ — submitWithCode 가 검사·소진·저장을 한 덩어리로 한다.
      관리자(shopper.submit)는 로그인으로 이미 신원이 확인되므로 코드를 묻지 않는다. */
   return submitWithCode(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx);
+}
+
+/* ---------- 문항 내려주기 (2026-09-18 담당자 ②-1) ----------
+   공개 파일(data/master.json · GitHub Pages)에서 문항을 뺐다. 문항의 원본은 이 파일 끝의 QUESTIONS 블록이고
+   (tools/extract_master.py 가 엑셀에서 갈아 끼운다 · 평가표가 바뀌면 백엔드 배포도 필요),
+   두 액션이 각자의 열쇠를 확인한 뒤에만 내려준다 — QSC 는 로그인+qsc 권한, MS 는 살아 있는 제출 코드. */
+
+/* QUESTIONS 블록이 없으면(지웠거나 extract 를 안 돌렸으면) 조용히 빈 문항을 내려주지 않는다 — 사람이 알 수 있는 오류로 */
+function questionsConst() {
+  try {
+    if (typeof QUESTIONS === 'object' && QUESTIONS && QUESTIONS.qsc_groups && QUESTIONS.shopper_categories) return QUESTIONS;
+  } catch (e) { /* 아래에서 알린다 */ }
+  return null;
+}
+
+/* QSC 74문항 — ★로그인 + qsc 메뉴 권한(읽기 또는 쓰기)★ 이 있는 요청에만.
+   doPost 7단계가 can(role,'qsc','') 를 이미 보지만, 등록이 legacy/anon 으로 바뀌는 사고에 대비해 여기서 한 번 더 본다.
+   상수라 시트·캐시를 건드리지 않는다. 쇼퍼 문항은 싣지 않는다 — 그쪽 열쇠는 제출 코드다(fnSurveyQuestions).
+   응답: {ok, version, source_sha, qsc_groups, texts:{criteria, principles}} */
+function fnConfigQuestions(ctx) {
+  if (!ctx || !ctx.auth) return err('AUTH_REQUIRED', '로그인이 필요합니다.');
+  if (!can(ctx.role, 'qsc', '').allow) return err('FORBIDDEN', '권한이 없습니다.');
+  const q = questionsConst();
+  if (!q) return err('SERVER_ERROR', '문항이 서버에 실려 있지 않습니다. 담당자에게 알려 주세요 (백엔드 재배포 필요).');
+  const t = q.texts || {};
+  return {
+    ok: true, version: q.version, source_sha: q.source_sha,
+    qsc_groups: q.qsc_groups,
+    texts: { criteria: t.criteria || '', principles: t.principles || '' },
+  };
+}
+
+/* MS 38문항 — ★살아 있는 제출 코드★ 를 낸 요청에만 (관리자 MS 화면도 같은 길 · 08-27 「고객용 통일」).
+   검사만 하고 ★소진하지 않는다★ — 소진은 제출(survey.submit → submitWithCode) 때. 판정은 codeVerify 한 곳이라 제출과 같다.
+   틀린 코드는 실패 카운터를 올리고 NOT_FOUND(문구는 제출 때와 같은 「제출 코드가 맞지 않습니다.」).
+   store 를 주면 코드의 매장과 같아야 하고, 안 주면 코드의 매장을 알려 준다(화면이 그 매장으로 잠근다).
+   응답: {ok, version, source_sha, store, storeType, kiosk_excludes, shopper_categories,
+          texts:{shopper_criteria, shopper_principles, shopper_grade_note}} — ★QSC 문항은 싣지 않는다★ */
+function fnSurveyQuestions(ctx, payload) {
+  const p = payload || {};
+  const v = codeVerify(SpreadsheetApp.openById(SPREADSHEET_ID), p.code, p.store, 'NOT_FOUND');
+  if (!v.ok) return v;
+  const q = questionsConst();
+  if (!q) return err('SERVER_ERROR', '문항이 서버에 실려 있지 않습니다. 담당자에게 알려 주세요 (백엔드 재배포 필요).');
+  const t = q.texts || {};
+  return {
+    ok: true, version: q.version, source_sha: q.source_sha,
+    store: v.store,
+    storeType: String((q.store_types || {})[v.store] || ''),
+    kiosk_excludes: (q.kiosk_excludes || []).slice(0),
+    shopper_categories: q.shopper_categories,
+    texts: {
+      shopper_criteria: t.shopper_criteria || '', shopper_principles: t.shopper_principles || '',
+      shopper_grade_note: t.shopper_grade_note || '',
+    },
+  };
 }
 function fnNotReady() {
   return err('NOT_FOUND', '아직 준비되지 않은 기능입니다.');
@@ -12510,3 +12596,7 @@ function testStoreCopyCleanup() {
   Logger.log(m);
   return m;
 }
+
+/* @@QUESTIONS_BEGIN */
+/* (문항 — 2026-09-25 저장소 기록에서 지움 · 서버 문항은 backend/Questions.gs · 저장소 제외) */
+/* @@QUESTIONS_END */

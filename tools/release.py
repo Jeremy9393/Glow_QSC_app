@@ -49,6 +49,35 @@ CHECK_ONLY = len(sys.argv) > 1 and sys.argv[1] in ('check', '점검', '-c')
 problems = []   # 배포를 막는 것
 warnings = []   # 알려는 주되 막지는 않는 것
 
+# ★문항은 서버(Code.gs QUESTIONS 블록)가 내려준다★ (2026-09-18 ②-1) — extract_master.py 가 엑셀에서 세 갈래로 뽑는다:
+#   data/master.json(공개 · 문항 없음) · data/questions.local.json(문항 · 저장소 제외) · backend/Code.gs 블록(서버 원본).
+#   그래서 평가표가 바뀐 날은 ★앱 배포와 백엔드 배포가 둘 다★ 필요하다. 이 도구는 앱만 올리므로, 블록이 바뀌었으면
+#   끝에 크게 알린다(막지는 않는다 — 배포.bat 은 백엔드를 먼저 올리는데, 그 뒤에 여기서 뽑은 블록은 아직 안 올라간 것이다).
+QLOCAL = ROOT / 'data' / 'questions.local.json'
+QUESTION_KEYS = ('qsc_groups', 'shopper_categories', 'texts', 'kiosk_excludes')
+backend_needed = False
+
+
+def gs_block():
+    """Code.gs 의 QUESTIONS 블록 원문 (없으면 '')"""
+    try:
+        t = (ROOT / 'backend' / 'Code.gs').read_text(encoding='utf-8', newline='')
+    except OSError:
+        return ''
+    i, j = t.find('/* @@QUESTIONS_BEGIN */'), t.find('/* @@QUESTIONS_END */')
+    return t[i:j] if 0 <= i < j else ''
+
+
+def backend_notice():
+    if not backend_needed:
+        return
+    print('\n' + '★' * 30)
+    print('★ 백엔드 배포가 필요합니다 ★')
+    print('  backend/Code.gs 의 문항 블록(QUESTIONS)이 이번 추출로 바뀌었습니다.')
+    print('  앱만 올리면 서버는 옛 문항을 내려줍니다 — 백엔드배포.bat (python tools/deploy_backend.py "설명") 을 돌려 주세요.')
+    print('  (배포.bat 은 백엔드를 먼저 올리므로, 배포.bat 으로 돌렸다면 한 번 더 백엔드배포.bat 이 필요합니다)')
+    print('★' * 30 + '\n')
+
 
 def say(mark, text):
     print('%s %s' % (mark, text))
@@ -129,6 +158,7 @@ else:
              '        옛 파일을 고쳐도 앱에는 반영되지 않습니다.' % (XLSX.name, _old.name))
 
     before = (ROOT / 'data' / 'master.json').read_bytes() if (ROOT / 'data' / 'master.json').exists() else b''
+    block_before = gs_block()
     out = run_tool('extract_master.py')
     for line in out.split('\n'):
         if line.strip():
@@ -138,6 +168,29 @@ else:
         ok('master.json 을 새로 뽑았습니다 (엑셀이 더 최신이었습니다)')
     else:
         ok('master.json 은 이미 엑셀과 같았습니다')
+
+    # 문항 갈래 — 공개 파일에 문항이 없고, 서버 블록이 바뀌었는지
+    if not QLOCAL.exists():
+        fail('data/questions.local.json 이 없습니다 — extract_master.py 가 문항을 못 뽑았습니다')
+    else:
+        _q = json.loads(QLOCAL.read_text(encoding='utf-8'))
+        ok('questions.local.json — QSC %d · 미스터리쇼퍼 %d (저장소·배포 제외)'
+           % (sum(len(g['items']) for g in _q.get('qsc_groups') or []),
+              sum(len(c['questions']) for c in _q.get('shopper_categories') or [])))
+    _pub = json.loads((ROOT / 'data' / 'master.json').read_text(encoding='utf-8'))
+    _leak = [k for k in QUESTION_KEYS if k in _pub]
+    if _leak:
+        fail('★공개 파일 data/master.json 에 문항이 실려 있습니다★: %s — extract_master.py 를 확인하십시오' % ', '.join(_leak))
+    else:
+        ok('data/master.json 에는 문항이 없습니다 (매장·유형·채점 상수만)')
+    block_after = gs_block()
+    if not block_after:
+        fail('backend/Code.gs 에 QUESTIONS 블록이 없습니다 — 서버가 문항을 내려줄 수 없습니다')
+    elif block_after != block_before:
+        backend_needed = True
+        warn('★backend/Code.gs 의 문항 블록이 바뀌었습니다 — 백엔드 배포가 필요합니다★ (끝에 다시 알립니다)')
+    else:
+        ok('backend/Code.gs 의 문항 블록은 그대로입니다 (백엔드 배포 불필요)')
 
     # 매장 목록이 달라졌으면 QR도 다시 만든다 — 순서를 어기면 옛 매장의 QR이 남는다
     master = json.loads((ROOT / 'data' / 'master.json').read_text(encoding='utf-8'))
@@ -223,7 +276,8 @@ try:
     ex_block = core.split('const EX = {')[1].split('};')[0]
     ex_keys = set(re.findall(r"'(\d+-\d+)'\s*:", ex_block))
 
-    mj = json.loads((ROOT / 'data' / 'master.json').read_text(encoding='utf-8'))
+    # 문항은 questions.local.json 에 있다 (master.json 은 공개 파일이라 문항이 없다 · 2026-09-18)
+    mj = json.loads(QLOCAL.read_text(encoding='utf-8'))
     q_codes, no_code = set(), []
     for c in mj['shopper_categories']:
         for q in c['questions']:
@@ -287,7 +341,8 @@ except Exception as e:      # noqa: BLE001 — 인터넷이 끊겨도 배포는 
 print('\n━━ 4. 올리면 안 되는 것이 섞였는가 ' + '━' * 25)
 
 tracked = set(git('ls-files').split('\n'))
-banned = [t for t in tracked if '연동_설정값' in t or t.endswith(('.secret', '.local'))]
+# `.local.` 이 이름 가운데 있는 것(questions.local.json — 문항 전부)도 올라가면 안 된다 (2026-09-18)
+banned = [t for t in tracked if '연동_설정값' in t or t.endswith(('.secret', '.local')) or '.local.' in t.rsplit('/', 1)[-1]]
 if banned:
     for b in banned:
         fail('저장소에 들어가면 안 되는 파일입니다: %s' % b)
@@ -386,6 +441,7 @@ if problems:
     for p in problems:
         print('  ✗ ' + p)
     print('═' * 60 + '\n')
+    backend_notice()
     sys.exit(1)
 
 if CHECK_ONLY:
@@ -393,6 +449,7 @@ if CHECK_ONLY:
     print('점검만 했습니다. 막는 문제는 없습니다.' + ('  (경고 %d건)' % len(warnings) if warnings else ''))
     print('올리려면:  python tools/release.py')
     print('═' * 60 + '\n')
+    backend_notice()
     sys.exit(0)
 
 
@@ -428,8 +485,10 @@ print('\n━━ 7. 실서버가 정말 새 것을 주는가 ' + '━' * 25)
 print('   GitHub Pages 빌드를 기다립니다. 보통 1~2분입니다.')
 
 want_master = json.loads((ROOT / 'data' / 'master.json').read_text(encoding='utf-8'))
-want_shopper = sum(len(c['questions']) for c in want_master['shopper_categories'])
-want_qsc = sum(len(g['items']) for g in want_master['qsc_groups'])
+# 문항 수는 questions.local.json 이 안다 — 실서버 master.json 에는 ★문항이 없어야★ 한다 (2026-09-18 ②-1)
+want_q = json.loads(QLOCAL.read_text(encoding='utf-8'))
+want_shopper = sum(len(c['questions']) for c in want_q['shopper_categories'])
+want_qsc = sum(len(g['items']) for g in want_q['qsc_groups'])
 
 for attempt in range(1, 13):
     try:
@@ -438,28 +497,28 @@ for attempt in range(1, 13):
         live_ver = int(lm.group(1)) if lm else -1
 
         live_master = json.loads(fetch('data/master.json'))
-        live_shopper = sum(len(c['questions']) for c in live_master['shopper_categories'])
-        live_qsc = sum(len(g['items']) for g in live_master['qsc_groups'])
+        live_leak = [k for k in QUESTION_KEYS if k in live_master]
 
         live_index = fetch('index.html')
         live_qs = sorted({int(x) for x in re.findall(r'\?v=(\d+)', live_index)})
 
         # ★source_sha 를 함께 본다★ — version은 날짜뿐이라 같은 날 두 번 고치면 구별이 안 된다.
         #   sha는 엑셀 내용이 한 글자만 달라도 바뀌므로 '올렸는데 안 바뀐' 경우를 잡아낸다.
+        #   (sha 는 문항까지 포함해 낸 값이라 공개 파일에 문항이 없어도 문항 변경을 잡는다 — extract_master.py)
         same = (live_ver == VER
                 and live_master.get('version') == want_master.get('version')
                 and live_master.get('source_sha') == want_master.get('source_sha')
-                and live_shopper == want_shopper and live_qsc == want_qsc
+                and not live_leak
                 and live_qs == [VER])
-        print('   [%2d] 실서버 %s · 평가표 %s(%s) · 쇼퍼 %d · QSC %d'
+        print('   [%2d] 실서버 %s · 평가표 %s(%s) · 공개 파일 문항 %s'
               % (attempt, live_ver, live_master.get('version'),
-                 str(live_master.get('source_sha'))[:6], live_shopper, live_qsc))
+                 str(live_master.get('source_sha'))[:6], ('★실려 있음: ' + ', '.join(live_leak)) if live_leak else '없음 ✓'))
         if same:
             print('\n' + '═' * 60)
             print('배포 완료 — 실서버가 새 버전을 주고 있습니다')
             print('  캐시 버전   %s' % vlabel(VER))
             print('  평가표      %s (%s)' % (want_master.get('version'), want_master.get('source_sha')))
-            print('  문항        QSC %d · 미스터리쇼퍼 %d' % (want_qsc, want_shopper))
+            print('  문항        QSC %d · 미스터리쇼퍼 %d (서버 Code.gs 가 내려줌 · 공개 master.json 에는 없음)' % (want_qsc, want_shopper))
             print('  매장        %d곳' % len(want_master.get('stores') or []))
             if warnings:
                 print('\n  경고 %d건 (막지는 않았습니다):' % len(warnings))
@@ -470,6 +529,7 @@ for attempt in range(1, 13):
      앱을 완전히 닫았다가 다시 열면 됩니다. 그래도 옛 화면이면 한 번 더 새로고침.
      서비스 워커는 새 sw.js 를 받은 다음 실행부터 갈아탑니다.''')
             print('═' * 60 + '\n')
+            backend_notice()
             sys.exit(0)
     except Exception as e:      # noqa: BLE001
         print('   [%2d] 아직 못 받았습니다 (%s)' % (attempt, str(e).split('\n')[0][:60]))
@@ -480,4 +540,5 @@ print('올리기는 끝났는데 실서버가 4분 안에 새 것을 주지 않�
 print('GitHub Pages 빌드가 늦거나 실패했을 수 있습니다. 저장소의 Actions 탭을 확인해 주세요.')
 print('  https://github.com/Jeremy9393/Glow_QSC_app/actions')
 print('═' * 60 + '\n')
+backend_notice()
 sys.exit(1)

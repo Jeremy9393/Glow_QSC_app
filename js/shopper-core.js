@@ -6,12 +6,14 @@
    미응답은 빈칸으로 두면 채점에서 자동 제외 — 비고만 적어도 응답으로 인정 */
 async function initShopperForm(opts) {
   const ADMIN = !!opts.admin;
-  /* 하단 진행률의 '0 / 40'은 HTML에 박혀 있는 옛 문항 수다(지금은 38문항).
-     실제 문항 수는 master.json을 받아야 알 수 있으므로, 그 전까지는 ★틀린 숫자 대신 상태 문구★를 띄운다
-     — 틀린 숫자를 맞는 것처럼 보여 주는 것이 '불러오는 중'보다 나쁘다.
-     진짜 값은 맨 아래 recompute()가 allQs.length로 덮어쓴다(문항이 늘고 줄어도 따라간다). */
+  /* 하단 진행률의 '0 / 38'은 HTML에 박혀 있는 숫자다. 실제 문항 수는 제출 코드를 확인한 뒤에야 알 수 있으므로,
+     그 전까지는 ★틀린 숫자 대신 상태 문구★를 띄운다 — 틀린 숫자를 맞는 것처럼 보여 주는 것이 안내보다 나쁘다.
+     진짜 값은 recompute()가 activeQs().length 로 덮어쓴다(문항이 늘고 줄어도 따라간다). */
   const progEl = document.querySelector('#prog');
-  if (progEl) progEl.textContent = '문항 불러오는 중…';
+  if (progEl) progEl.textContent = '제출 코드를 넣으면 문항이 열립니다';
+  /* ★master.json 에는 이제 문항이 없다★ (2026-09-18 담당자 ②-1) — 매장 목록·매장 유형·버전만 있는 공개 파일이다.
+     문항은 아래 openQuestions 가 제출 코드를 서버(survey.questions)에 확인한 뒤에만 받는다 —
+     담당자: "매장사람들도 ms평가표는 못봐야해, ms평가표는 신뢰가는사람들만 하는 경우가 많아서 문항 자체를 유출하진 않을꺼야" */
   const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
   const $ = function (s, el) { return (el || document).querySelector(s); };
 
@@ -154,16 +156,20 @@ async function initShopperForm(opts) {
   const DRAFT_KEY = ADMIN ? 'shopper-admin-v4' : 'shopper-guest-v4';
   const state = { answers: {}, memos: {} };
   const allQs = [];
-  /* ★카테고리 이름을 문항에 붙여 둔다★ (2026-09-08) — 제출 payload 의 items[].cat 으로 실어 보낸다.
-     ★시트에는 안 실린다★ (2026-09-17 확인 · 최종검수 #32) — MS_상세 시트에 「구분」 열이 없고 서버도 cat 을 읽지 않는다.
-     서버는 평가표를 갖고 있지 않아 카테고리를 알 수 없으니, 나중에 시트 열을 만들 때 쓸 수 있게 보내 두는 것뿐이다. */
-  master.shopper_categories.forEach(function (c) {
-    c.questions.forEach(function (q) { q.cat = c.name; allQs.push(q); });
-  });
-  // 문항 번호로 바로 찾는 표 — isFilled 가 만족도(likert) 여부를 알아야 한다
-  const QBY = {};
-  allQs.forEach(function (q) { QBY[q.no] = q; });
+  const QBY = {};           // 문항 번호로 바로 찾는 표 — isFilled 가 만족도(likert) 여부를 알아야 한다 (openQuestions 가 채운다)
   const updaters = {};
+  /* ★문항은 제출 코드를 확인한 뒤 서버가 준다★ (2026-09-18 담당자 ②-1) — 아래 openQuestions.
+       cats        서버가 준 shopper_categories (열기 전엔 비어 있다 — allQs·QBY·카드도 그때 채운다)
+       KIOSK_EX    서버가 준 kiosk_excludes (문항 코드 · 종전 master.json 의 것)
+       codeStore   코드에 적힌 매장 · codeType 그 매장의 유형(kiosk|mixed|'') · openCode 확인된 코드(★메모리에만★ — 임시저장에 넣지 않는다)
+       opened      문항이 열리고 임시저장까지 되살아난 뒤 true — 그 전에는 saveDraft 가 아무것도 쓰지 않는다
+                   (첫 화면에서 날짜만 만져도 빈 답으로 지난 임시저장을 덮어쓰던 길을 막는다) */
+  let cats = [];
+  let KIOSK_EX = [];
+  let codeStore = '';
+  let codeType = '';
+  let openCode = '';
+  let opened = false;
 
   /* ══ 매장 구조상 답할 수 없는 문항 빼기 (2026-09-08 담당자 결정) ══════════════
 
@@ -185,8 +191,7 @@ async function initShopperForm(opts) {
      문항 코드로 다룬다 (번호가 아니라) —
        2026-08-18 에 13번 카테고리가 4→2문항으로 줄자 번호가 밀려 엉뚱한 예시가 붙은 적이 있다.
        번호로 저장하면 평가표를 한 번 고치는 순간 ★엉뚱한 문항이 조용히 사라진다★. */
-  const STORE_TYPES = master.store_types || {};
-  const KIOSK_EX = master.kiosk_excludes || [];
+  const STORE_TYPES = master.store_types || {};   // 공개 표 — 서버 응답(storeType)이 없을 때의 뒷받침 (옛 백엔드 대비)
   const cardOf = {};        // 문항번호 → 카드 element (buildQ 가 채운다)
   const secOf = {};         // 카테고리 이름 → 섹션 element
   let excluded = {};        // 지금 빠져 있는 문항번호 (no → true)
@@ -194,9 +199,12 @@ async function initShopperForm(opts) {
   function codeOf(q) {
     return (String(q.text).match(/^(\d+-\d+)\./) || [])[1] || '';
   }
+  /* 매장 유형 — 코드의 매장이면 서버가 준 유형(survey.questions 의 storeType)이 우선, 그 밖은 master.json 의 공개 표 */
   function storeType() {
-    const el = $('#store');
-    return STORE_TYPES[(el && el.value || '').trim()] || '';
+    const s = (($('#store') && $('#store').value) || '').trim();
+    if (!s) return '';
+    if (s === codeStore && codeType) return codeType;
+    return STORE_TYPES[s] || '';
   }
   /* 지금 이 방문에서 키오스크 주문인가 —
        kiosk  매장 전체가 키오스크다 (주문 방법을 묻지 않는다)
@@ -251,7 +259,7 @@ async function initShopperForm(opts) {
     /* 카테고리가 통째로 비면 제목 줄도 감춘다 — 「예 / 아니오」만 뜬 빈 상자가 남지 않게.
        (키오스크 매장은 7번(결제) 3문항이 전부 빠져 통째로 비므로 이 감추기가 실제로 동작한다 — 2026-09-17 확인.
         3번은 3-3 이 남아 제목 줄이 유지된다. data/store-types.json kioskExcludes) */
-    master.shopper_categories.forEach(function (c) {
+    cats.forEach(function (c) {
       const sec = secOf[c.name];
       if (!sec) return;
       sec.hidden = c.questions.every(function (q) { return !!excluded[q.no]; });
@@ -370,6 +378,18 @@ async function initShopperForm(opts) {
      실시간 목록은 배경으로 받아 도착하면 갈아끼운다. */
   const preStore = new URLSearchParams(location.search).get('store');
   const storeSel = $('#store');
+  /* 매장을 이 이름으로 맞추고 잠근다 — 목록에 없으면 더해 넣는다 (?store= 잠금과 같은 모양 · 2026-09-18) */
+  function lockStore(name) {
+    let has = false;
+    for (let i = 0; i < storeSel.options.length; i++) if (storeSel.options[i].value === name) { has = true; break; }
+    if (!has) {
+      const o = document.createElement('option');
+      o.value = name; o.textContent = name;
+      storeSel.appendChild(o);
+    }
+    storeSel.value = name;
+    storeSel.disabled = true;
+  }
 
   // api.js가 config.get 성공본을 넣어 두는 자리 — 키를 여기서 새로 만들지 않고 그대로 읽기만 한다
   function cachedStores() {
@@ -422,6 +442,9 @@ async function initShopperForm(opts) {
       storeSel.value = preStore;
       storeSel.disabled = true;
     }
+    /* ★문항이 열린 뒤에는 코드의 매장으로 잠근다★ (2026-09-18 ②-1) — 배경 매장목록 갱신이 위에서 잠금을 풀어 놓지 않게.
+       매장은 코드가 정한다(submitWithCode 가 코드의 매장과 대조한다) — 여기서 바꿀 수 있어도 제출은 통과하지 않으니 처음부터 못 바꾸게 한다. */
+    if (opened && codeStore) lockStore(codeStore);
     /* ★매장이 정해지는 세 경로가 전부 여기를 지난다★ (2026-09-08) —
        ?store= 자동선택 · 배경 매장목록 갱신 · 첫 그리기. 이 셋은 change 이벤트를 쏘지 않아
        리스너만 걸어 두면 「가끔만 문항 제외가 먹는」 가장 잡기 나쁜 상태가 된다.
@@ -448,15 +471,33 @@ async function initShopperForm(opts) {
     console.warn('매장 목록 갱신 실패 — 이 기기에 저장된 목록으로 계속합니다', e);
   });
 
-  if (ADMIN) {
-    if ($('#verInfo')) $('#verInfo').textContent = '평가표 ' + master.version + ' 기준';
-    // 엑셀 쇼퍼 시트의 평가기준·안내·채점원칙을 그대로 표시 (완전 동기화)
-    if ($('#rulesNote') && master.texts) {
-      $('#rulesNote').textContent =
-        '[평가기준]\n' + (master.texts.shopper_criteria || '') +
-        '\n\n' + (master.texts.shopper_principles || '');
-    }
+  /* ---------- 제출 코드 → 문항 열기 (2026-09-18 담당자 ②-1) ----------
+     첫 화면 = 매장(링크로 잠김) + 방문날짜·시간 + 「제출 코드」 + [문항 열기]. 문항·「마지막으로」·하단바는 코드가 확인된 뒤에 나온다.
+     ★코드는 검사만 되고 소진되지 않는다★ — 소진은 제출 순간(survey.submit). 그래서 열어 놓고 안 내도 코드는 살아 있다.
+     ★코드는 임시저장에 넣지 않는다★ (saveDraft 주석) — 메모리(openCode)에만 두고 제출 때 그대로 쓴다. 새로고침하면 다시 넣는다.
+     오류·잠금 문구는 서버 것을 그대로 보여 준다 — 제출 때와 같은 판정·같은 문구(backend codeVerify).
+     ★상자는 JS 가 만들어 #metaBox 뒤에 끼운다★ — 화면 두 개(shopper.html·survey.html)를 따로 고치면 어긋난다(파일 첫 주석 원칙). */
+  const codeBox = document.createElement('section');
+  codeBox.className = 'card';
+  codeBox.id = 'codeBox';
+  codeBox.innerHTML = '<h2>제출 코드</h2><div class="meta-grid">' +
+    '<div class="full"><label class="f">제출 코드 * — 담당자에게 받으신 6자리</label>' +
+    '<input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="예: 382917"></div>' +
+    '<div class="full"><button type="button" id="openBtn" class="submit openBtn">문항 열기</button></div></div>' +
+    '<p class="note pre codeNote" id="codeNote" style="display:none"></p>';
+  if ($('#metaBox')) $('#metaBox').insertAdjacentElement('afterend', codeBox);
+  function showCodeNote(text) {
+    const n = $('#codeNote');
+    if (!n) return;
+    n.textContent = text || '';            // 서버 문자열이라 textContent 로만 (이 앱의 XSS 방어 관례)
+    n.style.display = text ? '' : 'none';
   }
+  /* 문항 쪽 화면(문항·「마지막으로」·하단바)과 코드 상자를 맞바꾼다 */
+  function showQuestionsUi(on) {
+    [$('#cats'), $('#metaLate'), $('#bar')].forEach(function (el) { if (el) el.style.display = on ? '' : 'none'; });
+    codeBox.style.display = on ? 'none' : '';
+  }
+  showQuestionsUi(false);
 
   /* ---------- 초기화 — ★관리자·고객 둘 다★ (2026-08-24) ----------
      종전에는 관리자 전용이었다. 고객은 잘못 고른 답을 되돌릴 길이 없어 브라우저 데이터를
@@ -482,6 +523,7 @@ async function initShopperForm(opts) {
     /* ★임시저장에 제출 코드를 넣지 않는다★ — 코드는 제출 순간에만 물어 그 자리에서 쓰고 버린다.
        한 번이라도 여기 들어가면 공용 기기(매장 태블릿·시연용 폰)의 localStorage에 남아,
        다음에 설문지를 연 사람이 그 코드로 아무 매장에나 제출할 수 있게 된다. 칸을 늘릴 때 주의. */
+    if (!opened) return;   // 문항이 열리고 임시저장이 되살아나기 전에는 쓰지 않는다 (위 opened 설명 · 2026-09-18)
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
       store: $('#store').value, date: $('#date').value, time: TimePick.get('time'),
       way: $('#way') ? $('#way').value : '',
@@ -566,20 +608,23 @@ async function initShopperForm(opts) {
   }
 
   const catsEl = $('#cats');
-  master.shopper_categories.forEach(function (c) {
-    const sec = document.createElement('section');
-    sec.className = 'group';
-    /* ★답하는 법은 카테고리 제목 줄에 붙인다★ (2026-09-04 담당자) — 종전에는 안내 상자 맨 아래에
-       「1~10번은 예/아니오, 11~13번은 1~5점」 한 줄로 있었는데, 정작 고르는 순간엔 화면 밖이었다.
-       제목 줄 오른쪽은 이미 비어 있던 자리라 상자 높이가 늘지 않는다. */
-    const likertCat = c.questions.length && c.questions[0].scale === 'likert';
-    sec.innerHTML = '<div class="ghead"><h2></h2>' +
-      '<span class="gstat">' + (likertCat ? '1~5점 중 선택' : '예 / 아니오') + '</span></div>';
-    $('.ghead h2', sec).textContent = c.name;
-    c.questions.forEach(function (q) { sec.appendChild(buildQ(q)); });
-    catsEl.appendChild(sec);
-    secOf[c.name] = sec;      // 문항이 통째로 빠지면 이 섹션도 감춘다
-  });
+  /* 카테고리·문항 카드를 그린다 — openQuestions 가 서버 응답(cats)을 받은 뒤 한 번 부른다 (2026-09-18) */
+  function renderCats() {
+    cats.forEach(function (c) {
+      const sec = document.createElement('section');
+      sec.className = 'group';
+      /* ★답하는 법은 카테고리 제목 줄에 붙인다★ (2026-09-04 담당자) — 종전에는 안내 상자 맨 아래에
+         「1~10번은 예/아니오, 11~13번은 1~5점」 한 줄로 있었는데, 정작 고르는 순간엔 화면 밖이었다.
+         제목 줄 오른쪽은 이미 비어 있던 자리라 상자 높이가 늘지 않는다. */
+      const likertCat = c.questions.length && c.questions[0].scale === 'likert';
+      sec.innerHTML = '<div class="ghead"><h2></h2>' +
+        '<span class="gstat">' + (likertCat ? '1~5점 중 선택' : '예 / 아니오') + '</span></div>';
+      $('.ghead h2', sec).textContent = c.name;
+      c.questions.forEach(function (q) { sec.appendChild(buildQ(q)); });
+      catsEl.appendChild(sec);
+      secOf[c.name] = sec;      // 문항이 통째로 빠지면 이 섹션도 감춘다
+    });
+  }
 
   /* ★빠진 문항은 채점에 넣지 않는다★ — 값이 null 이라 분모에서 빠지긴 하지만,
      그래도 배열에서 빼 둔다. answered 수가 화면·시트와 어긋나지 않게. */
@@ -589,6 +634,11 @@ async function initShopperForm(opts) {
 
   // ---------- 진행률(공통) + 점수·집계(관리자 전용) ----------
   function recompute() {
+    if (!opened) {   // 문항이 열리기 전 — 진행률 자리에는 안내만 (2026-09-18)
+      if ($('#prog')) $('#prog').textContent = '제출 코드를 넣으면 문항이 열립니다';
+      if ($('#fill')) $('#fill').style.width = '0%';
+      return;
+    }
     /* ★빠진 문항은 세지 않는다★ — 키오스크 매장은 「0 / 33 응답」이 되어야 한다(38 − 키오스크 제외 5문항).
        38 로 두면 손님이 영영 못 채우는 다섯 칸을 찾아 헤맨다. */
     const act = activeQs();
@@ -603,7 +653,7 @@ async function initShopperForm(opts) {
     const body = $('#sumBody');
     body.innerHTML = '';
     // 엑셀 집계표(52~64행)와 동일 구성: 환산 점수 · 응답 문항 수(NA 포함) · NA 건 · 달성률(NA 제외)
-    master.shopper_categories.forEach(function (c) {
+    cats.forEach(function (c) {
       /* ★빠진 문항은 분모에서도 뺀다★ — 「1/3」처럼 영영 안 차는 칸이 남으면
          담당자가 못 채운 문항을 찾아 헤맨다. 통째로 빠진 카테고리는 행도 만들지 않는다. */
       const qs = c.questions.filter(function (q) { return !excluded[q.no]; });
@@ -680,17 +730,13 @@ async function initShopperForm(opts) {
     if (ADMIN && res.score != null &&
         !confirm('응답 ' + answered + '/' + act.length + '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade + '\n제출할까요?')) return;
 
-    /* ★익명 제출은 제출 코드가 있어야 한다★ (설계: 제출 순간에만 검사한다)
-       작성은 코드 없이 자유롭게 하고, 여기서 한 번 묻는다.
-       ★취소하거나 틀려도 작성 내용은 그대로 남는다★ — 다시 [제출]을 누르면 된다.
-       관리자는 로그인으로 신원이 확인되므로 묻지 않는다. */
+    /* ★익명 제출은 제출 코드가 있어야 한다★ — 문항을 열 때 확인한 코드(openCode)를 그대로 쓴다 (2026-09-18 ②-1 · 종전 prompt() 는 없앴다).
+       서버가 제출 순간에 한 번 더 판정하고 ★그때 소진★한다(submitWithCode). 틀려도 작성 내용은 그대로 남는다 — 다시 [제출]을 누르면 된다.
+       관리자(ADMIN)는 로그인으로 신원이 확인되므로 코드가 없다. */
     let code = '';
     if (!ADMIN) {
-      code = (prompt('제출 코드를 입력해 주세요 (6자리)\n\n담당자에게 받으신 번호입니다.\n작성하신 내용은 그대로 남아 있습니다.', '') || '').trim();
-      /* 화면이 코드를 '382 917'처럼 띄어 보여 주므로 그대로 옮겨 적는 사람이 많다.
-         숫자만 남긴다 — 서버도 같은 일을 하지만, 여기서 걸러야 오타가 아닌 것으로 실패하지 않는다. */
-      code = code.replace(/[^0-9]/g, '');
-      if (!code) return;
+      code = openCode;
+      if (!opened || !code) { alert('제출 코드를 먼저 확인해 주세요.'); return; }
     }
 
     const payload = {
@@ -816,38 +862,103 @@ async function initShopperForm(opts) {
     $('#date').addEventListener('change', askDup);
   }
 
-  // ---------- 초기화 ----------
-  const draft = loadDraft();
-  if (draft) {
-    if (!$('#store').disabled) $('#store').value = draft.store || '';
-    /* ★주문 방법은 「같은 매장일 때만」 되살린다★ (2026-09-08 전수검사로 고침)
-       임시저장 열쇠는 매장별로 갈리지 않는다. 그래서 제주당(mixed)에서 「키오스크」를 고르고
-       제출하지 않은 채 나갔다가, 같은 폰으로 이티에프 베이커리 성수(mixed) QR 을 열면
-       ★손님이 한 번도 고르지 않았는데 「키오스크」가 채워져 3-1·3-2 가 빠진 채 제출됐다★.
-       칸은 이미 값이 있어 보이니 손대지 않고, 필수 검사도 「비어 있지 않다」로 통과한다.
-       담당자 우려(*"업셀링을 안했다는건 안한건다 해당없음 같이 표시해버릴까봐"*)가
-       「해당 없음」 버튼이 아니라 ★임시저장이라는 다른 문★으로 들어오는 길이었다.
-       바로 위 줄이 매장을 먼저 정하므로 여기서 비교할 수 있다. */
-    if ($('#way')) {
-      $('#way').value = (draft.store && draft.store === $('#store').value)
-        ? (draft.way || '') : '';
+  // ---------- 첫 화면 ----------
+  $('#date').value = todayStr();   // 임시저장이 있으면 openQuestions 가 코드 확인 뒤 되살린다 (아래)
+
+  /* 제출 코드를 서버에 확인하고 문항을 연다 (2026-09-18 담당자 ②-1 — 위 「제출 코드 → 문항 열기」 설명)
+     순서: 코드·매장 확인 → survey.questions → 매장을 코드의 매장으로 잠금 → 문항 카드 → ★임시저장 되살리기★ → opened → 여닫기·진행률 */
+  async function openQuestions() {
+    if (opened) return;
+    const inp = $('#code');
+    /* 화면이 코드를 '382 917'처럼 띄어 보여 주므로 그대로 옮겨 적는 사람이 많다.
+       숫자만 남긴다 — 서버도 같은 일을 하지만, 여기서 걸러야 오타가 아닌 것으로 실패하지 않는다. */
+    const code = String((inp && inp.value) || '').replace(/[^0-9]/g, '');
+    if (!code) { showCodeNote('제출 코드를 입력해 주세요.'); if (inp) inp.focus(); return; }
+    const store = ($('#store').value || '').trim();
+    if (!store) { alert('매장명을 선택해 주세요.'); $('#store').focus(); return; }
+    const btn = $('#openBtn');
+    btn.disabled = true;
+    Busy.on('문항을 불러오는 중입니다…');
+    let r;
+    try { r = await Api.call('survey.questions', { code: code, store: store }); }
+    catch (e) { r = { ok: false, error: '네트워크 연결을 확인해 주세요.' }; }
+    finally { Busy.off(); btn.disabled = false; }
+    /* 오류·잠금 문구는 서버 것을 그대로 — 「제출 코드가 맞지 않습니다.」·「코드 확인이 잠시 막혀 있습니다. 10분 뒤에…」·「이미 사용된 코드입니다.」 등 */
+    if (!r || !r.ok) { showCodeNote((r && r.error) || '문항을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.'); return; }
+    /* ok 인데 문항이 없다 — 구글이 가끔 JSON 대신 doGet 모양({ok:true, service:…})·404 안내를 주는 간헐 현상(현재상황.md ㉑)이
+       이 모양으로 온다(2026-09-18 실제로 봤다). 담당자 탓이 아니라 다시 누르면 된다. */
+    if (!Array.isArray(r.shopper_categories) || !r.shopper_categories.length) {
+      showCodeNote('문항을 받지 못했습니다. 잠시 후 [문항 열기]를 다시 눌러 주세요.');
+      return;
     }
-    $('#date').value = draft.date || todayStr();
-    // 방문 시간은 기본값을 두지 않는다 — 방문 시각과 작성 시각이 다를 수 있으므로 직접 고르게 함
-    TimePick.set('time', draft.time || '');
-    $('#order').value = draft.order || '';
-    $('#demo').value = draft.demo || '';
-    if ($('#overall')) $('#overall').value = draft.overall || '';
-    Object.assign(state.answers, draft.answers || {});
-    Object.assign(state.memos, draft.memos || {});
-    allQs.forEach(function (q) { updaters[q.no](); });
-    if (ADMIN && $('#saveNote')) $('#saveNote').textContent = '임시저장 불러옴 (' + new Date(draft.t).toLocaleString('ko-KR') + ')';
-  } else {
-    $('#date').value = todayStr();
+    showCodeNote('');
+    openCode = code;
+    codeStore = String(r.store || store);
+    codeType = String(r.storeType || '');
+    KIOSK_EX = Array.isArray(r.kiosk_excludes) ? r.kiosk_excludes : [];
+    cats = r.shopper_categories;
+    lockStore(codeStore);      // 매장은 코드가 정한다 — 코드의 매장으로 맞추고 잠근다
+    /* ★카테고리 이름을 문항에 붙여 둔다★ (2026-09-08) — 제출 payload 의 items[].cat 으로 실어 보낸다.
+       ★시트에는 안 실린다★ (2026-09-17 확인 · 최종검수 #32) — MS_상세 시트에 「구분」 열이 없고 서버도 cat 을 읽지 않는다.
+       ★조건 없이 전부 담는다★ — 걸러진 배열로 갈아끼우면 updaters[q.no] 가 없어져 임시저장 복원 루프가 TypeError 로 죽는다(위 「빼기」 설명). */
+    cats.forEach(function (c) {
+      c.questions.forEach(function (q) { q.cat = c.name; allQs.push(q); });
+    });
+    allQs.forEach(function (q) { QBY[q.no] = q; });
+    renderCats();
+    if (ADMIN) {
+      if ($('#verInfo')) $('#verInfo').textContent = '평가표 ' + (r.version || master.version) + ' 기준';
+      // 엑셀 쇼퍼 시트의 평가기준·안내·채점원칙을 그대로 표시 (완전 동기화)
+      if ($('#rulesNote') && r.texts) {
+        $('#rulesNote').textContent =
+          '[평가기준]\n' + (r.texts.shopper_criteria || '') +
+          '\n\n' + (r.texts.shopper_principles || '');
+      }
+    }
+    showQuestionsUi(true);
+
+    // ---------- 임시저장 되살리기 — ★코드를 확인한 뒤★ ----------
+    const draft = loadDraft();
+    if (draft) {
+      if (!$('#store').disabled) $('#store').value = draft.store || '';   // 잠겨 있으면(코드의 매장) 그쪽이 이긴다
+      /* ★주문 방법은 「같은 매장일 때만」 되살린다★ (2026-09-08 전수검사로 고침)
+         임시저장 열쇠는 매장별로 갈리지 않는다. 그래서 제주당(mixed)에서 「키오스크」를 고르고
+         제출하지 않은 채 나갔다가, 같은 폰으로 이티에프 베이커리 성수(mixed) QR 을 열면
+         ★손님이 한 번도 고르지 않았는데 「키오스크」가 채워져 3-1·3-2 가 빠진 채 제출됐다★.
+         칸은 이미 값이 있어 보이니 손대지 않고, 필수 검사도 「비어 있지 않다」로 통과한다.
+         담당자 우려(*"업셀링을 안했다는건 안한건다 해당없음 같이 표시해버릴까봐"*)가
+         「해당 없음」 버튼이 아니라 ★임시저장이라는 다른 문★으로 들어오는 길이었다.
+         바로 위 줄이 매장을 먼저 정하므로 여기서 비교할 수 있다. */
+      if ($('#way')) {
+        $('#way').value = (draft.store && draft.store === $('#store').value)
+          ? (draft.way || '') : '';
+      }
+      /* 첫 화면에서 방금 고른 날짜·시간은 지키고, 안 만진 칸만 되살린다 (2026-09-18 — 복원이 코드 확인 뒤로 밀렸으므로) */
+      if ($('#date').value === todayStr() && draft.date) $('#date').value = draft.date;
+      // 방문 시간은 기본값을 두지 않는다 — 방문 시각과 작성 시각이 다를 수 있으므로 직접 고르게 함
+      if (!TimePick.get('time')) TimePick.set('time', draft.time || '');
+      $('#order').value = draft.order || '';
+      $('#demo').value = draft.demo || '';
+      if ($('#overall')) $('#overall').value = draft.overall || '';
+      Object.assign(state.answers, draft.answers || {});
+      Object.assign(state.memos, draft.memos || {});
+      allQs.forEach(function (q) { updaters[q.no](); });
+      if (ADMIN && $('#saveNote')) $('#saveNote').textContent = '임시저장 불러옴 (' + new Date(draft.t).toLocaleString('ko-KR') + ')';
+    }
+    opened = true;
+    /* ★여기가 마지막 관문이다★ (2026-09-08) — 카드가 다 만들어지고 임시저장까지 되살아난
+       지금에야 문항을 실제로 여닫을 수 있다. fillStores 안에서 부른 것은 excluded 만 정했다.
+       ★recompute 보다 먼저★ — 그래야 첫 화면의 「0 / 33」(키오스크 매장)이 처음부터 맞는 숫자로 뜬다. */
+    applyExclusions();
+    recompute();
+    saveDraft();   // 첫 화면에서 고른 매장·날짜·시간을 임시저장에 반영 (코드는 들어가지 않는다)
   }
-  /* ★여기가 마지막 관문이다★ (2026-09-08) — 카드가 다 만들어지고 임시저장까지 되살아난
-     지금에야 문항을 실제로 여닫을 수 있다. fillStores 안에서 부른 것은 excluded 만 정했다.
-     ★recompute 보다 먼저★ — 그래야 첫 화면의 「0 / 33」(키오스크 매장)이 처음부터 맞는 숫자로 뜬다. */
+  $('#openBtn').onclick = openQuestions;
+  $('#code').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); openQuestions(); }
+  });
+
+  /* 문항이 열리기 전에도 한 번 — 카드가 없어 여닫을 것은 없고(applyExclusions), 진행률 자리에 안내가 뜬다(recompute) */
   applyExclusions();
   recompute();
 }

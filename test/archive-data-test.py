@@ -14,14 +14,14 @@
      ★MS 2건은 가장 최근 제출 1건 + msNote★ (2026-09-17 담당자 결정 — 앱 점수 shopperMonthAvg 와 같은 규칙)
   ③ 키오스크 — ★3-1·3-2·7-1·7-2·7-3 이 빠졌을 때만★ NA 로 채운다 · 다른 번호가 빠지면 problems
   ④ 다른 달·다른 매장은 섞이지 않는다 · 같은 날·시각이어도 제출시각이 다르면 섞이지 않는다 · 매장명 띄어쓰기는 앱 매장명으로
-  ⑤ 읽기만 한다(쓰기 호출 없음) · 등록표는 「읽기」 · 키오스크 번호가 master.json 과 같다
+  ⑤ 읽기만 한다(쓰기 호출 없음) · 등록표는 「읽기」 · 키오스크 번호가 questions.local.json 과 같다
 """
 import io, json, re, subprocess, sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
 SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE.parent / 'backend' / 'Code.gs'
-MASTER = HERE.parent / 'data' / 'master.json'
+MASTER = HERE.parent / 'data' / 'questions.local.json'   # 문항은 여기 (2026-09-18 ②-1 · master.json 에는 없다)
 ARCHIVE = HERE.parent.parent.parent / '4. 스프레드시트' / 'tools' / 'archive.py'
 NODE = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\_도구\node\node.exe')
 OUT = HERE / 't_archive_data.js'
@@ -235,7 +235,7 @@ src_ok('★읽기만 한다★ — 쓰기 호출이 없다',
 m = json.load(io.open(MASTER, encoding='utf-8'))
 qs = [q for c in m['shopper_categories'] for q in c['questions']]
 kiosk = [q['no'] for q in qs if re.match(r'^(3-1|3-2|7-1|7-2|7-3)\.', str(q.get('text', '')))]
-src_ok('키오스크 번호가 master.json(3-1·3-2·7-1·7-2·7-3)과 같다 %s' % kiosk,
+src_ok('키오스크 번호가 questions.local.json(3-1·3-2·7-1·7-2·7-3)과 같다 %s' % kiosk,
        'const ARCHIVE_KIOSK_NOS = [%s];' % ', '.join(str(x) for x in kiosk) in text)
 src_ok('키오스크 문항은 전부 예/아니오 척도 (NA 가 척도 검사를 통과한다)',
        all(q.get('scale') == 'yn' for q in qs if q['no'] in kiosk))

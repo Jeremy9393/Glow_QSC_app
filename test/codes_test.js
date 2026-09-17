@@ -272,6 +272,33 @@ function codeFailBump(store) {
   } catch (e) { }
 }
 
+/* ★검사만 한다 — 소진하지 않는다★ (2026-09-18 ②-1) — 제출(submitWithCode)과 문항 열기(fnSurveyQuestions)가
+   ★같은 판정★을 쓴다. 판정 순서·문구는 종전 submitWithCode 그대로 옮겨 왔다(두 곳이 다르면 "열리는데 안 내지는" 코드가 생긴다).
+   · store 를 주면 코드에 적힌 매장과 같아야 한다. 비우면 코드의 매장을 그대로 받는다(문항 열기 전용 — 제출은 반드시 준다).
+   · missCode = 「없는 코드·다른 매장 코드」일 때의 오류 코드 — 제출은 BAD_REQUEST(종전 그대로), 문항 열기는 NOT_FOUND. 문구는 같다.
+   · 실패 카운터(codeFailBump · 매장별 15 + 전체 60 · ②-3c)는 여기서 올린다. 잠겨 있으면 시트도 읽지 않는다.
+   ★코드 번호로 찾는다★ (2026-08-26) — 예전에는 (회차·매장)으로 찾았고, 그래서 방문날짜가 발급한 달과 다르면
+   멀쩡한 코드가 '맞지 않는다'로 튕겼다. 이제 날짜는 아무 상관이 없다.
+   ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
+   다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
+function codeVerify(ss, code, store, missCode) {
+  code = String(code || '').replace(/\D/g, '');
+  if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
+  store = normStore(store);
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+    return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
+  }
+  const rec = codeFind(ss, code);
+  if (!rec || (store && normStore(rec.store) !== store)) {
+    codeFailBump(store);
+    return err(missCode || 'BAD_REQUEST', '제출 코드가 맞지 않습니다.');
+  }
+  if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
+  if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
+  if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');
+  return { ok: true, rec: rec, code: code, store: normStore(rec.store) };
+}
+
 /* 검사 → 소진 → 저장을 한 덩어리로 (설계 §5-2).
    ★저장이 끝난 뒤에 소진 표시를 한다★ — 순서를 뒤집으면 저장이 실패했을 때
    쇼퍼는 코드를 잃고 응답도 잃는다. 반대로 두면 최악이 '코드가 한 번 더 쓰일 수 있음'이다. */
@@ -280,22 +307,17 @@ function submitWithCode(ss, p, ctx) {
   if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
   const store = normStore(p && p.store);
   if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
-  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c) — 잠겨 있으면 락을 기다리지도 않는다
     return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
   }
 
   const lock = LockService.getScriptLock();
   try { lock.waitLock(25000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
   try {
-    /* ★코드 번호로 찾는다★ (2026-08-26) — 예전에는 (회차·매장)으로 찾았고, 그래서 방문날짜가
-       발급한 달과 다르면 멀쩡한 코드가 '맞지 않는다'로 튕겼다. 이제 날짜는 아무 상관이 없다. */
-    const rec = codeFind(ss, code);
-    /* ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
-       다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
-    if (!rec || normStore(rec.store) !== store) { codeFailBump(store); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
-    if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
-    if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
-    if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');
+    /* 판정은 codeVerify 한 곳 (2026-09-18) — 문항 열기(survey.questions)와 같은 규칙·같은 문구 */
+    const v = codeVerify(ss, code, store, 'BAD_REQUEST');
+    if (!v.ok) return v;
+    const rec = v.rec;
 
     const saved = saveShopper(ss, p, ctx, true);
     if (!saved || saved.ok !== true) return saved;

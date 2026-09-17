@@ -96,6 +96,8 @@ const Api = (function () {
     'auth.session': 1, 'config.get': 1, 'dashboard.get': 1, 'store.get': 1,
     'notify.badge': 1, 'notify.admin': 1, 'qsc.status': 1, 'shopper.status': 1,
     'codes.list': 1, 'account.list': 1, 'admin.maint': 1,
+    /* 문항 내려주기(2026-09-18 ②-1) — 둘 다 읽기다. survey.questions 는 코드를 검사만 하고 소진하지 않으므로 다시 물어도 무해하다 */
+    'config.questions': 1, 'survey.questions': 1,
   };
   const REREAD_MS = 700;    // 곧바로 다시 물으면 같은 답을 받기 쉽다 — 한 박자 쉰다
 

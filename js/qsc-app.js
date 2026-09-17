@@ -3,9 +3,88 @@
    ★(S2)·★★(S1)는 QSC 점수에서 바로 차감한다 (2026-08-18 변경 · 하한 0) */
 (async function () {
   // cache:'no-store' — 데이터 파일은 항상 서버 최신본 (오프라인이면 SW 캐시 폴백)
+  /* ★master.json 에는 이제 문항이 없다★ (2026-09-18 담당자 ②-1) — 매장 목록·버전·채점 상수만 있는 공개 파일이다.
+     문항은 바로 아래에서 서버(config.questions)에 로그인 토큰을 붙여 받는다. */
   const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
   const $ = function (s, el) { return (el || document).querySelector(s); };
   const DRAFT_KEY = 'qsc-draft-v2';
+
+  /* ---------- 문항 받기 (2026-09-18 담당자 ②-1) ----------
+     ★문항·심각도는 로그인 + qsc 권한이 있는 요청에만 서버가 내려준다★ — 공개 저장소(GitHub Pages)의 master.json 에서 뺐다.
+       담당자: "매장사람들도 ms평가표는 못봐야해" — QSC 도 같은 원칙. qsc.html 의 noAccess 가 CSS 로 감추던 것을 이제 ★애초에 안 그린다★(DOM 에 0개).
+     · 토큰이 없거나(로그아웃) 메뉴 사본에 qsc 가 없으면 부르지도 그리지도 않는다. 서버가 FORBIDDEN·AUTH_* 로 답하면 사본도 지우고 감춘다.
+     · 받은 것은 localStorage 'qsc-questions-v1' 에 사본 — 오프라인(지하 매장)에서도 점검이 되게. 로그아웃 때 auth.js wipeLocal 이
+       qsc-* 접두어로 함께 지운다(최종검수 #23).
+     · 「먼저 그리기」 — 사본이 있으면 그것으로 즉시 그리고 배경에서 갱신한다. 문항이 바뀌었으면(source_sha) 사본을 바꿔 두고,
+       아직 아무것도 안 만졌으면 새로고침해 새 문항으로, 작성 중이면 제출 뒤 다시 열 때 바뀐다고 알린다.
+     · 사본이 없으면(로그인 뒤 첫 진입) 서버를 기다린다 — 문항 없이는 그릴 것이 없다. 못 받으면 안내하고 제출을 잠근다. */
+  const QKEY = 'qsc-questions-v1';
+  function validQ(q) {
+    return !!(q && Array.isArray(q.qsc_groups) && q.qsc_groups.length &&
+      q.qsc_groups.every(function (g) { return g && Array.isArray(g.items); }));
+  }
+  function readQ() {
+    try { const q = JSON.parse(localStorage.getItem(QKEY) || 'null'); return validQ(q) ? q : null; } catch (e) { return null; }
+  }
+  function keepQ(q) { try { localStorage.setItem(QKEY, JSON.stringify(q)); } catch (e) { /* 용량 초과 등 — 다음엔 서버에서 */ } }
+  function dropQ() { try { localStorage.removeItem(QKEY); } catch (e) { /* 무시 */ } }
+  function hasToken() {
+    try { return !!(typeof Auth !== 'undefined' && Auth && typeof Auth.token === 'function' && Auth.token()); } catch (e) { return false; }
+  }
+  /* 메뉴 사본으로 미리 거른다 — null(아직 모른다)이면 서버에 묻는다 (qsc.html 가드와 같은 규칙) */
+  function allowedByCopy() {
+    try {
+      if (typeof Auth === 'undefined' || !Auth || typeof Auth.menus !== 'function' || !Auth.menus()) return true;
+      return typeof Auth.can !== 'function' || Auth.can('qsc', '읽기') || Auth.can('qsc', '쓰기');
+    } catch (e) { return true; }
+  }
+  function deniedBy(r) {
+    return !!(r && !r.ok && (r.code === 'FORBIDDEN' || r.code === 'AUTH_REQUIRED' ||
+      r.code === 'AUTH_EXPIRED' || r.code === 'AUTH_INVALID'));
+  }
+  function hideQuestions() {
+    dropQ();
+    document.body.classList.add('noAccess');   // css/app.css — 문항·입력칸·하단바를 감춘다 (qsc.html 가드와 같은 장치)
+    const b = $('#submitBtn');
+    if (b) { b.disabled = true; b.textContent = '담당자만 제출할 수 있습니다'; }
+  }
+  function showLoadFail(r) {
+    const n = $('#dupNote');
+    if (n) {
+      n.textContent = '문항을 불러오지 못했습니다' + (r && r.error ? ' — ' + r.error : '') +
+        '\n인터넷 연결을 확인한 뒤 화면을 새로고침해 주세요. 작성 중이던 임시저장은 그대로 남아 있습니다.';
+      n.style.display = '';
+    }
+    const b = $('#submitBtn');
+    if (b) { b.disabled = true; b.textContent = '문항 없음'; }
+  }
+  let touched = false;   // 배경 갱신에서 새 문항으로 새로고침해도 되는지(아직 아무것도 안 만졌는지)
+  ['input', 'change'].forEach(function (ev) { document.addEventListener(ev, function () { touched = true; }, true); });
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.closest && e.target.closest('#groups')) touched = true;
+  }, true);
+
+  if (!hasToken()) return;                       // 로그인 전 — qsc.html 가드가 안내·잠금을 맡는다. 문항은 그리지 않는다.
+  if (!allowedByCopy()) { dropQ(); return; }     // 매장 계정 등 — 사본도 남기지 않는다
+  let Q = readQ();
+  if (Q) {
+    Api.call('config.questions', {}).then(function (r) {
+      if (deniedBy(r)) { hideQuestions(); return; }
+      if (!r || !r.ok || !validQ(r)) return;     // 못 받았으면(오프라인 등) 사본으로 계속
+      if (r.source_sha && r.source_sha === Q.source_sha) return;
+      keepQ(r);
+      if (!touched && !loadDraft()) { location.reload(); return; }
+      $('#saveNote').textContent = '평가표 문항이 갱신되었습니다 — 이번 점검을 제출한 뒤 다시 열면 새 문항으로 바뀝니다.';
+    }).catch(function (e) { console.warn('[qsc] 문항 갱신 실패 — 사본으로 계속합니다', e); });
+  } else {
+    Busy.on('문항을 불러오는 중입니다…');
+    let r = null;
+    try { r = await Api.call('config.questions', {}); } catch (e) { r = null; } finally { Busy.off(); }
+    if (deniedBy(r)) { hideQuestions(); return; }
+    if (!r || !r.ok || !validQ(r)) { showLoadFail(r); return; }
+    keepQ(r);
+    Q = r;
+  }
   /* ★NA 사유★ (2026-08-27 담당자 결정) — NA 로 뺀 이유를 함께 남긴다.
      점수는 셋 다 똑같이 빠지지만, 몇 달 뒤에 「본사가 안 고쳐준 것」과 「원래 없는 시설」을
      구별할 수 있어야 한다. 종전에는 둘 다 그냥 'NA' 라 영영 가릴 수 없었다.
@@ -52,7 +131,7 @@
     return { urls: urls, slots: slots };
   }
   const allItems = [];
-  master.qsc_groups.forEach(function (g) { g.items.forEach(function (it) { it.group = shortName(g.name); allItems.push(it); }); });
+  Q.qsc_groups.forEach(function (g) { g.items.forEach(function (it) { it.group = shortName(g.name); allItems.push(it); }); });
   // 안전장치: 심각도 정보가 없으면 구버전 데이터가 캐시된 것 — 잘못된 감점(중대 −1점)을 막는다
   if (!allItems.some(function (it) { return it.severity; })) {
     alert('평가표 데이터가 구버전입니다.\n인터넷이 연결된 상태에서 앱을 완전히 닫았다가 다시 열어 주세요.');
@@ -81,7 +160,7 @@
     location.reload();
   };
 
-  $('#verInfo').textContent = '평가표 ' + master.version + ' 기준';
+  $('#verInfo').textContent = '평가표 ' + (Q.version || master.version) + ' 기준';
   if ($('#wLine')) {
     const R = Scoring.RULES;
     $('#wLine').textContent = '감점: 일반 1건 −' + R.general.per +
@@ -517,7 +596,7 @@
   // ---------- 그룹 렌더 ----------
   const gnav = $('#gnav');
   const groupsEl = $('#groups');
-  master.qsc_groups.forEach(function (g, gi) {
+  Q.qsc_groups.forEach(function (g, gi) {
     const a = document.createElement('a');
     a.href = '#g' + gi;
     a.id = 'nav' + gi;
@@ -582,7 +661,7 @@
 
   function recompute() {
     const res = evalNow();
-    master.qsc_groups.forEach(function (g, gi) {
+    Q.qsc_groups.forEach(function (g, gi) {
       const st = groupStats(g.items);
       $('#gstat' + gi).innerHTML = '개선 필요 ' + st.cases + '건' +
         (st.deduct ? ' · <span class="gscore">감점 ' + st.deduct + '</span>' : '');
@@ -622,7 +701,7 @@
     const ref = $('#refBody');
     if (ref) {
       ref.innerHTML = '';
-      master.qsc_groups.forEach(function (g) {
+      Q.qsc_groups.forEach(function (g) {
         const st = groupStats(g.items);
         const tr = document.createElement('tr');
         tr.innerHTML = '<td>' + shortName(g.name) + '</td>' +

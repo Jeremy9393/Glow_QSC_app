@@ -1,6 +1,6 @@
 {
- "sha256": "a9c8be58de84447f2a9953311a71b5809f926b434222ff36ec341bbabd478f78",
- "version": 145,
- "when": "2026-09-18 01:43:30",
- "description": "통합시트 머리글 대조를 3~5행 이어 보기(두 줄 머리글) · rateProbe 머리글 3행 (1.45)"
+ "sha256": "117c74114b332a47e1500032df6b5c9eba1328825d740918d433cc7e6ac7e083",
+ "version": 146,
+ "when": "2026-09-18 02:17:23",
+ "description": "문항을 서버가 내려준다 — config.questions(qsc 권한) · survey.questions(제출 코드 먼저) · 공개 master.json 에서 문항 제거 (1.46)"
 }

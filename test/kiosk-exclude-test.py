@@ -30,7 +30,9 @@ ROOT = Path(r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\1. 앱\qsc-app')
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 CORE = (ROOT / 'js' / 'shopper-core.js').read_text(encoding='utf-8')
-MASTER = json.loads((ROOT / 'data' / 'master.json').read_text(encoding='utf-8'))
+MASTER = json.loads((ROOT / 'data' / 'master.json').read_text(encoding='utf-8'))          # 공개 — 매장·유형만
+# ★문항은 questions.local.json 에 있다★ (2026-09-18 ②-1) — 공개 master.json 에서 뺐다. 앱은 survey.questions 응답으로 받는다.
+QLOCAL = json.loads((ROOT / 'data' / 'questions.local.json').read_text(encoding='utf-8'))
 TYPES_RAW = json.loads((ROOT / 'data' / 'store-types.json').read_text(encoding='utf-8'))
 EXTRACT = (ROOT / 'tools' / 'extract_master.py').read_text(encoding='utf-8')
 GS = (ROOT / 'backend' / 'Code.gs').read_text(encoding='utf-8')
@@ -66,7 +68,7 @@ ok('[1-2] 유형은 kiosk 또는 mixed 뿐',
    sorted({t for t in types.values() if t not in ('kiosk', 'mixed')}), [])
 
 codes = []
-for c in MASTER['shopper_categories']:
+for c in QLOCAL['shopper_categories']:
     for q in c['questions']:
         m = re.match(r'^(\d+-\d+)\.', str(q['text']))
         codes.append(m.group(1) if m else None)
@@ -84,17 +86,30 @@ ok('[1-5] 담당자가 정한 것은 3-1·3-2·7-1·7-2·7-3 다섯',
    sorted(excl), ['3-1', '3-2', '7-1', '7-2', '7-3'])
 ok('[1-6] ★3-3 은 빼지 않는다★ (문구를 넓혀 살리기로 했다)', '3-3' in excl, False)
 # ★7번 카테고리가 통째로 빈다★ — 앱이 제목 줄까지 감추는지는 [6-4] 에서 본다
-_cat7 = [c for c in MASTER['shopper_categories'] if c['name'].startswith('7.')]
+_cat7 = [c for c in QLOCAL['shopper_categories'] if c['name'].startswith('7.')]
 ok('[1-7] 7번 카테고리가 있다', len(_cat7), 1)
 ok('[1-7] ★7번은 문항이 하나도 안 남는다★',
    [q['text'][:5] for q in _cat7[0]['questions']
     if re.match(r'^(\d+-\d+)\.', q['text']).group(1) not in excl], [])
-ok('[1-8] 키오스크 방문은 33문항', sum(len(c['questions']) for c in MASTER['shopper_categories'])
+ok('[1-8] 키오스크 방문은 33문항', sum(len(c['questions']) for c in QLOCAL['shopper_categories'])
    - len(excl), 33)
 
-print('── ② master.json 에 실려 앱까지 가는가 ──')
-ok('[2-1] store_types 가 실렸다', MASTER.get('store_types'), types)
-ok('[2-2] kiosk_excludes 가 실렸다', MASTER.get('kiosk_excludes'), excl)
+print('── ② 서버 응답에 실려 앱까지 가는가 (2026-09-18 — master.json 이 아니라 Code.gs QUESTIONS 블록) ──')
+ok('[2-1] store_types 가 공개 master.json 에 실렸다 (매장 유형은 공개 무방)', MASTER.get('store_types'), types)
+ok('[2-2] kiosk_excludes 는 questions.local.json 에 실렸다', QLOCAL.get('kiosk_excludes'), excl)
+ok('[2-2b] ★공개 master.json 에는 문항·kiosk_excludes 가 없다★',
+   [k for k in ('qsc_groups', 'shopper_categories', 'texts', 'kiosk_excludes') if k in MASTER], [])
+_gi, _gj = GS.find('const QUESTIONS = '), GS.find('/* @@QUESTIONS_END */')
+_gq = json.loads(GS[_gi + len('const QUESTIONS = '):GS.rfind(';', 0, _gj)]) if 0 <= _gi < _gj else {}
+ok('[2-2c] Code.gs QUESTIONS 블록의 kiosk_excludes 가 같다', _gq.get('kiosk_excludes'), excl)
+ok('[2-2d] Code.gs QUESTIONS 블록의 store_types 가 같다 (survey.questions 가 storeType 을 낸다)', _gq.get('store_types'), types)
+_b = body_of(GS, 'function fnSurveyQuestions(', '\n}')
+ok('[2-2e] fnSurveyQuestions 가 kiosk_excludes·storeType 을 응답에 싣는다',
+   bool(_b and 'kiosk_excludes:' in _b and 'storeType:' in _b), True)
+ok('[2-2f] 앱은 응답의 kiosk_excludes 를 쓴다 (master.json 을 읽지 않는다)',
+   "KIOSK_EX = Array.isArray(r.kiosk_excludes) ? r.kiosk_excludes : [];" in CORE and 'master.kiosk_excludes' not in CORE, True)
+ok('[2-2g] 앱은 응답의 storeType 을 우선 쓴다', 'codeType = String(r.storeType ||' in CORE and
+   'if (s === codeStore && codeType) return codeType;' in CORE, True)
 ok('[2-3] 키오스크 전용 2곳', sorted(s for s, t in types.items() if t == 'kiosk'),
    ['도넛정수', '우물집 판교'])
 ok('[2-4] 일부만 키오스크 2곳', sorted(s for s, t in types.items() if t == 'mixed'),

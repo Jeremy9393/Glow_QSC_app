@@ -205,6 +205,9 @@ input::placeholder, textarea::placeholder { color: #656565; font-weight: 400; }
 .bb-score .prog { display: block; font-size: 11px; color: var(--sub); margin-top: 2px; font-variant-numeric: tabular-nums; }
 .submit { flex: 0 0 auto; background: var(--ink); color: #111; border: 0; border-radius: 10px; padding: 13px 24px; font-size: 15px; font-weight: 700; line-height: 1; }
 .submit:disabled { background: #3a3a3a; color: #777; }
+/* 제출 코드 → 문항 열기 (2026-09-18 ②-1) — js/shopper-core.js 가 만드는 #codeBox */
+.openBtn { width: 100%; margin-top: 2px; }
+.codeNote { color: #e08585; padding-top: 10px; }
 
 .progressbar { height: 5px; background: #2a2a2a; border-radius: 3px; overflow: hidden; margin-top: 7px; }
 .progressbar .fill { height: 100%; background: var(--ink); width: 0; transition: width .2s; }
