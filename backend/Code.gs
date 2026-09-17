@@ -189,7 +189,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v141', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v142', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -350,6 +350,8 @@ function actionTable() {
     'admin.photoShareTest': { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnPhotoShareTest },
     /* 제출 한 회차 되돌리기 — 기본이 미리보기다(apply를 안 주면 아무것도 지우지 않는다). */
     'admin.undoSubmit':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnUndoSubmit },
+    /* NAS 아카이빙 자료 — 관리자 시트의 그 달 QSC·MS 답을 archive.py 가 받는 모양으로 (읽기만 · 2026-09-17) */
+    'admin.archiveData':  { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnArchiveData },
     /* 인증 시트를 응답 시트로 합치기 — 일회성. 기본이 미리보기다. */
     'admin.mergeAuth':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMergeAuth },
     /* 매장 월 탭 보호 — 인자가 없으면 대상 목록만 보여준다(아무것도 걸지 않는다). */
@@ -8377,6 +8379,161 @@ function undoList(store) {
   scan(MS_DETAIL, MS_COL.date, MS_COL.store, 0, 'shopper');
   out.sort(function (a, b) { return a.date < b.date ? 1 : (a.date > b.date ? -1 : 0); });
   return { ok: true, preview: true, list: true, store: store, items: out.slice(0, 60) };
+}
+
+/* ---------- NAS 아카이빙 자료 (2026-09-17 담당자) ----------
+
+   담당자: *"QSC,MS평가표를 직접 매번 입력하려니 좀 싫어서 너가 관리자 시트에 올라온 답을
+             그대로 갖다붙여넣기 해달라는거야"* · *"평가표는 원본은 유지하고 월별로 계속 붙여넣기 하면서
+             작성해야돼"* · 시기는 「월말 채점 확정 뒤 한 번」(담당자 선택)
+
+   ★읽기만 한다★ — QSC_회차(머리글)·QSC_상세(74줄)·MS_상세(38줄)를 읽어 `4. 스프레드시트\tools\archive.py`
+   가 받는 모양 그대로 돌려준다. 월 탭 붙여넣기·NAS 복사는 로컬 도구가 한다.
+   · 사진·개선요청은 싣지 않는다 (사진은 담당자가 NAS 에 따로 정리한다)
+   · ★한 매장 한 달에 QSC 제출이나 MS 제출이 둘 이상이면 그 매장은 싣지 않고 이유(problems)만 적는다★
+     — 어느 것이 맞는지 짐작하지 않는다 (재제출은 덮어쓰기라 정상이면 하나 · MS 는 한 달 한 매장 1회)
+   · 문항이 빠졌거나 같은 번호가 두 줄이어도 싣지 않는다
+   · 앱이 빼고 보낸 MS 문항은 ★키오스크 제외 문항(3-1·3-2·7-1·7-2·7-3)일 때만★ "NA" 로 채운다 — 그 밖의 빈 번호는 problems
+   · 매장마다 월 채점 확정 시각(closedAt)을 함께 준다 — 확정된 매장만 붙여넣는 판단은 로컬 도구가 한다
+   · 앱이 계산한 점수(qscScore·msScore)도 함께 준다 — 붙여넣은 엑셀의 수식 점수와 대조하라고 */
+const ARCHIVE_QSC_N = 74;
+const ARCHIVE_MS_N = 38;
+const ARCHIVE_KIOSK_NOS = [7, 8, 19, 20, 21];   // master.json 쇼퍼 번호 = 3-1·3-2·7-1·7-2·7-3 (앱이 키오스크 매장에서 빼는 문항)
+
+/* 앱의 「연령대·성별」 한 칸(예: 30대 여성)을 평가표의 두 칸(연령대 · 성별/인원)으로 나눈다.
+   ★앞머리가 연령대 모양일 때만★ 나누고, 아니면 원문 전체를 연령대 칸에 둔다 — 글자를 잃지 않는다. */
+function archiveSplitDemo(s) {
+  const t = String(s == null ? '' : s).trim();
+  const m = t.match(/^(\d{1,2}\s*대(?:\s*(?:초반|중반|후반))?)\s*[,·\/]?\s*(.*)$/);
+  if (!m) return { age: t, sex: '' };
+  return { age: m[1].replace(/\s+/g, ''), sex: m[2].trim() };
+}
+
+function fnArchiveData(ctx, payload) {
+  const p = payload || {};
+  const ym = String(p.ym || '').trim();
+  if (!validYm(ym)) return err('BAD_REQUEST', 'ym 형식이 올바르지 않습니다 (예: 2610)');
+  const month = '20' + ym.slice(0, 2) + '-' + ym.slice(2, 4);
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const tz = ssTz();
+  const out = {};
+
+  /* 결과의 매장 이름은 앱 매장명(작업장 파일 이름)으로 맞춘다 */
+  const disp = {};
+  try { displayStores().forEach(function (n) { disp[normStore(n)] = n; }); } catch (e) { }
+  function nameOf(v) { const k = normStore(v); return k ? (disp[k] || k) : ''; }
+  function slot(store) { return out[store] || (out[store] = { problems: [] }); }
+  function str(v) { return String(v == null ? '' : v).trim(); }
+  function rowsOf(name, nCols) {
+    const sh = ss.getSheetByName(name);
+    if (!sh) return [];
+    const last = sh.getLastRow();
+    if (last < 2) return [];
+    const rng = grid(sh, 2, 1, last - 1, nCols);
+    return rng ? rng.getValues() : [];
+  }
+
+  // ── QSC — 회차(머리글) 한 건 + 상세 74줄 ──
+  const heads = {};
+  rowsOf('QSC_회차', 6).forEach(function (r) {
+    const d = dateOfCell(r[1], tz);
+    const store = nameOf(r[3]);
+    if (d.slice(0, 7) !== month || !store) return;
+    (heads[store] = heads[store] || []).push({
+      at: stampOf(r[0], tz), date: d, time: timeKeyOf(r[2], tz), inspector: str(r[4]),
+      score: typeof r[5] === 'number' ? round1(r[5]) : null
+    });
+  });
+  const det = Object.keys(heads).length ? rowsOf('QSC_상세', 15) : [];
+  Object.keys(heads).forEach(function (store) {
+    const s = slot(store);
+    if (heads[store].length > 1) {
+      s.problems.push('QSC 제출이 ' + heads[store].length + '건입니다 — 하나만 남긴 뒤 다시 받아 주세요');
+      return;
+    }
+    const h = heads[store][0];
+    const counts = [], memos = [];
+    let dup = 0;
+    for (let i = 0; i < ARCHIVE_QSC_N; i++) { counts.push(null); memos.push(''); }
+    det.forEach(function (r) {
+      if (nameOf(r[2]) !== store || dateOfCell(r[0], tz) !== h.date || timeKeyOf(r[1], tz) !== h.time) return;
+      const at = str(r[14]) ? stampOf(r[14], tz) : '';
+      if (at && h.at && at !== h.at) return;               // 같은 날·시각이어도 다른 제출이면 건너뛴다
+      const no = Number(r[4]);
+      if (!(no >= 1 && no <= ARCHIVE_QSC_N && no === Math.floor(no))) return;
+      if (counts[no - 1] !== null) { dup++; return; }
+      const v = str(r[8]);
+      const isNa = v.toUpperCase() === 'NA';
+      counts[no - 1] = isNa ? 'NA' : (v !== '' && isFinite(Number(v)) ? Number(v) : v);
+      let memo = str(r[11]);
+      const why = str(r[13]);
+      if (isNa && why) memo = memo ? memo + ' · NA 사유: ' + why : 'NA 사유: ' + why;
+      memos[no - 1] = memo;
+    });
+    const miss = counts.filter(function (c) { return c === null || c === ''; }).length;
+    if (dup) { s.problems.push('QSC 상세에 같은 문항 번호가 ' + dup + '줄 더 있습니다'); return; }
+    if (miss) { s.problems.push('QSC 상세에 비어 있는 문항이 ' + miss + '개입니다'); return; }
+    s.qsc = { date: h.date, time: h.time, inspector: h.inspector, counts: counts, memos: memos };
+    s.qscScore = h.score;
+  });
+
+  // ── MS — 한 제출(제출시각으로 묶음) 38줄 ──
+  const groups = {};
+  rowsOf(MS_DETAIL, MS_COL.way).forEach(function (r) {
+    const d = dateOfCell(r[MS_COL.date - 1], tz);
+    const store = nameOf(r[MS_COL.store - 1]);
+    if (d.slice(0, 7) !== month || !store) return;
+    const key = str(r[MS_COL.at - 1]) ? stampOf(r[MS_COL.at - 1], tz) : d + ' ' + timeKeyOf(r[MS_COL.time - 1], tz);
+    const g = groups[store] || (groups[store] = {});
+    (g[key] = g[key] || []).push(r);
+  });
+  Object.keys(groups).forEach(function (store) {
+    const s = slot(store);
+    const keys = Object.keys(groups[store]);
+    if (keys.length > 1) {
+      s.problems.push('MS 제출이 ' + keys.length + '건입니다 — MS 는 한 달 한 매장 1회라 하나만 남긴 뒤 다시 받아 주세요');
+      return;
+    }
+    const rows = groups[store][keys[0]];
+    const answers = [], memos = [];
+    let dup = 0;
+    for (let i = 0; i < ARCHIVE_MS_N; i++) { answers.push(null); memos.push(''); }
+    rows.forEach(function (r) {
+      const no = Number(r[MS_COL.no - 1]);
+      if (!(no >= 1 && no <= ARCHIVE_MS_N && no === Math.floor(no))) return;
+      if (answers[no - 1] !== null) { dup++; return; }
+      answers[no - 1] = str(r[MS_COL.answer - 1]);
+      memos[no - 1] = str(r[MS_COL.memo - 1]);
+    });
+    if (dup) { s.problems.push('MS 상세에 같은 문항 번호가 ' + dup + '줄 더 있습니다'); return; }
+    const naFilled = [], lost = [];
+    for (let i = 0; i < ARCHIVE_MS_N; i++) {
+      if (answers[i] !== null) continue;
+      if (ARCHIVE_KIOSK_NOS.indexOf(i + 1) >= 0) { answers[i] = 'NA'; naFilled.push(i + 1); }
+      else lost.push(i + 1);
+    }
+    if (lost.length) { s.problems.push('MS 상세에 없는 문항 번호가 있습니다: ' + lost.join(', ')); return; }
+    const f = rows[0];
+    const demo = archiveSplitDemo(f[MS_COL.demo - 1]);
+    s.ms = {
+      date: dateOfCell(f[MS_COL.date - 1], tz), time: timeKeyOf(f[MS_COL.time - 1], tz),
+      order: str(f[MS_COL.order - 1]), age: demo.age, sex: demo.sex, staff: '',
+      answers: answers, memos: memos, overall: str(f[MS_COL.overall - 1])
+    };
+    s.msScore = typeof f[MS_COL.total - 1] === 'number' ? round1(f[MS_COL.total - 1]) : null;
+    s.msRoute = str(f[MS_COL.route - 1]);
+    if (naFilled.length) s.msNaFilled = naFilled;
+  });
+
+  // ── 매장마다 월 채점 확정 여부 ──
+  Object.keys(out).forEach(function (store) {
+    let id = null;
+    try { id = storeFileId(store); } catch (e) { id = null; }
+    out[store].closedAt = id ? (monthClosedAt(id, ym) || '') : '';
+    if (!id) out[store].problems.push('매장 파일을 찾지 못했습니다 — 확정 여부를 알 수 없습니다');
+  });
+
+  return { ok: true, ym: ym, month: month, stores: out, fetchedAt: nowIso() };
 }
 
 function fnUndoSubmit(ctx, payload) {
