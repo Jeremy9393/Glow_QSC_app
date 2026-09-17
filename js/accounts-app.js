@@ -7,8 +7,9 @@
    ★현재 비밀번호는 목록에 그대로 보인다★ (2026-08-20). 종전에는 설정한 직후 한 번만 볼 수
      있었고, 매장이 "뭐였죠"라고 물으면 다시 설정하는 수밖에 없었다 — 그러면 그 매장의
      로그인이 전부 끊긴다. 서버가 원문을 따로 보관한다(Code.gs pwStash 주석에 이유와 대가).
-     ★그래서 이 화면은 26곳의 비밀번호가 한눈에 보이는 화면이다★ — 매장 안에서 펼쳐야 할 때를
-     위해 [비밀번호 숨기기]를 두었고, 그 선택은 이 기기에만 기억된다.
+     ★(2026-09-17) 이제 값은 관리자 비밀번호를 한 번 더 확인한 뒤에만 보인다★ — 관리자 로그인이
+     무기한이라 폰을 잃어버리면 주운 사람이 이 화면만 열어도 26곳 비밀번호가 다 보였다.
+     [비밀번호 보기] → 관리자 비밀번호 → 5분 동안 보이고 다시 가려진다(아래 revealed 주석).
    ★역할 이름을 비교하지 않는다. 무엇을 보여줄지는 Auth.hasMenu()·Auth.can()만 묻는다.
    ★매장명·서버 문구는 전부 textContent로 넣는다. 외부 스크립트가 0개인 것과 이 관례가
      이 앱의 XSS 방어 전부다.
@@ -27,17 +28,17 @@
   const BASE = 'https://jeremy9393.github.io/Glow_QSC_app/';   // codes-app.js와 같은 앱 주소
   const MINPW = 8;                                             // login-app.js·서버와 같은 규칙
   const AUDIT_LIMIT = 100;                                     // 서버가 1~200으로 클램프한다
-  const PWSHOW_KEY = 'qsc-acct-pwshow';                        // api.js·auth.js와 같은 'qsc-' 접두어
+  const REVEAL_MS = 5 * 60 * 1000;                             // 비밀번호를 보여 주는 시간 — 지나면 다시 가린다
 
-  /* 비밀번호를 눈에 보이게 둘지. ★기본은 보임이다★ — 이 화면을 여는 이유의 대부분이
-     "그 매장 비밀번호가 뭐였죠"이고, 한 번 더 눌러야 보인다면 그 한 번이 매번 든다.
-     매장 안에서 화면을 펴야 할 때만 가린다. 가려도 [복사]는 그대로 동작한다 —
-     가리기는 어깨너머를 막는 것이지 값을 잠그는 것이 아니다(잠금은 로그인이 맡는다). */
-  let pwShow = true;
-  try { pwShow = (localStorage.getItem(PWSHOW_KEY) !== '0'); } catch (e) { /* 사생활 모드 */ }
-  function savePwShow() {
-    try { localStorage.setItem(PWSHOW_KEY, pwShow ? '1' : '0'); } catch (e) { /* 이번 화면에서만 */ }
-  }
+  /* ★비밀번호 보기 (2026-09-17 담당자 선택 「비밀번호 볼 때 한 번 더 확인」)★
+     종전에는 목록이 비밀번호를 늘 보여 주었다(기본 보임 · [비밀번호 숨기기]는 어깨너머 대비였다).
+     이제 서버가 목록에 원문을 싣지 않는다 — [비밀번호 보기]에서 관리자 비밀번호를 한 번 더 넣으면
+     account.revealPw 가 원문을 주고, REVEAL_MS 동안 보인 뒤 다시 가려진다.
+     ★받은 값은 이 화면의 메모리(revealed)에만 둔다★ — localStorage 에 넣으면 잠근 의미가 없다.
+       새로고침하거나 화면을 떠나면 사라진다. 방금 [비밀번호]로 정한 값(a.pw)은 정한 사람이 이미 아는 값이라 그대로 보인다. */
+  let revealed = null;      // { 아이디: 비밀번호 } — 확인에 성공했을 때만 채운다
+  let revealTimer = 0;
+  try { localStorage.removeItem('qsc-acct-pwshow'); } catch (e) { /* 옛 [숨기기] 선택 — 이제 쓰지 않는다 */ }
 
   /* 감사로그 표시용 매핑표. 로그를 읽는 사람은 비개발자 한 명이므로 'store.saveImprove'가
      아니라 '개선보고 저장'이 보여야 한다.
@@ -57,6 +58,7 @@
     'store.get': '매장별 QSC현황 조회',
     'store.saveImprove': '개선보고 저장',
     'account.list': '계정 목록 조회',
+    'account.revealPw': '비밀번호 보기(관리자 확인)',
     'account.setPassword': '비밀번호 설정',
     'account.setStatus': '계정 사용/중지',
     'account.sync': '계정 동기화',
@@ -112,7 +114,7 @@
   let dups = null;      // 정규화 후 아이디가 겹치는 계정 (아래 findDups 주석 참조)
   let busy = false;
   let openId = '';      // 비밀번호 패널이 열려 있는 계정. 한 번에 하나만 연다
-  let panelKind = '';   // 열린 패널의 종류: 'pw' | 'rename' (2026-09-11 이름 변경 패널이 같은 자리를 쓴다)
+  let panelKind = '';   // 열린 패널의 종류: 'pw' | 'rename' | 'reveal' (이름 변경 09-11 · 비밀번호 보기 09-17 이 같은 자리를 쓴다)
   let panel = null;     // 그 패널 DOM. 목록을 다시 그려도 이 노드를 그대로 다시 끼워 넣는다
 
   // ---------- 작은 도구들 ----------
@@ -398,8 +400,9 @@
     }
 
     a.hasPw = true;
-    /* 서버 응답에도 account.pw로 들어 있지만, 여기서 직접 넣는다 — 응답 형태가 바뀌어도
-       방금 내가 정한 값이 목록에 안 뜨는 일은 없어야 한다. */
+    a.pwKnown = true;
+    /* 서버 응답에는 원문이 없다(2026-09-17) — 방금 내가 정한 값을 여기서 직접 넣는다.
+       정한 사람이 이미 아는 값이라 관리자 비밀번호 확인 없이 이 화면에 보여 준다. */
     a.pw = pw;
     showDone(a, pw, box, dead);
     render();     // 목록의 '미설정' 뱃지를 즉시 지운다 (서버 왕복을 한 번 더 하지 않는다)
@@ -439,6 +442,90 @@
       // 닫기가 곧 로그아웃이다. 죽은 토큰으로 화면에 남아 있으면 다음 조작이 전부 오류로 보인다
       $('#pwNo', box).onclick = function () { Auth.logout(); };
     }
+  }
+
+  // ---------- 비밀번호 보기 — 관리자 비밀번호 한 번 더 (2026-09-17) ----------
+
+  /* 입력칸은 type=password · autocomplete=current-password 다 — [비밀번호] 설정 패널(type=text)과 반대다.
+     이번 값은 매장에 불러 줄 값이 아니라 담당자 본인의 비밀번호라 가리는 것이 맞다. */
+  function buildRevealPanel() {
+    const box = document.createElement('section');
+    box.className = 'card pwPanel';
+    box.innerHTML =
+      '<h2>비밀번호 보기</h2>' +
+      '<p class="note">계정 비밀번호를 보려면 관리자 비밀번호를 한 번 더 입력해 주세요. 확인되면 5분 동안 보입니다.</p>' +
+      '<div class="meta-grid"><div class="full">' +
+      '<label class="f" for="rvPw">관리자 비밀번호</label>' +
+      '<input type="password" id="rvPw" name="qsc-admin-pw" autocomplete="current-password" ' +
+      'autocapitalize="none" autocorrect="off" spellcheck="false">' +
+      '</div></div>' +
+      '<div class="bcAct">' +
+      '<button class="miniBtn" id="rvOk" type="button">확인</button>' +
+      '<button class="miniBtn" id="rvNo" type="button">취소</button>' +
+      '</div>' +
+      '<p class="note noteErr" id="rvMsg" style="display:none"></p>';
+    $('#rvNo', box).onclick = function () { closePanel(); };
+    $('#rvOk', box).onclick = function () { doReveal(box); };
+    $('#rvPw', box).onkeydown = function (e) { if (e.key === 'Enter') doReveal(box); };
+    return box;
+  }
+
+  /* a 를 주면 그 줄 아래에, 안 주면 [비밀번호 보기] 버튼 바로 아래에 연다 */
+  function openReveal(a) {
+    closePanel();
+    panelKind = 'reveal';
+    panel = buildRevealPanel();
+    if (a) {
+      openId = a.id;
+      render();                     // 목록을 다시 그리면서 해당 줄 아래에 끼워 넣는다
+    } else {
+      const bar = $('.pwEyeBar');
+      if (bar && bar.parentNode) bar.parentNode.insertBefore(panel, bar.nextSibling);
+    }
+    const el = $('#rvPw', panel);
+    if (el) el.focus();
+  }
+
+  function relock() {
+    revealed = null;
+    if (revealTimer) { clearTimeout(revealTimer); revealTimer = 0; }
+    paintPwEye();
+    render();
+  }
+
+  async function doReveal(box) {
+    if (busy) return;
+    const input = $('#rvPw', box);
+    const msg = $('#rvMsg', box);
+    const pw = input.value;
+    if (!pw) { setNote(msg, '관리자 비밀번호를 입력해 주세요.'); input.focus(); return; }
+    setNote(msg, '');
+    lock(true);
+    $('#rvOk', box).disabled = true;
+    let res = null;
+    try { res = await Api.call('account.revealPw', { pw: pw }); }
+    catch (e) { res = null; }
+    lock(false);
+    $('#rvOk', box).disabled = false;
+    input.value = '';               // 맞든 틀리든 입력칸에 남기지 않는다
+    if (!(res && res.ok)) {
+      /* PW_WRONG·LOCKED 는 서버 문구를 그대로 띄운다 — AUTH_* 가 아니라서 로그인 화면으로 가지 않는다 */
+      const m = failMsg(res);
+      if (m) { setNote(msg, m); input.focus(); }
+      return;
+    }
+    revealed = (res.pws && typeof res.pws === 'object') ? res.pws : {};
+    if (revealTimer) clearTimeout(revealTimer);
+    revealTimer = setTimeout(relock, REVEAL_MS);
+    closePanel();
+    paintPwEye();
+    render();
+  }
+
+  /* 이 줄에 보여 줄 비밀번호 — 방금 정한 값(a.pw)이나, 확인해서 받아 둔 값 */
+  function pwOf(a) {
+    if (a.pw) return a.pw;
+    return (revealed && Object.prototype.hasOwnProperty.call(revealed, a.id)) ? String(revealed[a.id] || '') : '';
   }
 
   // ---------- 사용/중지 토글 ----------
@@ -721,19 +808,31 @@
       info.appendChild(b);
     }
     /* ★현재 비밀번호★ — 이 화면의 존재 이유가 여기로 옮겨 왔다.
-       · 값이 없으면 빈칸으로 두지 않고 '확인 불가'라고 적는다. 빈칸은 '비밀번호가 없다'로
+       · (2026-09-17) 값은 관리자 비밀번호를 확인한 뒤에만 보인다 — 그 전에는 ●●●● 로 두고,
+         누르면 확인 칸이 이 줄 아래에 열린다. ●●●● 는 원문 길이를 흘리지 않도록 고정 길이다.
+       · 보관값이 없으면 빈칸으로 두지 않고 '확인 불가'라고 적는다. 빈칸은 '비밀번호가 없다'로
          읽히는데 실제로는 설정되어 있다(이 기능 이전에 정했거나, 시트를 손으로 고친 경우).
-       · 눌러서 복사된다. 폰에서 매장에 불러 주는 것보다 붙여넣어 보내는 편이 오타가 없다.
-       · 가려 두었어도 복사는 된다 — 가리기는 어깨너머 대비이지 값을 잠그는 장치가 아니다. */
+       · 보이는 동안은 눌러서 복사된다. 폰에서 매장에 불러 주는 것보다 붙여넣어 보내는 편이 오타가 없다. */
     if (a.hasPw) {
+      const pv = pwOf(a);
       const pwEl = document.createElement('button');
       pwEl.type = 'button';
-      pwEl.className = 'accPw' + (a.pw ? '' : ' accPw-none');
-      if (a.pw) {
-        // 사용자 데이터 — 반드시 textContent. 가릴 때도 원문 길이를 흘리지 않도록 고정 길이로 덮는다
-        pwEl.textContent = pwShow ? a.pw : '••••••••';
-        pwEl.title = pwShow ? '눌러서 복사' : '가려 둔 상태입니다. 눌러서 복사';
-        pwEl.onclick = function () { copy(a.pw, this); };
+      pwEl.className = 'accPw' + ((pv || a.pwKnown) ? '' : ' accPw-none');
+      if (pv) {
+        pwEl.textContent = pv;                     // 사용자 데이터 — 반드시 textContent
+        pwEl.title = '눌러서 복사';
+        pwEl.onclick = function () { copy(pv, this); };
+      } else if (a.pwKnown) {
+        pwEl.textContent = '••••••••';
+        if (canWrite) {
+          pwEl.title = '눌러서 보기 — 관리자 비밀번호를 한 번 더 확인합니다';
+          pwEl.onclick = function () {
+            if (openId === a.id && panelKind === 'reveal') closePanel(); else openReveal(a);
+          };
+        } else {
+          pwEl.title = '비밀번호를 볼 권한이 없습니다';
+          pwEl.disabled = true;
+        }
       } else {
         pwEl.textContent = '비밀번호 확인 불가';
         pwEl.title = '이 비밀번호는 보관 기능이 생기기 전에 설정되었습니다. 새로 설정하시면 이 자리에 보입니다.';
@@ -875,20 +974,21 @@
         role: String(a.role || ''),
         status: (String(a.status || '') === '사용') ? '사용' : '중지',
         hasPw: !!a.hasPw,
-        /* 현재 비밀번호. 서버가 보관값을 확신하지 못하면 빈 문자열로 온다 —
-           그때는 '없음'이 아니라 '확인 불가'다(hasPw는 여전히 true다). */
+        /* 보관값이 있는가 — 있으면 [비밀번호 보기]로 볼 수 있다. 없으면 '없음'이 아니라 '확인 불가'다
+           (hasPw는 여전히 true다). pw 를 함께 받는 것은 옛 서버(1.40 까지 — 목록에 원문을 실었다)와 섞일 때뿐이다. */
+        pwKnown: !!a.pwKnown || !!a.pw,
         pw: String(a.pw || ''),
         lastSeen: String(a.lastSeen || ''),
       };
     });
   }
 
-  /* 비밀번호 보임/숨김 버튼. 문구는 '지금 상태'가 아니라 '누르면 일어나는 일'을 적는다 —
+  /* [비밀번호 보기] / [비밀번호 다시 가리기]. 문구는 '지금 상태'가 아니라 '누르면 일어나는 일'을 적는다 —
      이 자리에서 상태를 적으면(보이는 중) 누르면 뭐가 되는지 매번 한 번 더 생각해야 한다. */
   function paintPwEye() {
     const b = $('#pwEyeBtn');
     if (!b) return;
-    b.textContent = pwShow ? '비밀번호 숨기기' : '비밀번호 보기';
+    b.textContent = revealed ? '비밀번호 다시 가리기' : '비밀번호 보기';
   }
 
   async function load() {
@@ -1037,17 +1137,18 @@
   $('#q').oninput = function () { render(); };
   $('#reloadBtn').onclick = function () { load(); };
 
-  /* 보임/숨김. 서버를 부르지 않는다 — 값은 이미 받아 두었고 화면만 덮는 것이다.
-     새로고침해도 유지되도록 이 기기에 기억한다(다른 기기에는 영향이 없다). */
+  /* [비밀번호 보기] — 관리자 비밀번호 확인 칸을 이 버튼 바로 아래에 연다(한 번 더 누르면 닫는다).
+     보이는 중이면 곧바로 다시 가린다 — 서버를 부르지 않는다. */
   if ($('#pwEyeBtn')) {
     $('#pwEyeBtn').onclick = function () {
-      pwShow = !pwShow;
-      savePwShow();
-      paintPwEye();
-      render();
+      if (revealed) { relock(); return; }
+      if (panelKind === 'reveal' && !openId) { closePanel(); return; }
+      openReveal(null);
     };
   }
   paintPwEye();
+  /* 화면을 떠날 때 가린다 — 뒤로 가기 캐시(bfcache)로 되살아난 화면에 값이 그대로 남지 않게 */
+  window.addEventListener('pagehide', function () { if (revealed) relock(); });
 
   /* [통합시트에서 계정 동기화] — ★먼저 미리보기★ (2026-09-11 담당자 요청 "새로 생기기만 하잖아").
      서버가 「추가될 계정」과 「통합시트에 없는 계정」을 주면(preview:true 는 아무것도 쓰지 않는다),
