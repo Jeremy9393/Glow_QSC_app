@@ -23,7 +23,7 @@ def cut(name):
     raise SystemExit('%s 끝 못 찾음' % name)
 
 
-body = cut('fnUndoSubmit') + '\n\n' + cut('shopperMonthAvg')
+body = cut('fnUndoSubmit') + '\n\n' + cut('shopperMonthAvg') + '\n\n' + cut('stampOf')
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
@@ -150,8 +150,9 @@ ok('되돌리기 성공', r.ok === true, JSON.stringify(r.error || ''));
 ok('★손님 3건이 살아 있다★', SHEETS[MS_DETAIL].length === 4, '남은 줄(머리글 포함)=' + SHEETS[MS_DETAIL].length);
 ok('담당자 것만 지워졌다', !SHEETS[MS_DETAIL].some(function (x) { return x[MS_COL.route-1] === '관리자 입력'; }));
 var ms = wroteOf('통합시트:MS');
-ok('★통합시트 MS = 남은 3건 평균 0.90★', Math.abs(ms - 0.9) < 1e-9, '값=' + ms);
-ok('매장 파일 MS 도 같은 값', Math.abs(wroteOf('매장파일:MS점수') - 0.9) < 1e-9, '값=' + wroteOf('매장파일:MS점수'));
+/* ★2026-09-17 담당자 결정 — 그 달 MS 는 평균이 아니라 가장 최근 제출 1건★ → 남은 3건 중 10-20 의 100점 */
+ok('★통합시트 MS = 남은 3건 중 가장 최근(10-20) 1.00 — 평균 0.90 아님★', Math.abs(ms - 1.0) < 1e-9, '값=' + ms);
+ok('매장 파일 MS 도 같은 값', Math.abs(wroteOf('매장파일:MS점수') - 1.0) < 1e-9, '값=' + wroteOf('매장파일:MS점수'));
 
 console.log('\n[1-2] ★그 달이 아직 안 끝났으면 두 곳 다 안 쓴다★ (2026-09-04 지연 규칙)');
 MONTH_OPEN = false;                       // 월중에 되돌린 경우
@@ -230,7 +231,7 @@ ok('★매장 파일에 썼다★', wroteOf('매장파일:MS점수') !== undefin
 ok('★통합시트에 썼다★', wroteOf('통합시트:MS') !== undefined, JSON.stringify(WROTE));
 ok('「밸브」라는 말이 결과에 없다', r.done.join(' ').indexOf('밸브') < 0, JSON.stringify(r.done));
 
-console.log('\n[9] 손님 건이 남으면 그 평균으로 다시 쓴다 (밸브와 무관)');
+console.log('\n[9] 손님 건이 남으면 그 점수(남은 것 중 가장 최근)로 다시 쓴다 (밸브와 무관)');
 reset([
   ['2026-10-05T10:00','2026-10-05','','금종제과','','','','고객 직접',90],
   ['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60],

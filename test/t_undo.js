@@ -375,7 +375,6 @@ function shopperMonthAvg(sh, store, dateStr, tz) {
   const n = Math.min(6000, last - 1);
   const rng = grid(sh, 2, 1, n, MS_COL.order);
   const vals = rng ? rng.getValues() : [];
-  const scores = [];
   const key = normStore(store);
   /* ★본사가 채운 것과 고객이 낸 것을 구별하지 않는다★ (2026-08-20 사용자 결정)
      담당자가 직접 체크하는 경우도 미스터리쇼퍼와 같은 일이다 — 손님으로 가서 보고 적는 것이다.
@@ -386,24 +385,45 @@ function shopperMonthAvg(sh, store, dateStr, tz) {
        CS는 10월부터 종합점수의 30%다. ★그 방어는 제출 코드(매장 1곳 = 코드 1개 = 월 1회)가 맡는다★ —
        설계는 `_보관/설계/쇼퍼_제출코드_설계.md`에 있고 아직 만들지 않았다.
        그때까지는 담당자가 `쇼퍼_응답` 시트를 보고 이상한 건을 지우거나 고친다(그 편집이 곧 반영된다). */
-  /* ★한 제출이 38줄이다★ (2026-09-08 MS_상세) — 줄마다 세면 한 제출이 38번 들어가
-     평균이 왜곡되지는 않지만(같은 값이라) 응답 수가 38배로 보인다. 무엇보다 제출이 둘
-     이상일 때 문항 수가 다르면 가중이 어긋난다. 그래서 ★제출시각으로 묶어 한 번씩만★ 센다. */
-  const seen = {};
+  /* ★그 달 MS 점수 = 가장 최근에 제출된 1건★ (2026-09-17 담당자 결정 · 함수 이름은 옛 것 그대로 둔다)
+     MS 는 한 달 한 매장 1회다. 그래도 2건 이상 들어오는 일이 있다 — 관리자 입력은 같은 달 두 번째면
+     덮어쓰기를 되묻지만 ★고객 설문은 제출 코드마다 그냥 들어간다★(12월 베타에서 이티에프 베이커리 부산역·
+     신라당 경주가 고객 설문 2건씩이었다). 종전에는 그 달 제출의 ★평균★을 냈는데, 담당자가
+     「두개의 평균이 아니라 가장 최신에 제출된거로」 — 「가장 최근 제출 1건만 쓰기」를 골랐다.
+     · 최신은 ★제출시각(MS_COL.at)★으로 가린다 — 시트 순서(최신이 맨 위)에만 기대지 않는다(뒤집기 사고가 있었다)
+     · 제출시각이 같거나 비었으면 시트에서 먼저 만난 줄(= 위쪽 = 나중에 들어온 것)을 쓴다
+     · 한 제출이 38줄이어도 제출점수는 줄마다 같다 — 어느 줄을 봐도 그 제출의 점수다
+     ★잠정 MS·월말 반영·되돌리기 뒤 재계산·제출 직후가 모두 이 함수를 부른다★ — 규칙은 여기 한 곳이다.
+     NAS 아카이빙 자료(fnArchiveData)도 같은 규칙으로 고른다. */
+  let best = null, bestAt = '';
   for (let i = 0; i < vals.length; i++) {
     const v = vals[i];
     const dYm = ymOfCell(v[MS_COL.date - 1], tz);
     if (normStore(v[MS_COL.store - 1]) !== key || dYm !== ym) continue;
     const sc = v[MS_COL.total - 1];
     if (typeof sc !== 'number') continue;
-    const at = String(v[MS_COL.at - 1] == null ? '' : v[MS_COL.at - 1]);
-    const k = at || (dYm + '|' + String(v[MS_COL.time - 1]) + '|' + sc);   // 제출시각이 비면 날짜·시간·점수로
-    if (seen[k]) continue;
-    seen[k] = 1;
-    scores.push(sc);
+    const raw = v[MS_COL.at - 1];
+    const at = (raw == null || raw === '') ? '' : stampOf(raw, tz);
+    if (best === null || (at && at > bestAt)) { best = sc; bestAt = at; }
   }
-  if (!scores.length) return 0;
-  return scores.reduce(function (a, b) { return a + b; }, 0) / scores.length;
+  return best === null ? 0 : best;
+}
+
+function stampOf(v, tz) {
+  let d = null;
+  if (v instanceof Date) {
+    d = v;
+  } else {
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return '';
+    const hasZone = /Z$/.test(s) || /[+\-]\d{2}:?\d{2}$/.test(s);
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+    if (m && !hasZone) return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5];
+    const t = Date.parse(s);
+    if (isNaN(t)) return '';
+    d = new Date(t);
+  }
+  return Utilities.formatDate(d, tz, 'yyyy-MM-dd HH:mm');
 }
 
 // ══ 시험 ════════════════════════════════════════════════════
@@ -448,8 +468,9 @@ ok('되돌리기 성공', r.ok === true, JSON.stringify(r.error || ''));
 ok('★손님 3건이 살아 있다★', SHEETS[MS_DETAIL].length === 4, '남은 줄(머리글 포함)=' + SHEETS[MS_DETAIL].length);
 ok('담당자 것만 지워졌다', !SHEETS[MS_DETAIL].some(function (x) { return x[MS_COL.route-1] === '관리자 입력'; }));
 var ms = wroteOf('통합시트:MS');
-ok('★통합시트 MS = 남은 3건 평균 0.90★', Math.abs(ms - 0.9) < 1e-9, '값=' + ms);
-ok('매장 파일 MS 도 같은 값', Math.abs(wroteOf('매장파일:MS점수') - 0.9) < 1e-9, '값=' + wroteOf('매장파일:MS점수'));
+/* ★2026-09-17 담당자 결정 — 그 달 MS 는 평균이 아니라 가장 최근 제출 1건★ → 남은 3건 중 10-20 의 100점 */
+ok('★통합시트 MS = 남은 3건 중 가장 최근(10-20) 1.00 — 평균 0.90 아님★', Math.abs(ms - 1.0) < 1e-9, '값=' + ms);
+ok('매장 파일 MS 도 같은 값', Math.abs(wroteOf('매장파일:MS점수') - 1.0) < 1e-9, '값=' + wroteOf('매장파일:MS점수'));
 
 console.log('\n[1-2] ★그 달이 아직 안 끝났으면 두 곳 다 안 쓴다★ (2026-09-04 지연 규칙)');
 MONTH_OPEN = false;                       // 월중에 되돌린 경우
@@ -528,7 +549,7 @@ ok('★매장 파일에 썼다★', wroteOf('매장파일:MS점수') !== undefin
 ok('★통합시트에 썼다★', wroteOf('통합시트:MS') !== undefined, JSON.stringify(WROTE));
 ok('「밸브」라는 말이 결과에 없다', r.done.join(' ').indexOf('밸브') < 0, JSON.stringify(r.done));
 
-console.log('\n[9] 손님 건이 남으면 그 평균으로 다시 쓴다 (밸브와 무관)');
+console.log('\n[9] 손님 건이 남으면 그 점수(남은 것 중 가장 최근)로 다시 쓴다 (밸브와 무관)');
 reset([
   ['2026-10-05T10:00','2026-10-05','','금종제과','','','','고객 직접',90],
   ['2026-10-25T10:00','2026-10-25','','금종제과','','','','관리자 입력',60],

@@ -189,7 +189,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v142', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v143', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -4142,7 +4142,8 @@ function saveShopper(ss, p, ctx, isSurvey) {
   });
   msPrepend(sh, rows);
 
-  /* ★제출이 들어올 때마다 그 달 평균을 다시 계산해 덮어쓴다★ (2026-08-20 사용자 제안)
+  /* ★제출이 들어올 때마다 그 달 MS 점수를 다시 계산해 덮어쓴다★ (2026-08-20 사용자 제안)
+     ★2026-09-17 부터 그 점수는 평균이 아니라 「가장 최근 제출 1건」이다★ (shopperMonthAvg 주석) — 아래 「평균」은 옛 말이다.
 
      종전에는 익명 설문이 여기서 곧장 끝났다 — 매장 파일·통합시트를 아예 부르지 않았다.
      그래서 순서에 따라 이런 일이 생겼다:
@@ -4212,7 +4213,6 @@ function shopperMonthAvg(sh, store, dateStr, tz) {
   const n = Math.min(6000, last - 1);
   const rng = grid(sh, 2, 1, n, MS_COL.order);
   const vals = rng ? rng.getValues() : [];
-  const scores = [];
   const key = normStore(store);
   /* ★본사가 채운 것과 고객이 낸 것을 구별하지 않는다★ (2026-08-20 사용자 결정)
      담당자가 직접 체크하는 경우도 미스터리쇼퍼와 같은 일이다 — 손님으로 가서 보고 적는 것이다.
@@ -4223,24 +4223,28 @@ function shopperMonthAvg(sh, store, dateStr, tz) {
        CS는 10월부터 종합점수의 30%다. ★그 방어는 제출 코드(매장 1곳 = 코드 1개 = 월 1회)가 맡는다★ —
        설계는 `_보관/설계/쇼퍼_제출코드_설계.md`에 있고 아직 만들지 않았다.
        그때까지는 담당자가 `쇼퍼_응답` 시트를 보고 이상한 건을 지우거나 고친다(그 편집이 곧 반영된다). */
-  /* ★한 제출이 38줄이다★ (2026-09-08 MS_상세) — 줄마다 세면 한 제출이 38번 들어가
-     평균이 왜곡되지는 않지만(같은 값이라) 응답 수가 38배로 보인다. 무엇보다 제출이 둘
-     이상일 때 문항 수가 다르면 가중이 어긋난다. 그래서 ★제출시각으로 묶어 한 번씩만★ 센다. */
-  const seen = {};
+  /* ★그 달 MS 점수 = 가장 최근에 제출된 1건★ (2026-09-17 담당자 결정 · 함수 이름은 옛 것 그대로 둔다)
+     MS 는 한 달 한 매장 1회다. 그래도 2건 이상 들어오는 일이 있다 — 관리자 입력은 같은 달 두 번째면
+     덮어쓰기를 되묻지만 ★고객 설문은 제출 코드마다 그냥 들어간다★(12월 베타에서 이티에프 베이커리 부산역·
+     신라당 경주가 고객 설문 2건씩이었다). 종전에는 그 달 제출의 ★평균★을 냈는데, 담당자가
+     「두개의 평균이 아니라 가장 최신에 제출된거로」 — 「가장 최근 제출 1건만 쓰기」를 골랐다.
+     · 최신은 ★제출시각(MS_COL.at)★으로 가린다 — 시트 순서(최신이 맨 위)에만 기대지 않는다(뒤집기 사고가 있었다)
+     · 제출시각이 같거나 비었으면 시트에서 먼저 만난 줄(= 위쪽 = 나중에 들어온 것)을 쓴다
+     · 한 제출이 38줄이어도 제출점수는 줄마다 같다 — 어느 줄을 봐도 그 제출의 점수다
+     ★잠정 MS·월말 반영·되돌리기 뒤 재계산·제출 직후가 모두 이 함수를 부른다★ — 규칙은 여기 한 곳이다.
+     NAS 아카이빙 자료(fnArchiveData)도 같은 규칙으로 고른다. */
+  let best = null, bestAt = '';
   for (let i = 0; i < vals.length; i++) {
     const v = vals[i];
     const dYm = ymOfCell(v[MS_COL.date - 1], tz);
     if (normStore(v[MS_COL.store - 1]) !== key || dYm !== ym) continue;
     const sc = v[MS_COL.total - 1];
     if (typeof sc !== 'number') continue;
-    const at = String(v[MS_COL.at - 1] == null ? '' : v[MS_COL.at - 1]);
-    const k = at || (dYm + '|' + String(v[MS_COL.time - 1]) + '|' + sc);   // 제출시각이 비면 날짜·시간·점수로
-    if (seen[k]) continue;
-    seen[k] = 1;
-    scores.push(sc);
+    const raw = v[MS_COL.at - 1];
+    const at = (raw == null || raw === '') ? '' : stampOf(raw, tz);
+    if (best === null || (at && at > bestAt)) { best = sc; bestAt = at; }
   }
-  if (!scores.length) return 0;
-  return scores.reduce(function (a, b) { return a + b; }, 0) / scores.length;
+  return best === null ? 0 : best;
 }
 
 /* ---------- ② 통합시트 [데이터] ---------- */
@@ -8390,8 +8394,9 @@ function undoList(store) {
    ★읽기만 한다★ — QSC_회차(머리글)·QSC_상세(74줄)·MS_상세(38줄)를 읽어 `4. 스프레드시트\tools\archive.py`
    가 받는 모양 그대로 돌려준다. 월 탭 붙여넣기·NAS 복사는 로컬 도구가 한다.
    · 사진·개선요청은 싣지 않는다 (사진은 담당자가 NAS 에 따로 정리한다)
-   · ★한 매장 한 달에 QSC 제출이나 MS 제출이 둘 이상이면 그 매장은 싣지 않고 이유(problems)만 적는다★
-     — 어느 것이 맞는지 짐작하지 않는다 (재제출은 덮어쓰기라 정상이면 하나 · MS 는 한 달 한 매장 1회)
+   · ★한 매장 한 달에 QSC 제출이 둘 이상이면 그 매장은 싣지 않고 이유(problems)만 적는다★
+     — 어느 것이 맞는지 짐작하지 않는다 (재제출은 덮어쓰기라 정상이면 하나)
+   · ★MS 가 둘 이상이면 가장 최근 제출 1건을 싣고 msNote 로 알린다★ (2026-09-17 담당자 결정 — 앱 점수와 같은 규칙)
    · 문항이 빠졌거나 같은 번호가 두 줄이어도 싣지 않는다
    · 앱이 빼고 보낸 MS 문항은 ★키오스크 제외 문항(3-1·3-2·7-1·7-2·7-3)일 때만★ "NA" 로 채운다 — 그 밖의 빈 번호는 problems
    · 매장마다 월 채점 확정 시각(closedAt)을 함께 준다 — 확정된 매장만 붙여넣는 판단은 로컬 도구가 한다
@@ -8483,18 +8488,19 @@ function fnArchiveData(ctx, payload) {
     const d = dateOfCell(r[MS_COL.date - 1], tz);
     const store = nameOf(r[MS_COL.store - 1]);
     if (d.slice(0, 7) !== month || !store) return;
-    const key = str(r[MS_COL.at - 1]) ? stampOf(r[MS_COL.at - 1], tz) : d + ' ' + timeKeyOf(r[MS_COL.time - 1], tz);
+    /* 묶음 열쇠 — 제출시각이 있으면 'B'+제출시각, 없으면(옛 줄) 'A'+날짜·시간. 큰 것이 최근이다('B' 가 'A' 보다 크다) */
+    const key = str(r[MS_COL.at - 1]) ? 'B' + stampOf(r[MS_COL.at - 1], tz) : 'A' + d + ' ' + timeKeyOf(r[MS_COL.time - 1], tz);
     const g = groups[store] || (groups[store] = {});
     (g[key] = g[key] || []).push(r);
   });
   Object.keys(groups).forEach(function (store) {
     const s = slot(store);
+    /* ★2건 이상이면 가장 최근 제출 1건★ (2026-09-17 담당자 결정 — 앱 점수 shopperMonthAvg 와 같은 규칙) */
     const keys = Object.keys(groups[store]);
-    if (keys.length > 1) {
-      s.problems.push('MS 제출이 ' + keys.length + '건입니다 — MS 는 한 달 한 매장 1회라 하나만 남긴 뒤 다시 받아 주세요');
-      return;
-    }
-    const rows = groups[store][keys[0]];
+    let pick = keys[0];
+    keys.forEach(function (k) { if (k > pick) pick = k; });
+    if (keys.length > 1) s.msNote = '같은 달 MS ' + keys.length + '건 — 가장 최근 제출(' + pick.slice(1) + ') 1건을 넣었습니다';
+    const rows = groups[store][pick];
     const answers = [], memos = [];
     let dup = 0;
     for (let i = 0; i < ARCHIVE_MS_N; i++) { answers.push(null); memos.push(''); }

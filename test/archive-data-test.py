@@ -10,7 +10,8 @@
 
 보는 것:
   ① 정상 — QSC 74칸(건수·비고·NA 사유)·머리글·앱 점수 / MS 38칸·연령대/성별 나누기·주문내역·총평·앱 점수 / 확정 시각
-  ② ★짐작하지 않는다★ — 같은 달 QSC 2건 · MS 2건 · 빠진 문항 · 같은 번호 두 줄 · 매장 파일 못 찾음 → problems 만, 칸은 안 준다
+  ② ★짐작하지 않는다★ — 같은 달 QSC 2건 · 빠진 문항 · 같은 번호 두 줄 · 매장 파일 못 찾음 → problems 만, 칸은 안 준다
+     ★MS 2건은 가장 최근 제출 1건 + msNote★ (2026-09-17 담당자 결정 — 앱 점수 shopperMonthAvg 와 같은 규칙)
   ③ 키오스크 — ★3-1·3-2·7-1·7-2·7-3 이 빠졌을 때만★ NA 로 채운다 · 다른 번호가 빠지면 problems
   ④ 다른 달·다른 매장은 섞이지 않는다 · 같은 날·시각이어도 제출시각이 다르면 섞이지 않는다 · 매장명 띄어쓰기는 앱 매장명으로
   ⑤ 읽기만 한다(쓰기 호출 없음) · 등록표는 「읽기」 · 키오스크 번호가 master.json 과 같다
@@ -177,8 +178,9 @@ ok('확정 전 → closedAt 빈칸', c.closedAt, '');
 console.log('── ③ 짐작하지 않는다 ──');
 has('도넛정수 — QSC 2건', S['도넛정수'].problems, 'QSC 제출이 2건');
 ok('도넛정수 — QSC 칸 안 줌', S['도넛정수'].qsc === undefined, true);
-has('호우주의보 이태원 — MS 2건', S['호우주의보 이태원'].problems, 'MS 제출이 2건');
-ok('호우주의보 이태원 — MS 칸 안 줌', S['호우주의보 이태원'].ms === undefined, true);
+var h2 = S['호우주의보 이태원'];   // ★2026-09-17 담당자 결정 — MS 2건이면 가장 최근 제출 1건(앱 점수와 같은 규칙)★
+ok('★호우주의보 이태원 — MS 2건이면 가장 최근(12-20·92점) 1건 · problems 없음★', [h2.problems, h2.ms && h2.ms.date, h2.msScore], [[], '2026-12-20', 92]);
+has('호우주의보 이태원 — msNote 로 알린다', [h2.msNote], '같은 달 MS 2건 — 가장 최근 제출(2026-12-20 13:00)');
 has('우물집 판교 — 빠진 문항', S['우물집 판교'].problems, '비어 있는 문항이 1개');
 ok('우물집 판교 — QSC 칸 안 줌', S['우물집 판교'].qsc === undefined, true);
 has('청수당 애월 — 같은 번호 두 줄', S['청수당 애월'].problems, '같은 문항 번호가 1줄 더');
@@ -239,6 +241,7 @@ src_ok('키오스크 문항은 전부 예/아니오 척도 (NA 가 척도 검사
        all(q.get('scale') == 'yn' for q in qs if q['no'] in kiosk))
 sarc = io.open(ARCHIVE, 'r', encoding='utf-8', newline='').read()
 src_ok("archive.py: problems 가 있으면 채우지 않는다", "probs = d.get('problems') or []" in sarc and '채우지 않았습니다' in sarc)
+src_ok("archive.py: MS 2건 알림(msNote)을 보여 준다", "if d.get('msNote'):" in sarc)
 src_ok("archive.py: 확정 전(closedAt 빈칸)은 건너뛴다 · --include-open 은 시험용",
        "if 'closedAt' in stores[s] and not stores[s].get('closedAt') and not a.include_open:" in sarc)
 src_ok("archive.py: 채운 점수를 앱 점수와 대조(QSC D89 · MS V63) · 다르면 저장 안 함",
