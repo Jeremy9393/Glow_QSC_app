@@ -35,7 +35,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
 # 구글 API 를 가짜로 끼운다. ★조용히 아무거나 돌려주는 Proxy★ 라
 # 시트·드라이브를 안 건드리고도 코드가 끝까지 흘러간다.
 HARNESS = r'''
-const S = () => new Proxy(function () { }, { get: () => S(), apply: () => S(), construct: () => S() });
+/* Symbol.toPrimitive 만 0 으로 답한다 (2026-09-18) — `sh.getLastRow() < 2` 처럼 가짜 값을 숫자와 비교하는 자리에서
+   Proxy 가 "Cannot convert object to primitive value" 로 터져, 코드 시트를 읽는 survey.questions 점검이 돌지 못했다.
+   0 이면 「빈 시트」로 읽혀 끝까지 흘러간다. 다른 키는 종전처럼 또 다른 Proxy 다. */
+const S = () => new Proxy(function () { }, {
+  get: (t, k) => (k === Symbol.toPrimitive ? (() => 0) : S()), apply: () => S(), construct: () => S() });
 const store = {};
 globalThis.PropertiesService = { getScriptProperties: () => ({
   getProperty: k => store[k] || null, setProperty: (k, v) => { store[k] = v; },
@@ -63,6 +67,11 @@ globalThis.err = function (code, msg) {
 try {
   const out = String(doPost({ postData: { contents: JSON.stringify({ action: 'config.stores', payload: {} }) } }));
   if (out.indexOf('SERVER_ERROR') >= 0) { console.log('FAIL\t' + (REAL ? REAL.message : out.slice(0, 200))); process.exit(1); }
+  /* ★문항 내려주기 경로도 실제로 한 번 돈다★ (2026-09-18 ②-1) — 익명 + 가짜 코드 → 코드 시트(빈 시트)를 읽고 NOT_FOUND 로 끝나야 한다.
+     QUESTIONS 블록·codeVerify·fnSurveyQuestions 가 등록표와 어긋나면 여기서 SERVER_ERROR 로 드러난다. */
+  const out2 = String(doPost({ postData: { contents: JSON.stringify({ action: 'survey.questions', payload: { code: '123456', store: '점검매장' } }) } }));
+  if (out2.indexOf('SERVER_ERROR') >= 0) { console.log('FAIL\tsurvey.questions: ' + (REAL ? REAL.message : out2.slice(0, 200))); process.exit(1); }
+  if (out2.indexOf('"NOT_FOUND"') < 0) { console.log('FAIL\tsurvey.questions 가 가짜 코드에 NOT_FOUND 가 아닌 답을 냈습니다: ' + out2.slice(0, 200)); process.exit(1); }
   console.log('OK');
 } catch (e) {
   console.log('FAIL\t' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : String(e)));
@@ -131,7 +140,7 @@ def check(printer=None):
             bad.append('★가짜 서버로 요청을 한 번 보내 봤더니 죽었습니다★\n     ' + why
                        + '\n     → 이 상태로 배포하면 앱이 통째로 멈춥니다.')
         else:
-            say('가짜 서버로 요청을 보내 봤습니다 — 정상 응답')
+            say('가짜 서버로 요청을 보내 봤습니다 — 정상 응답 (config.stores · survey.questions 가짜 코드 → NOT_FOUND)')
     except Exception as e:  # noqa: BLE001
         bad.append('실행 점검을 돌리지 못했습니다: %s' % e)
     finally:

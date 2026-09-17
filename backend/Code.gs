@@ -213,7 +213,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v145', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v146', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -334,6 +334,10 @@ function actionTable() {
        담기는 것은 매장명뿐이다 — 이미 간판·QR·카톡으로 공개된 값이고, naPresets는 싣지 않는다.
        버킷은 survey와 같은 'anon'이라 이 요청이 몰려도 로그인(auth 버킷)은 막히지 않는다. */
     'config.stores':      { menu: '', act: '', scope: 'none', anon: true, max: 1 * KB, fn: fnConfigStores },
+    /* ★QSC 74문항은 서버가 내려준다★ (2026-09-18 담당자 ②-1) — 공개 파일 data/master.json 에서 문항을 뺐다.
+       menu:'qsc' act:'' → `역할` 탭에서 qsc 읽기 또는 쓰기가 있는 역할만(7단계 can). legacy 가 아니므로 토큰이 없으면 AUTH_REQUIRED.
+       상수(QUESTIONS 블록 · 파일 끝)라 시트를 열지 않는다. 쇼퍼 문항은 여기 없다 — 그쪽 열쇠는 제출 코드다(survey.questions). */
+    'config.questions':   { menu: 'qsc', act: '', scope: 'none', max: 1 * KB, fn: fnConfigQuestions },
     'qsc.submit':         { menu: 'qsc', act: '쓰기', scope: 'none', legacy: true, idem: true, max: 12 * MB, fn: fnQscSubmit },
     /* ★가벼운 사전 조회★ (2026-08-26) — 매장을 고르는 순간 '이번 달에 이미 있나'를 묻는다.
        제출과 같은 권한(쓰기)을 요구한다: 낼 수 있는 사람만 물어볼 수 있으면 충분하고,
@@ -342,6 +346,10 @@ function actionTable() {
     'shopper.status':     { menu: 'shopper', act: '쓰기', scope: 'none', max: 1 * KB, fn: fnShopperStatus },
     'shopper.submit':     { menu: 'shopper', act: '쓰기', scope: 'none', legacy: true, idem: true, max: 3 * MB, fn: fnShopperSubmit },
     'survey.submit':      { menu: '', act: '', scope: 'none', anon: true, idem: true, max: surveyMax, fn: fnSurveySubmit },
+    /* ★MS 38문항은 살아 있는 제출 코드를 낸 요청에만★ (2026-09-18 담당자 ②-1 — "ms평가표는 신뢰가는사람들만").
+       anon 이라 survey 와 같은 버킷의 스로틀을 탄다. 코드는 검사만 하고 ★소진하지 않는다★(소진은 survey.submit).
+       틀린 코드는 매장별 실패 카운터를 올린다(codeVerify — 제출과 같은 판정). payload {code, store?} 라 1KB 면 넉넉하다. */
+    'survey.questions':   { menu: '', act: '', scope: 'none', anon: true, max: 1 * KB, fn: fnSurveyQuestions },
     'dashboard.get':      { menu: 'dashboard', act: '읽기', scope: 'list', max: 2 * KB, fn: fnDashboard },
     'store.get':          { menu: 'store', act: '읽기', scope: 'target', max: 2 * KB, fn: fnStoreGet },
     'store.saveImprove':  { menu: 'store', act: '쓰기', scope: 'target', idem: true, max: 400 * KB, fn: fnStoreSave },
@@ -3732,6 +3740,33 @@ function codeFailBump(store) {
   } catch (e) { }
 }
 
+/* ★검사만 한다 — 소진하지 않는다★ (2026-09-18 ②-1) — 제출(submitWithCode)과 문항 열기(fnSurveyQuestions)가
+   ★같은 판정★을 쓴다. 판정 순서·문구는 종전 submitWithCode 그대로 옮겨 왔다(두 곳이 다르면 "열리는데 안 내지는" 코드가 생긴다).
+   · store 를 주면 코드에 적힌 매장과 같아야 한다. 비우면 코드의 매장을 그대로 받는다(문항 열기 전용 — 제출은 반드시 준다).
+   · missCode = 「없는 코드·다른 매장 코드」일 때의 오류 코드 — 제출은 BAD_REQUEST(종전 그대로), 문항 열기는 NOT_FOUND. 문구는 같다.
+   · 실패 카운터(codeFailBump · 매장별 15 + 전체 60 · ②-3c)는 여기서 올린다. 잠겨 있으면 시트도 읽지 않는다.
+   ★코드 번호로 찾는다★ (2026-08-26) — 예전에는 (회차·매장)으로 찾았고, 그래서 방문날짜가 발급한 달과 다르면
+   멀쩡한 코드가 '맞지 않는다'로 튕겼다. 이제 날짜는 아무 상관이 없다.
+   ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
+   다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
+function codeVerify(ss, code, store, missCode) {
+  code = String(code || '').replace(/\D/g, '');
+  if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
+  store = normStore(store);
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+    return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
+  }
+  const rec = codeFind(ss, code);
+  if (!rec || (store && normStore(rec.store) !== store)) {
+    codeFailBump(store);
+    return err(missCode || 'BAD_REQUEST', '제출 코드가 맞지 않습니다.');
+  }
+  if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
+  if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
+  if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');
+  return { ok: true, rec: rec, code: code, store: normStore(rec.store) };
+}
+
 /* 검사 → 소진 → 저장을 한 덩어리로 (설계 §5-2).
    ★저장이 끝난 뒤에 소진 표시를 한다★ — 순서를 뒤집으면 저장이 실패했을 때
    쇼퍼는 코드를 잃고 응답도 잃는다. 반대로 두면 최악이 '코드가 한 번 더 쓰일 수 있음'이다. */
@@ -3740,22 +3775,17 @@ function submitWithCode(ss, p, ctx) {
   if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
   const store = normStore(p && p.store);
   if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
-  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c) — 잠겨 있으면 락을 기다리지도 않는다
     return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
   }
 
   const lock = LockService.getScriptLock();
   try { lock.waitLock(25000); } catch (e) { return err('BUSY', '잠시 후 다시 시도해 주세요.'); }
   try {
-    /* ★코드 번호로 찾는다★ (2026-08-26) — 예전에는 (회차·매장)으로 찾았고, 그래서 방문날짜가
-       발급한 달과 다르면 멀쩡한 코드가 '맞지 않는다'로 튕겼다. 이제 날짜는 아무 상관이 없다. */
-    const rec = codeFind(ss, code);
-    /* ★실패 사유를 구분해 안내한다★ (설계 §2) — "안 됩니다"만으로는 쇼퍼가 할 수 있는 일이 없다.
-       다만 '없는 코드'와 '다른 매장 코드'는 구분하지 않는다 — 구분하면 대입에 단서가 된다. */
-    if (!rec || normStore(rec.store) !== store) { codeFailBump(store); return err('BAD_REQUEST', '제출 코드가 맞지 않습니다.'); }
-    if (rec.state === '사용됨') return err('CONFLICT', '이미 사용된 코드입니다.');
-    if (rec.state === '취소됨' || rec.state === '삭제됨') return err('BAD_REQUEST', '사용할 수 없는 코드입니다.');
-    if (rec.expiresAt && rec.expiresAt <= Date.now()) return err('BAD_REQUEST', '기한이 지난 코드입니다. 담당자에게 새 코드를 요청해 주세요.');
+    /* 판정은 codeVerify 한 곳 (2026-09-18) — 문항 열기(survey.questions)와 같은 규칙·같은 문구 */
+    const v = codeVerify(ss, code, store, 'BAD_REQUEST');
+    if (!v.ok) return v;
+    const rec = v.rec;
 
     const saved = saveShopper(ss, p, ctx, true);
     if (!saved || saved.ok !== true) return saved;
@@ -3785,6 +3815,62 @@ function fnSurveySubmit(ctx, payload) {
   /* ★익명 제출은 반드시 검표를 지난다★ — submitWithCode 가 검사·소진·저장을 한 덩어리로 한다.
      관리자(shopper.submit)는 로그인으로 이미 신원이 확인되므로 코드를 묻지 않는다. */
   return submitWithCode(SpreadsheetApp.openById(SPREADSHEET_ID), payload, ctx);
+}
+
+/* ---------- 문항 내려주기 (2026-09-18 담당자 ②-1) ----------
+   공개 파일(data/master.json · GitHub Pages)에서 문항을 뺐다. 문항의 원본은 이 파일 끝의 QUESTIONS 블록이고
+   (tools/extract_master.py 가 엑셀에서 갈아 끼운다 · 평가표가 바뀌면 백엔드 배포도 필요),
+   두 액션이 각자의 열쇠를 확인한 뒤에만 내려준다 — QSC 는 로그인+qsc 권한, MS 는 살아 있는 제출 코드. */
+
+/* QUESTIONS 블록이 없으면(지웠거나 extract 를 안 돌렸으면) 조용히 빈 문항을 내려주지 않는다 — 사람이 알 수 있는 오류로 */
+function questionsConst() {
+  try {
+    if (typeof QUESTIONS === 'object' && QUESTIONS && QUESTIONS.qsc_groups && QUESTIONS.shopper_categories) return QUESTIONS;
+  } catch (e) { /* 아래에서 알린다 */ }
+  return null;
+}
+
+/* QSC 74문항 — ★로그인 + qsc 메뉴 권한(읽기 또는 쓰기)★ 이 있는 요청에만.
+   doPost 7단계가 can(role,'qsc','') 를 이미 보지만, 등록이 legacy/anon 으로 바뀌는 사고에 대비해 여기서 한 번 더 본다.
+   상수라 시트·캐시를 건드리지 않는다. 쇼퍼 문항은 싣지 않는다 — 그쪽 열쇠는 제출 코드다(fnSurveyQuestions).
+   응답: {ok, version, source_sha, qsc_groups, texts:{criteria, principles}} */
+function fnConfigQuestions(ctx) {
+  if (!ctx || !ctx.auth) return err('AUTH_REQUIRED', '로그인이 필요합니다.');
+  if (!can(ctx.role, 'qsc', '').allow) return err('FORBIDDEN', '권한이 없습니다.');
+  const q = questionsConst();
+  if (!q) return err('SERVER_ERROR', '문항이 서버에 실려 있지 않습니다. 담당자에게 알려 주세요 (백엔드 재배포 필요).');
+  const t = q.texts || {};
+  return {
+    ok: true, version: q.version, source_sha: q.source_sha,
+    qsc_groups: q.qsc_groups,
+    texts: { criteria: t.criteria || '', principles: t.principles || '' },
+  };
+}
+
+/* MS 38문항 — ★살아 있는 제출 코드★ 를 낸 요청에만 (관리자 MS 화면도 같은 길 · 08-27 「고객용 통일」).
+   검사만 하고 ★소진하지 않는다★ — 소진은 제출(survey.submit → submitWithCode) 때. 판정은 codeVerify 한 곳이라 제출과 같다.
+   틀린 코드는 실패 카운터를 올리고 NOT_FOUND(문구는 제출 때와 같은 「제출 코드가 맞지 않습니다.」).
+   store 를 주면 코드의 매장과 같아야 하고, 안 주면 코드의 매장을 알려 준다(화면이 그 매장으로 잠근다).
+   응답: {ok, version, source_sha, store, storeType, kiosk_excludes, shopper_categories,
+          texts:{shopper_criteria, shopper_principles, shopper_grade_note}} — ★QSC 문항은 싣지 않는다★ */
+function fnSurveyQuestions(ctx, payload) {
+  const p = payload || {};
+  const v = codeVerify(SpreadsheetApp.openById(SPREADSHEET_ID), p.code, p.store, 'NOT_FOUND');
+  if (!v.ok) return v;
+  const q = questionsConst();
+  if (!q) return err('SERVER_ERROR', '문항이 서버에 실려 있지 않습니다. 담당자에게 알려 주세요 (백엔드 재배포 필요).');
+  const t = q.texts || {};
+  return {
+    ok: true, version: q.version, source_sha: q.source_sha,
+    store: v.store,
+    storeType: String((q.store_types || {})[v.store] || ''),
+    kiosk_excludes: (q.kiosk_excludes || []).slice(0),
+    shopper_categories: q.shopper_categories,
+    texts: {
+      shopper_criteria: t.shopper_criteria || '', shopper_principles: t.shopper_principles || '',
+      shopper_grade_note: t.shopper_grade_note || '',
+    },
+  };
 }
 function fnNotReady() {
   return err('NOT_FOUND', '아직 준비되지 않은 기능입니다.');
@@ -12510,3 +12596,9 @@ function testStoreCopyCleanup() {
   Logger.log(m);
   return m;
 }
+
+/* @@QUESTIONS_BEGIN */
+/* 평가표 문항 — tools/extract_master.py 가 갈아 끼운다. ★손으로 고치지 말 것★ (엑셀 → extract_master.py → 여기).
+   config.questions(QSC · 로그인+qsc 권한) · survey.questions(MS · 살아 있는 제출 코드) 가 이 상수를 내려준다. */
+const QUESTIONS = {"version":"2026-09-17","source_sha":"15428203049a","source":"QSC·MS 평가표.xlsx","qsc_groups":[{"name":"관리 (서류·기록)","count":7,"items":[{"no":1,"code":"A-01","row":10,"text":"인허가·교육·검사 증빙 미비치 (사업자등록증·영업신고증·영업신고별 위생교육 수료증 / 즉석판매제조·가공업은 자가품질검사 성적서 포함)","severity":"S2","critical":true},{"no":2,"code":"A-02","row":11,"text":"건강진단 결과서(구 보건증) 만료·미소지 (식품위생 분야 종사자 — 근무 인원 대조)","severity":"S2","critical":true},{"no":3,"code":"A-03","row":12,"text":"MSDS 관리대상 제품 자료 미비치 (대상 여부는 제조사·공급업체 확인 — 경고표시 미게시·취급자 미교육 포함)","severity":"S2","critical":true},{"no":4,"code":"A-04","row":13,"text":"거래명세서 미보관 · 입고 검수 누락","severity":"S2","critical":true},{"no":5,"code":"A-05","row":14,"text":"원산지 표시, 알레르기 표시 미게시 (고객이 잘 보이는 위치, 게시물·메뉴판 등 · 포장 판매 제품의 표시사항 누락 포함)","severity":"S2","critical":true},{"no":6,"code":"A-06","row":15,"text":"원산지 표시와 실제 사용 원료 불일치","severity":"S1","critical":true},{"no":7,"code":"A-07","row":16,"text":"자체 테이스팅 미실시·기준 미달 (메인 메뉴 월 1회 / 일반 메뉴 분기 1회 · 실사 사진 · 노트 기록 확인)","severity":"","critical":false}]},{"name":"개인 위생","count":11,"items":[{"no":8,"code":"B-01","row":17,"text":"두발·수염 정리 불량 (모자·헤어캡 안으로 정리 — 착용 여부는 B-07)","severity":"","critical":false},{"no":9,"code":"B-02","row":18,"text":"손톱 관리 불량 (길이, 매니큐어·인조손톱 등)","severity":"","critical":false},{"no":10,"code":"B-03","row":19,"text":"장신구 착용 (반지·팔찌 등)","severity":"","critical":false},{"no":11,"code":"B-04","row":20,"text":"근무 중 비위생 행위 (흡연·취식·침 뱉기 등)","severity":"S2","critical":true},{"no":12,"code":"B-05","row":21,"text":"노출된 외상 (상처·화상 등 — 방수밴드+장갑 미처치)","severity":"","critical":false},{"no":13,"code":"B-06","row":22,"text":"유증상자 조치 미이행 (발열·구토·설사·기침 등 — 증상에 맞는 배제·재배치·보고를 안 함)","severity":"S1","critical":true},{"no":14,"code":"B-07","row":23,"text":"위생 복장 미착용 (모자·마스크 등 — 조리용 장갑은 B-10 · 두발 정리는 B-01)","severity":"S2","critical":true},{"no":15,"code":"B-08","row":24,"text":"지정 유니폼·앞치마 미착용 또는 상태 불량","severity":"","critical":false},{"no":16,"code":"B-09","row":25,"text":"응대 직원 명찰 미착용","severity":"","critical":false},{"no":17,"code":"B-10","row":26,"text":"일회용품 용도 외 사용 · 미교체 (조리용 장갑 등)","severity":"","critical":false},{"no":18,"code":"B-11","row":27,"text":"손 위생 설비·소모품 미구비 (개수대·핸드워시·손소독제 등)","severity":"S2","critical":true}]},{"name":"매장 위생 (표시·보관)","count":13,"items":[{"no":19,"code":"C-01","row":28,"text":"내부 관리 라벨 미부착 (매장 내 소분·개봉·제조 재료)","severity":"","critical":false},{"no":20,"code":"C-02","row":29,"text":"내부 관리 라벨 기재 오류·누락","severity":"","critical":false},{"no":21,"code":"C-03","row":30,"text":"소비기한 경과 (조리 사용·판매목적 보관 모두 해당)","severity":"S1","critical":true},{"no":22,"code":"C-04","row":31,"text":"식자재 관리표 미부착·미최신화 (원재료팩 리스트 대조 불일치)","severity":"","critical":false},{"no":23,"code":"C-05","row":32,"text":"선입선출(FIFO) 미준수","severity":"","critical":false},{"no":24,"code":"C-06","row":33,"text":"식자재 지정 장소 외 보관 (오염원과 섞어 둔 경우 — 이격 거리는 C-13 · 온도 이탈은 C-10·C-11 · 소독제·세제 등 화학물질과 섞어 둔 것은 D-06)","severity":"","critical":false},{"no":25,"code":"C-07","row":34,"text":"주방 냉장·냉동 설비 오염 (냉장고·냉동고·워크인 — 내부·겉면 모두 · 성에·서리 포함 · 홀 쇼케이스는 F-06)","severity":"","critical":false},{"no":26,"code":"C-08","row":35,"text":"해동 관리 미흡 ('해동 중' 표시 미부착, 규정 외 해동 방법 — 온도·소요시간은 레시피북 기준)","severity":"","critical":false},{"no":27,"code":"C-09","row":36,"text":"개봉 식자재 밀봉·덮개 미조치","severity":"","critical":false},{"no":28,"code":"C-10","row":37,"text":"냉장·냉동 필요 식자재 실온 방치","severity":"S2","critical":true},{"no":29,"code":"C-11","row":38,"text":"냉장·냉동 설비 온도 이탈 (냉장 0~10℃ / 냉동 -18℃ 이하)","severity":"S2","critical":true},{"no":30,"code":"C-12","row":39,"text":"작업장·실온 구역 온도 이탈 (글로우서울 기준: 주방 25℃ 이하)","severity":"","critical":false},{"no":31,"code":"C-13","row":40,"text":"식자재 이격 보관 미준수 (바닥 10cm·벽 5cm 이상)","severity":"","critical":false}]},{"name":"매장 위생 (도구·설비)","count":15,"items":[{"no":32,"code":"D-01","row":41,"text":"고위험 도구 안전·이격 보관 미흡 (칼꽂이·지정보관대 등)","severity":"","critical":false},{"no":33,"code":"D-02","row":42,"text":"청소도구 관리 불량 (이격·세척·건조·지정 장소 보관)","severity":"","critical":false},{"no":34,"code":"D-03","row":43,"text":"조리도구 오염·파손 (집게·주걱·볼 등 — 손으로 옮겨 쓰는 주방 전용 도구 · 붙박이 설비는 D-15)","severity":"","critical":false},{"no":35,"code":"D-04","row":44,"text":"손님 제공용 식기·포장용기 위생 불량 (세척 상태·오염·보관)","severity":"","critical":false},{"no":36,"code":"D-05","row":45,"text":"비식품용 기구·용기 사용","severity":"S1","critical":true},{"no":37,"code":"D-06","row":46,"text":"소독제·화학물질 식품구역 미분리 보관 (원래 용기·라벨 미유지 포함 · MSDS 비치는 A-03에서 확인)","severity":"","critical":false},{"no":38,"code":"D-07","row":47,"text":"교차오염 (칼·도마 등 용도 미구분, 원재료/완제품 혼용 · 행주·수세미 등 소모품 혼용은 E-08 · 냉장고 칸 배치 등 보관 위치는 C-06)","severity":"S2","critical":true},{"no":39,"code":"D-08","row":48,"text":"조리·작업대 오염 (작업 중 오염물 방치)","severity":"","critical":false},{"no":40,"code":"D-09","row":49,"text":"가열·조리 설비 오염 (화구·튀김기·오븐·인덕션 등 — 기름때·탄화물 · 튀김유 산가 3.0 초과)","severity":"","critical":false},{"no":41,"code":"D-10","row":50,"text":"전처리·가공 설비 오염 (믹서·블렌더·슬라이서 등 — 식품 접촉면)","severity":"","critical":false},{"no":42,"code":"D-11","row":51,"text":"음용수·얼음 설비 위생 불량 (제빙기·정수기·음료머신 등 — 물때·곰팡이, 스쿱 보관, 필터 교체일 기록)","severity":"","critical":false},{"no":43,"code":"D-12","row":52,"text":"세척·살균 설비 불량 (식기세척기·UV살균기 등 — 미작동·파손·오염 · 헹굼 온도이탈)","severity":"","critical":false},{"no":44,"code":"D-13","row":53,"text":"배기 설비 오염 (후드·덕트 등)","severity":"","critical":false},{"no":45,"code":"D-14","row":54,"text":"배수 설비 오염 (배수구·트렌치·그리스트랩 등)","severity":"","critical":false},{"no":46,"code":"D-15","row":55,"text":"주방 설비·집기 파손·부식 (작업대·선반·싱크대·냉장·냉동고 등 붙박이 — 녹·코팅 벗겨짐·깨진 부품·경첩 고장 · 손도구는 D-03 · 냉장고 오염은 C-07)","severity":"","critical":false}]},{"name":"매장 위생 (공간·환경)","count":10,"items":[{"no":47,"code":"E-01","row":56,"text":"개인용품·사복 조리구역 반입 (분리 보관 미준수 — 취식 행위는 B-04)","severity":"","critical":false},{"no":48,"code":"E-02","row":57,"text":"미사용 물품·서류 방치·적치 — 주방·창고 등 후방 구역","severity":"","critical":false},{"no":49,"code":"E-03","row":58,"text":"쓰레기통 관리 불량 — 주방·창고 등 후방 구역 (뚜껑·과적·주변 오염·분리수거·조리구역 이격 · 홀 셀프바 쓰레기통은 F-10)","severity":"","critical":false},{"no":50,"code":"E-04","row":59,"text":"폐기물·폐유 보관·처리 불량 (폐유통 미밀폐·방치 · 조리 부산물 등 일반 폐기물 방치)","severity":"","critical":false},{"no":51,"code":"E-05","row":60,"text":"천장·벽 오염 — 주방·창고 등 후방 구역 (곰팡이·거미줄 등 · 홀은 F-05)","severity":"","critical":false},{"no":52,"code":"E-06","row":61,"text":"바닥 오염 — 주방·창고 등 후방 구역 (물고임·기름때 등 · 홀은 F-05 · 배수구 자체 막힘·오염은 D-14)","severity":"","critical":false},{"no":53,"code":"E-07","row":62,"text":"조명 점등 불량·작업 밝기 부족 — 주방·창고 등 후방 구역 (깜빡임·덮개 파손·먼지 등 · 조도 수치 기준은 없음 · 홀은 F-13)","severity":"","critical":false},{"no":54,"code":"E-08","row":63,"text":"용도별 소모품 혼용 또는 상태 불량 (홀/주방/청소 — 행주·크린콜·수세미 등)","severity":"","critical":false},{"no":55,"code":"E-09","row":64,"text":"방충·방서 조치 미실시 (포충기·문틈 차단 등)","severity":"","critical":false},{"no":56,"code":"E-10","row":65,"text":"해충 흔적 (날벌레·바퀴·설치류의 사체·배설물 등)","severity":"S2","critical":true}]},{"name":"매장 관리","count":18,"items":[{"no":57,"code":"F-01","row":66,"text":"조경·수경 시설 작동 불량 (수조·분수·펌프 등 — 누수·녹조·악취)","severity":"","critical":false},{"no":58,"code":"F-02","row":67,"text":"조경 생물 관리 불량 (물주기·시든 잎, 폐사체·식물 해충 피해 방치 — 날벌레 등 해충 흔적은 E-10)","severity":"","critical":false},{"no":59,"code":"F-03","row":68,"text":"인테리어 소품 파손·오염 (조형물·액자·포토존 등)","severity":"","critical":false},{"no":60,"code":"F-04","row":69,"text":"매장 외부·입구 상태 불량 (마당·파사드·간판 등 — 파손·오염·탈색·조명)","severity":"","critical":false},{"no":61,"code":"F-05","row":70,"text":"홀 내부 구조물 파손·오염 (천장·벽·바닥 — 객석·대기 공간·계단·복도 등 고객 동선 · 미끄럼은 F-11 · 화장실은 F-16~18 · 외부·파사드는 F-04 · 주방·창고 천장·벽은 E-05 · 바닥은 E-06)","severity":"","critical":false},{"no":62,"code":"F-06","row":71,"text":"홀 진열 기물 파손·오염 (쇼케이스·냉장고 등 — 내부·겉면 모두 · 주방 냉장·냉동 설비 오염은 C-07 · 파손은 D-15)","severity":"","critical":false},{"no":63,"code":"F-07","row":72,"text":"오프라인 안내물 미최신화·정돈 불량 (영업시간·메뉴판·가격표·키오스크 화면 등)","severity":"","critical":false},{"no":64,"code":"F-08","row":73,"text":"온라인 매장 정보 불일치 (지도앱 영업시간·휴무·메뉴 등)","severity":"","critical":false},{"no":65,"code":"F-09","row":74,"text":"홀 가구 파손·흔들림·오염 (식탁·의자 등)","severity":"","critical":false},{"no":66,"code":"F-10","row":75,"text":"손님용 비치물 관리 불량 (트레이·셀프바·셀프바 쓰레기통·냅킨·수저통 등 — 오염·미보충·넘침)","severity":"","critical":false},{"no":67,"code":"F-11","row":76,"text":"바닥 미끄럼 방치 — 홀·입구 (물기·기름기 미제거, 주의 표지 없음)","severity":"","critical":false},{"no":68,"code":"F-12","row":77,"text":"고객·직원 동선 장애물 — 홀 (박스·재고·집기 등 적치)","severity":"","critical":false},{"no":69,"code":"F-13","row":78,"text":"홀 조명 불량 (점등 불량·깜빡임 등 — 주방은 E-07)","severity":"","critical":false},{"no":70,"code":"F-14","row":79,"text":"음악·음향 이상 (BGM 미재생·부적정 음량)","severity":"","critical":false},{"no":71,"code":"F-15","row":80,"text":"홀 체류 쾌적성 저해 (하수구·기름 냄새, 환기 · 냉난방 온도 — 여름 22~25℃ / 겨울 21~24℃)","severity":"","critical":false},{"no":72,"code":"F-16","row":81,"text":"화장실 오염 (변기·세면대·바닥·거울 등)","severity":"","critical":false},{"no":73,"code":"F-17","row":82,"text":"화장실 용품 미구비 (핸드워시·핸드타월·휴지 등 · 주방 세면대 겸용 시 손 위생 설비는 B-11)","severity":"","critical":false},{"no":74,"code":"F-18","row":83,"text":"화장실 시설 작동 불량 (변기·수도·환풍기·배수 등 — 막힘·역류로 오염까지 동반해도 이 항목만 · 단순 오염은 F-16)","severity":"","critical":false}]}],"shopper_categories":[{"name":"1. 입·퇴점 응대","questions":[{"no":1,"row":11,"text":"1-1. 매장 입장 시 혹은 계산대·픽업대에 들어섰을 때 직원이 인사말을 건넸나요?","scale":"yn"},{"no":2,"row":12,"text":"1-2. 응대(인사, 주문, 전달 등) 중 직원이 고객 쪽을 바라보았나요?","scale":"yn"},{"no":3,"row":13,"text":"1-3. 퇴점하는 손님에게 인사 혹은 다른 안내가 있었나요?","scale":"yn"}]},{"name":"2. 요청·질문 응대(필수 요청사항 1회 이상 진행 부탁드립니다)","questions":[{"no":4,"row":14,"text":"2-1. 질문이나 요청에 직원이 바로 반응했나요?","scale":"yn"},{"no":5,"row":15,"text":"2-2. 답변 내용을 한 번에 이해할 수 있었나요?","scale":"yn"},{"no":6,"row":16,"text":"2-3. 요청한 내용이 실제로 반영되었나요?","scale":"yn"}]},{"name":"3. 메뉴 안내·추천(업셀링)","questions":[{"no":7,"row":17,"text":"3-1. 직원이 메뉴의 특징이나 맛을 설명해주었나요?","scale":"yn"},{"no":8,"row":18,"text":"3-2. 직원이 메뉴 추천이나 추가 제안을 했나요?","scale":"yn"},{"no":9,"row":19,"text":"3-3. 메뉴의 섭취방법이나 보관방법에 대한 안내를 받았나요? (주문할 때 · 제품을 받을 때 모두 포함)","scale":"yn"}]},{"name":"4. 친절·공손","questions":[{"no":10,"row":20,"text":"4-1. 응대하는 동안 직원의 표정이 호의적으로 느껴졌나요?","scale":"yn"},{"no":11,"row":21,"text":"4-2. 직원이 끝까지 존댓말을 사용했나요?","scale":"yn"},{"no":12,"row":22,"text":"4-3. 방문하는 동안 직원의 태도가 친절하고 일관되었나요?","scale":"yn"}]},{"name":"5. 서비스 포지션","questions":[{"no":13,"row":23,"text":"5-1. 직원들이 근무 중 위생적인 태도를 지켰나요? (취식·침 뱉기 등 없음)","scale":"yn"},{"no":14,"row":24,"text":"5-2. 응대 가능한 직원이 자리에 있거나 불렀을 때 바로 반응했나요?","scale":"yn"},{"no":15,"row":25,"text":"5-3. 직원들이 손님 응대에 집중했나요? (직원 간 사적인 대화·불필요한 행동이 없었음)","scale":"yn"}]},{"name":"6. 웨이팅·주문 수령 과정","questions":[{"no":16,"row":26,"text":"6-1. 주문 후 제품을 받기까지 안내가 있었나요? (예: \"바로 나옵니다\" · \"준비되면 불러 드릴게요\" · 진동벨 · 번호 안내)","scale":"yn"},{"no":17,"row":27,"text":"6-2. 주문할 때(카운터·키오스크 등) 어려움 없이 주문할 수 있었나요?","scale":"yn"},{"no":18,"row":28,"text":"6-3. 제품 제공 시 호출이나 메뉴 전달이 잘 이루어졌나요?","scale":"yn"}]},{"name":"7. 결제","questions":[{"no":19,"row":29,"text":"7-1. 결제과정이 매끄럽게 진행되었나요?","scale":"yn"},{"no":20,"row":30,"text":"7-2. 결제 후 영수증 발급 방법 또는 진행 중인 이벤트 안내를 받았나요?","scale":"yn"},{"no":21,"row":31,"text":"7-3. 결제 내역(메뉴, 금액)이 주문한 내용과 정확히 일치했나요?","scale":"yn"}]},{"name":"8. 플레이팅·진열","questions":[{"no":22,"row":32,"text":"8-1. 제공된 제품이 (본인이 생각한) 사진·메뉴판과 비슷한 모습이었나요?","scale":"yn"},{"no":23,"row":33,"text":"8-2. 제공된 제품의 그릇, 식기류나 포장 상태가 깨끗했나요?","scale":"yn"},{"no":24,"row":34,"text":"8-3. 제공된 제품(또는 매장에 진열된 제품)이 잘 정돈된 상태였나요?","scale":"yn"}]},{"name":"9. 신선함·이취","questions":[{"no":25,"row":35,"text":"9-1. 제품의 냄새가 정상이었나요? (쉰내·군내·잡내 등 이상 없음)","scale":"yn"},{"no":26,"row":36,"text":"9-2. 제품의 겉모습이 정상이었나요? (변색·마름 등 이상 없음)","scale":"yn"},{"no":27,"row":37,"text":"9-3. 제품의 맛이 정상이었나요? (시큼함·쉰맛 등 이상 없음)","scale":"yn"}]},{"name":"10. 익힘·추출 상태","questions":[{"no":28,"row":38,"text":"10-1. 뜨거운 메뉴 혹은 차가운 메뉴는 알맞은 온도로 제공되었나요?","scale":"yn"},{"no":29,"row":39,"text":"10-2. 제품이 알맞게 완성되어 나왔나요? (덜 익음·탄 부분 · 음료의 농도·얼음량 · 크림·거품 상태 등)","scale":"yn"},{"no":30,"row":40,"text":"10-3. 제품의 식감이 정상이었나요? (질김·눅눅함 등 이상 없음)","scale":"yn"}]},{"name":"11. 간·풍미","questions":[{"no":31,"row":41,"text":"11-1. 제품의 간(짠맛·단맛 등)이 적당했나요?","scale":"likert"},{"no":32,"row":42,"text":"11-2. 재료의 맛이 조화롭게 어우러졌나요?","scale":"likert"},{"no":33,"row":43,"text":"11-3. 섭취 전 기대한 맛과 실제 맛이 일치했나요?","scale":"likert"}]},{"name":"12. 양·퀄리티","questions":[{"no":34,"row":44,"text":"12-1. 가격을 고려했을 때 양이 적절했나요?","scale":"likert"},{"no":35,"row":45,"text":"12-2. 다 먹을 때까지 퀄리티가 유지되었나요?","scale":"likert"},{"no":36,"row":46,"text":"12-3. 제공된 제품이 전체적으로 만족스러우셨나요?","scale":"likert"}]},{"name":"13. 종합 만족도","questions":[{"no":37,"row":47,"text":"13-1. 매장에 다시 방문할 의사 혹은 지인에게 추천할 의사가 있나요?","scale":"likert"},{"no":38,"row":48,"text":"13-2. 오늘 방문 경험에 전반적으로 만족하셨나요?","scale":"likert"}]}],"texts":{"criteria":"입력 : 각 문항의 '개선 필요 건수' 칸에 0 이상의 정수를 입력합니다  (이상 없음 = 0 / 점수에서 빼려면 NA)\nNA 사유 : ① 해당 없음 — 그 매장에 시설·업무가 없음   ② 본사 대기 — 매장 권한 밖, 본사에 요청해 둔 것   ③ 확인 불가 — 증빙·상황이 없어 확인 못 함\n            셋 다 점수에서 똑같이 빠집니다. 사유는 기록에만 남습니다(다음 회차 자동 제안은 ①만).\n감점 : 일반 문항 1건 −1점  ·  ★ 문항당 −8, 같은 문항 추가 건당 −2 (합계 상한 −45)  ·  ★★ 문항당 −12, 같은 문항 추가 건당 −4 (합계 상한 −48)\n※ QSC 점수 = 100 − 일반 문항 감점 − 중대 차감 (하한 0).  ★·★★도 이 자리에서 바로 빠집니다\n※ 종합점수 = QSC 60% + 미스터리쇼퍼 30% + 개선현황 10% (하한 0) — 산출과 등급 판정은 통합시트(대시보드)에서 진행","principles":"① 감점은 매장이 즉시 처리 가능한 일(청소·정돈·보충·보고)에만 적용 — 발견하고도 보고 없이 방치한 경우 포함\n② 매장 권한 밖(불가항력)·시설 결함은 본사 보고 이력 확인 시 NA처리, 보고 없이 방치 시 감점 — 식품 안전 직결 사안은 임시조치(식자재 이동, 대체 소독 등) 병행 확인\n③ 매장에 존재하지 않는 항목(공용 화장실, 조경·취식 공간 없음 등)은 상시 NA","shopper_criteria":"관찰 문항(1~10 카테고리, 30문항) : 예 1점 / 아니오 0점 / NA 평가 제외\n만족도 문항(11·12·13 카테고리, 8문항) : 5점 척도 — 1점 0 · 2점 0.25 · 3점 0.5 · 4점 0.75 · 5점 1로 환산  ※ 방문하면 모두 응답 가능한 문항이므로 NA 사용 불가\n※ 점수 = 환산 점수 합계 ÷ 응답 문항 수 × 100점 만점   ※ 본 평가 30% + QSC담당자 60% + 개선현황 10% = 종합점수\n※ 키오스크 전용 매장은 3-1·3-2·7-1·7-2·7-3 을 제외한 33문항으로 평가(앱이 자동 적용) · 카운터·키오스크 병행 매장은 키오스크 주문 방문에서만 제외","shopper_principles":"[평가 전 안내 — 설문 응답자 공통]  ★필수★ 요청사항 — 꼭 진행해 주세요: 직원에게 간단한 요청이나 질문을 1회 이상 부탁드립니다 (화장실 위치, 메뉴 추천, 물티슈 요청 등) ※ 이 요청을 하지 않으면 2번 항목(요청·질문 응대) 세 문항에 답할 수 없습니다 / 본 평가는 철저하게 익명이 보장됩니다. 보고 느끼신 그대로 편하게 남겨 주세요. / 1~10번 카테고리는 예·아니오 중 하나, 11~13번 카테고리(맛·양·만족도)는 1~5점 중 하나를 선택 / 아니오 혹은 낮은 점수를 고른 문항은 비고에 이유를 간단히 적어 주세요 / 기억이 안 나거나 판단이 어려운 예·아니오 문항도 비고에 상황을 적어 주세요 / 연령대·성별은 응대 직원이 아니라 설문을 작성하시는 본인 기준으로 적어 주세요 / 방문 시간은 매장에 들어선 시각 기준으로 선택해 주세요\n[채점원칙 — 관리자]  종이 설문(인쇄용)의 응답을 그대로 옮겨 입력 / 미기재·판단 불가 관찰 문항은 NA (앱에서는 비고만 적으면 같은 처리) / 만족도 문항(11·12·13)은 NA 없이 1~5 중 반드시 선택 — 미응답 칸은 회색으로 표시됨 / 특이사항은 비고에 기록, 하단 응답 수(n/38)로 누락 확인","shopper_grade_note":"등급 : 우수 93점 이상 / 양호 85점 이상 / 보통 76점 이상 / 미흡 66점 이상 / 주의 55점 이상 / 부적합 55점 미만\n응답 원칙 : 관찰 문항은 예 · 아니오 · 비고 중 최소 한 칸 입력, 만족도 문항(11·12·13)은 1~5 중 선택. 판단이 어려우면 비고에 상황을 적어 주세요.\n비고만 적은 관찰 문항은 NA와 같이 집계 분모에서 빠집니다."},"kiosk_excludes":["3-1","3-2","7-1","7-2","7-3"],"store_types":{"도넛정수":"kiosk","우물집 판교":"kiosk","이티에프 베이커리 성수":"mixed","제주당":"mixed"}};
+/* @@QUESTIONS_END */

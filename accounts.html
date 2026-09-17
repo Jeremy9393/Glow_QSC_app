@@ -13,7 +13,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=135">
+<link rel="stylesheet" href="css/app.css?v=136">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼.
@@ -118,12 +118,12 @@
      앱 스크립트가 실리기 전에 안내 후 홈으로 간다. 권한 사본이 없을 때(menus()===null)는
      guard가 막지 않으므로, accounts-app.js 쪽 판정도 그대로 남겨 두 겹으로 둔다.
      ★'쓰기'까지 본다★ (2026-09-17 · 최종검수 #21) — 계정 관리는 전부 쓰는 일(발급·중지·비밀번호)이라 읽기만 있는 계정은 돌려보낸다. -->
-<script src="js/maint.js?v=135"></script>
-<script src="js/ui-busy.js?v=135"></script>
-<script src="js/auth.js?v=135"></script>
+<script src="js/maint.js?v=136"></script>
+<script src="js/ui-busy.js?v=136"></script>
+<script src="js/auth.js?v=136"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts', '쓰기');</script>
-<script src="js/api.js?v=135"></script>
-<script src="js/accounts-app.js?v=135"></script>
+<script src="js/api.js?v=136"></script>
+<script src="js/accounts-app.js?v=136"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

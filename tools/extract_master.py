@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""엑셀(QSC·MS 평가표.xlsx) → data/master.json 추출.
+"""엑셀(QSC·MS 평가표.xlsx) → data/master.json(공개) · data/questions.local.json(문항) · backend/Code.gs QUESTIONS 블록 추출.
 
 엑셀 시트가 문항·심각도의 원본. 시트 수정 후 이 스크립트를 다시 실행하면
 앱 마스터 데이터가 갱신된다. 실행: python tools/extract_master.py
+★2026-09-18 부터 문항은 공개 master.json 에 없다★ — 서버(Code.gs)가 로그인·제출 코드 뒤에만 내려준다(아래 QOUT 설명).
 
 v3.7 구조(2026-08-13):
  - 74문항(행 10~83), 판정(○△X) 폐지 — '개선 필요 건수'만 입력
@@ -23,6 +24,20 @@ warnings.filterwarnings('ignore')
 SRC = r'C:\Users\glow-pc-017\Desktop\Ai\1. QSC\3. 평가표\QSC·MS 평가표.xlsx'
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'data' / 'master.json'
+
+# ★문항은 공개 파일에 싣지 않는다★ (2026-09-18 담당자 ②-1 — "매장사람들도 ms평가표는 못봐야해")
+#   data/master.json 은 GitHub Pages 에 그대로 올라가는 공개 파일이라, 문항·심각도·안내문이 거기 있으면
+#   로그인 없이도 평가표 전부를 읽을 수 있었다. 그래서 세 갈래로 나눠 쓴다:
+#     · data/master.json              공개 무방한 것만 (매장 목록·매장 유형·채점 상수·버전)
+#     · data/questions.local.json     문항 전부 — 도구(archive.py)·시험이 읽는다. ★.gitignore(*.local.*) 로 저장소 제외★
+#     · backend/Code.gs QUESTIONS 블록  서버가 로그인(QSC)·제출 코드(MS) 뒤에만 내려주는 원본
+#   세 파일의 version·source_sha 는 같다 — 문항이 바뀌면 셋 다 바뀌고, 앱 배포 + 백엔드 배포가 둘 다 필요하다
+#   (release.py 가 Code.gs 블록이 바뀌었으면 「★백엔드 배포가 필요합니다★」를 알린다).
+QOUT = ROOT / 'data' / 'questions.local.json'
+GS = ROOT / 'backend' / 'Code.gs'
+Q_BEGIN = '/* @@QUESTIONS_BEGIN */'
+Q_END = '/* @@QUESTIONS_END */'
+QUESTION_KEYS = ('qsc_groups', 'shopper_categories', 'texts', 'kiosk_excludes')
 
 # ★버전을 손으로 적지 않는다★ — 적어 두면 엑셀만 고치고 이 줄을 안 고쳤을 때
 #   master.json이 옛 날짜를 그대로 달고 나간다. 화면 세 곳이 이 값을 '평가표 … 기준'으로
@@ -302,10 +317,45 @@ if _prev.get('source_sha') == master['source_sha'] and _prev.get('version'):
 else:
     master['version'] = XLSX_VERSION
 
+# ── 세 갈래로 나눠 쓴다 (맨 위 QOUT 설명) ──────────────────────────────
+#   source_sha 는 위에서 ★문항까지 포함한 전체★로 냈다 — 그래야 문항이 바뀌면 공개 master.json 의
+#   sha 도 바뀌어 배포 도구가 「평가표가 바뀌었다」를 종전처럼 잡고, 화면의 「평가표 … 기준」 날짜도 맞는다.
+public = {k: v for k, v in master.items() if k not in QUESTION_KEYS}
+questions = {
+    'version': master['version'], 'source_sha': master['source_sha'], 'source': master['source'],
+    'qsc_groups': master['qsc_groups'], 'shopper_categories': master['shopper_categories'],
+    'texts': master['texts'], 'kiosk_excludes': master['kiosk_excludes'],
+    # 서버가 survey.questions 응답에 storeType 을 실으려면 매장 유형도 알아야 한다 (master.json 에도 그대로 남는다 — 공개 무방)
+    'store_types': master['store_types'],
+}
+
 with open(OUT, 'w', encoding='utf-8') as f:
-    json.dump(master, f, ensure_ascii=False, indent=1)
+    json.dump(public, f, ensure_ascii=False, indent=1)
+with open(QOUT, 'w', encoding='utf-8') as f:
+    json.dump(questions, f, ensure_ascii=False, indent=1)
+
+# Code.gs 의 표식 블록을 갈아 끼운다 — 없으면 파일 끝에 만든다. ★내용이 같으면 손대지 않는다★(수정시각·git 이 조용하다).
+#   JSON 한 줄. ★개행은 LF 그대로★ (newline='' 로 읽고 쓴다 — CRLF 가 섞이면 배포 대조가 통째로 어긋난다)
+_q_line = json.dumps(questions, ensure_ascii=False, separators=(',', ':'))
+_block = (Q_BEGIN + '\n'
+          '/* 평가표 문항 — tools/extract_master.py 가 갈아 끼운다. ★손으로 고치지 말 것★ (엑셀 → extract_master.py → 여기).\n'
+          '   config.questions(QSC · 로그인+qsc 권한) · survey.questions(MS · 살아 있는 제출 코드) 가 이 상수를 내려준다. */\n'
+          'const QUESTIONS = ' + _q_line + ';\n' + Q_END)
+_gs = GS.read_text(encoding='utf-8', newline='')
+_i, _j = _gs.find(Q_BEGIN), _gs.find(Q_END)
+if _i >= 0 and _j > _i:
+    _new_gs = _gs[:_i] + _block + _gs[_j + len(Q_END):]
+elif _i < 0 and _j < 0:
+    _new_gs = _gs.rstrip('\n') + '\n\n' + _block + '\n'
+else:
+    raise SystemExit('★중단★ Code.gs 의 QUESTIONS 표식이 한쪽만 있습니다 (BEGIN %d · END %d) — 블록을 손으로 정리하십시오.' % (_i, _j))
+gs_changed = _new_gs != _gs
+if gs_changed:
+    GS.write_text(_new_gs, encoding='utf-8', newline='')
 
 print('QSC', item_no, '문항 /', len(qsc_groups), '그룹 / ★★', sev_count['S1'], '· ★', sev_count['S2'])
 print('쇼퍼', q_no, '문항 /', len(shopper_cats), '카테고리 / 관찰', len(YN_ROWS),
       '· 5점 척도', n_likert, '(행 %d~%d)' % (Q_MIN, Q_MAX))
-print('저장:', OUT)
+print('저장:', OUT, '(공개 — 문항 없음)')
+print('저장:', QOUT, '(문항 — 저장소 제외)')
+print('Code.gs QUESTIONS 블록:', '갈아 끼움 — ★백엔드 배포가 필요합니다★' if gs_changed else '그대로 (내용 같음)')

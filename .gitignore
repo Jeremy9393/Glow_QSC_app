@@ -7,6 +7,9 @@
 연동_설정값.md
 *.secret
 *.local
+# ★평가표 문항★ (2026-09-18 ②-1) — data/questions.local.json 은 도구·시험용 사본이다. 문항은 서버(Code.gs)가 내려주고
+# 공개 저장소(GitHub Pages)에는 올리지 않는다. `*.local` 은 「.local 로 끝나는 이름」만 잡아 이 파일을 못 잡는다.
+*.local.*
 
 # 임시·백업
 ~$*
