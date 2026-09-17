@@ -17,6 +17,16 @@ const SpreadsheetApp = {
 };
 /* 잠금을 못 잡게 해서 「잠금 단계까지 왔다」를 CONFLICT 로 확인한다 — 그 뒤는 이 시험의 몫이 아니다 */
 const LockService = { getScriptLock() { return { tryLock() { return false; }, releaseLock() { } }; } };
+/* 「이번 달」을 10월로 고정한다 — 시험을 언제 돌려도 같게 */
+function curYymm() { return '2610'; }
+function ymLabel(ym) { return '20' + ym.slice(0, 2) + '년 ' + Number(ym.slice(2, 4)) + '월'; }
+function storeWriteBlock(ctx, ym) {
+  if (can(ctx && ctx.role, ADMIN_MENU, '쓰기').allow) return '';
+  const y = String(ym || '');
+  if (y < '2610') return '9월까지의 기록은 앱에서 조회만 가능합니다.';
+  if (y > curYymm()) return '아직 시작되지 않은 달이라 조회만 가능합니다 — ' + ymLabel(y) + ' 1일부터 입력할 수 있습니다.';
+  return '';
+}
 function fnStoreSave(ctx, payload, target) {
   /* ★사본(_연동테스트)으로 미리 돌려 볼 수 있게 열어 둔 자리★ — 실매장을 건드리지 않고
      이 경로를 시험하기 위한 것이다. 안 그러면 10/1에 처음으로 돌려 보게 된다.
@@ -31,6 +41,11 @@ function fnStoreSave(ctx, payload, target) {
   const store = target;
   const ym = String(payload.ym || '').trim();
   if (!validYm(ym)) return err('BAD_REQUEST', '월이 올바르지 않습니다.');
+  /* ★매장 계정은 열린 달에만 저장한다★ (2026-09-17 · storeWriteBlock 주석) — 화면이 입력칸을 이미 잠그지만
+     열어 둔 옛 화면·직접 호출도 여기서 막는다. 파일을 열기 전에 거절한다.
+     FORBIDDEN 이어도 화면은 홈으로 보내지 않고 이 문구를 그 카드에 띄운다(store-app.js 「조회 전용 기간」 주석). */
+  const writeWhy = storeWriteBlock(ctx, ym);
+  if (writeWhy) return err('FORBIDDEN', writeWhy);
   const no = payload.no;
   /* ★Number('')===0 이라 이 검사를 빼면 12행(첫 데이터 행)에 쓴다★ */
   if (!(typeof no === 'number' && no >= 1 && no === Math.floor(no))) {
@@ -224,6 +239,21 @@ ok('④ 관리자 + 실매장 파일 — 이름 검사가 FORBIDDEN', r.code ===
 reset();
 r = fnStoreSave(admin, Object.assign({ fileId: 'TESTFILE_ID_0000000000' }, base), '제주당');
 ok('⑤ 관리자 + _연동테스트 사본 — 잠금 단계까지 통과', r.code === 'CONFLICT' && opened.length === 1 && looked.length === 0);
+
+/* 2026-09-17 담당자 「앱에서 막기」 — 매장 계정은 9월까지의 달·아직 안 온 달에 저장하지 못한다 */
+reset();
+r = fnStoreSave(store, Object.assign({}, base, { ym: '2609' }), '제주당');
+ok('⑦ 매장 · 9월 탭 — FORBIDDEN · 매장 파일을 찾지도 않음', r.code === 'FORBIDDEN' && looked.length === 0 && opened.length === 0);
+ok('⑦ 매장 · 9월 탭 — 이유 문구', String(r.error).indexOf('9월까지의 기록은 앱에서 조회만 가능합니다') === 0);
+
+reset();
+r = fnStoreSave(store, Object.assign({}, base, { ym: '2611' }), '제주당');
+ok('⑧ 매장 · 아직 안 온 달(이번 달 10월에 11월 탭) — FORBIDDEN · 안 찾음', r.code === 'FORBIDDEN' && looked.length === 0);
+ok('⑧ 매장 · 아직 안 온 달 — 「2026년 11월 1일부터」', String(r.error).indexOf('2026년 11월 1일부터 입력할 수 있습니다') >= 0);
+
+reset();
+r = fnStoreSave(admin, Object.assign({}, base, { ym: '2609' }), '제주당');
+ok('⑨ 관리자 · 9월 탭 — 막지 않음(잠금 단계까지)', r.code === 'CONFLICT' && looked.length === 1);
 
 console.log('\n' + (fail ? '실패 ' + fail + '개' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);

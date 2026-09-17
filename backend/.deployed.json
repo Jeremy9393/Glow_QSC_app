@@ -1,6 +1,6 @@
 {
- "sha256": "c5cdce14ce15db8de6490b87ffe785dc4a6c2203f861fc6b21891f28ddafb377",
- "version": 139,
- "when": "2026-09-17 11:08:35",
- "description": "상태 칸 수식만 다시 깔기 store.upgrade formulaOnly"
+ "sha256": "a7688af173c91d9aab4e7fb9a178681c9f1af15de1d729451bc5472575537326",
+ "version": 140,
+ "when": "2026-09-17 12:00:13",
+ "description": "매장 계정 저장 달 제한 storeWriteBlock"
 }
