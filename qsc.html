@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=128">
+<link rel="stylesheet" href="css/app.css?v=129">
 </head>
 <body>
 <header class="topbar">
@@ -68,14 +68,14 @@
      ★이 화면에서는 auth.js의 guard()를 절대 부르지 않는다 — 리다이렉트는 금지다.
        앱 주소가 공개라 언젠가 AUTH_ENFORCE를 켜야 하는데, 이때 이 화면이 토큰을 못 붙이면
        관리자 본인의 제출까지 막힌다. 그래서 '싣되 튕기지는 않는' 절충이 이 구조다. -->
-<script src="js/maint.js?v=128"></script>
-<script src="js/ui-busy.js?v=128"></script>
-<script src="js/auth.js?v=128"></script>
-<script src="js/scoring.js?v=128"></script>
-<script src="js/api.js?v=128"></script>
-<script src="js/ui-time.js?v=128"></script>
-<script src="js/ui-photo.js?v=128"></script>
-<script src="js/qsc-app.js?v=128"></script>
+<script src="js/maint.js?v=129"></script>
+<script src="js/ui-busy.js?v=129"></script>
+<script src="js/auth.js?v=129"></script>
+<script src="js/scoring.js?v=129"></script>
+<script src="js/api.js?v=129"></script>
+<script src="js/ui-time.js?v=129"></script>
+<script src="js/ui-photo.js?v=129"></script>
+<script src="js/qsc-app.js?v=129"></script>
 <script>
 /* 부드러운 가드 — 제출 버튼만 잠그고, 작성은 그대로 둔다.
    ★js/qsc-app.js는 한 줄도 고치지 않는다. 그 파일은 제출을 시도한 뒤에만 disabled를 되돌리므로,
@@ -149,6 +149,10 @@
      textContent라 링크는 함께 지워진다. */
   if (note) note.textContent = '이 평가표는 감사총무팀 담당자용입니다. 매장 개선요청사항은 홈의 「매장별 QSC현황」에서 확인하실 수 있습니다.';
   lock('담당자만 제출할 수 있습니다');
+  /* ★문항 목록도 감춘다★ (2026-09-17 담당자) — 매장은 QSC 질문지(문항·★·감점 크기)를 볼 수 없다.
+     종전에는 제출만 잠가 매장 계정이 주소로 들어오면 74문항이 그대로 보였다.
+     지우지 않고 감추기만 한다 — 작성 중 임시저장은 그대로 남는다(담당자가 잘못 걸렸을 때도 안전). */
+  document.body.classList.add('noAccess');
 })();
 
 /* 뒤로가기를 눌렀을 때 한 번 되묻는다.

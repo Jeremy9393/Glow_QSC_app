@@ -16,6 +16,9 @@
   ⑨ notify.admin 은 열린 것만 · 최신이 먼저 · 50개까지 · 등록표 한 줄
   ⑩ 매장 배지 todo 가 보완 요청을 센다 · 확정/검수 대기/점수 제외/다시 올린 건은 안 센다
   ⑪ 40일 지난 「처리」 줄만 하루 한 번 정리한다 (열린 줄은 남긴다)
+  ⑫ (2026-09-17 J1·J9·J16) 완료 제출일(옛 이월 칸 T) — 저장이 적고·지우고·보완 요청이 비운다 ·
+     저장 응답에 상태 · 보완본은 「완료(검수 전)」 · 기한 뒤 완료는 「기한 후 완료」 · 보완 요청은 한 번만 ·
+     미조치 처리는 보완 요청한 건에만 · 기한 뒤 완료엔 보완 요청 안 됨 · 확정해도 재제출기한 유지
 """
 import io, re, subprocess, sys
 from pathlib import Path
@@ -48,11 +51,11 @@ def const(name):
 
 
 FUNCS = ['fnStoreSave', 'fnImproveAudit', 'fnNotifyBadge', 'fnNotifyAdmin', 'badgeTodo',
-         'notifyResubNos', 'notifyOnSave', 'notifyAdd', 'notifyResolve', 'notifyOpenAll',
+         'notifyOnSave', 'notifyAdd', 'notifyResolve', 'notifyOpenAll',
          'notifyScan', 'notifySheet', 'notifyTouched', 'maybeTidyNotify', 'tidyNotify',
          'notifyKey', 'notifyCacheKey', 'capText', 'validYm', 'normStore', 'auditTxt',
          'auditCut', 'stampFull', 'safe', 'safeRow', 'delRows', 'cell', 'err', 'grid',
-         'sheet', 'impJudge']
+         'sheet', 'impJudge', 'impSubOnSave', 'impOverdue', 'ymLabel']
 CONSTS = ['PHOTO_EMBED', 'AUTH_NOTIFY_SHEET', 'NOTIFY_HEADER', 'NOTIFY_COLS', 'NOTIFY_FROM_YM',
           'NOTIFY_KEEP_DAYS', 'NOTIFY_SCAN', 'NOTIFY_LIST_MAX', 'BADGE_MAX_STORES', 'IMP_REDO_DAYS']
 body = '\n'.join(const(c) for c in CONSTS) + '\n\n' + '\n\n'.join(cut(f) for f in FUNCS)
@@ -83,6 +86,19 @@ btn = btn.group(0) if btn else ''
 pok('종 버튼은 기본 숨김(hidden) · aria-label · aria-expanded', all(s in btn for s in ('hidden', 'aria-label=', 'aria-expanded="false"')))
 pok("홈이 notify.admin 을 부르고 빈 상태 문구가 있다",
     "Api.call('notify.admin'" in home and '확인할 알림이 없습니다' in home)
+
+print('\n⓪-2 매장현황 화면 글자 (2026-09-17 J13·J16·J9)')
+sapp = io.open(HERE.parents[1] / 'js' / 'store-app.js', 'r', encoding='utf-8', newline='').read()
+pok("J16 「다시 보완 요청」 버튼·안내가 없다", '다시 보완 요청' not in sapp and '두 번째 요청부터' not in sapp)
+pok("J16 「다음 점검에서 확인」 안내가 없다", '다음 점검에서 확인' not in sapp)
+pok("J16 반려 건에 「미조치 처리」 버튼 → verdict '미조치'",
+    "btn('미조치 처리', 'warn', function () { audit('미조치'); })" in sapp)
+pok("J9 검수 화면이 보완본(it.resub)을 알린다", "a === '반려' && it.resub" in sapp and '보완본이 올라왔습니다' in sapp)
+pok("J1 「기한 후 완료」 말·색이 있다", "'기한 후 완료': '기한 후 완료'" in sapp and "'기한 후 완료': ''" in sapp)
+pok("J13 오프라인 안내 문구 (담당자 글 그대로)",
+    "오프라인 — 인터넷 연결이 됐을 당시 마지막으로 받아둔 화면입니다. 저장은 인터넷이 연결되는 곳에서 해 주세요." in sapp)
+pok("J12 Code.gs 매장 안내에 옛말이 없다 (재제출한 뒤에도 · 26/10 채점)",
+    '재제출한 뒤에도' not in src and "ym.slice(0, 2) + '/' + ym.slice(2)" not in src)
 
 HARNESS = r'''
 // ══ 가짜 세계 ═══════════════════════════════════════════════
@@ -163,7 +179,8 @@ var G = { isNew: true, row0: ROW0, endRow: 40, due: 2, state: 3, before: 4, body
 var STORE_TABS = {};
 function mkStoreTab(ym) {
   var sh = mkSheet(ym);
-  for (var no = 1; no <= 6; no++) { sh._set(ROW0 + no - 1, 10, '개선요청 ' + no); sh._set(ROW0 + no - 1, 2, '2026-10-20'); }
+  /* 기한은 먼 날 — 시험을 언제 돌려도 「기한 안」이게 (기한 뒤 완료는 ⑫에서 따로 과거 날짜를 넣는다) */
+  for (var no = 1; no <= 6; no++) { sh._set(ROW0 + no - 1, 10, '개선요청 ' + no); sh._set(ROW0 + no - 1, 2, '2099-12-31'); }
   STORE_TABS[ym] = sh;
 }
 var STORE_SS = { getName: function () { return '금종제과'; }, getSheetByName: function (n) { return STORE_TABS[n] || null; } };
@@ -183,7 +200,7 @@ function cellImageOf(id) { return 'IMG:' + id; }
 function photoIdsOf() { return []; }
 function dateOfCell(v) { return v ? String(v) : ''; }
 function dueDateOf() { return ''; }
-function impPlusDays() { return '2026-10-27'; }
+function impPlusDays() { return '2099-12-31'; }   // 보완 기한 — 시험을 언제 돌려도 기한 안이게 먼 날로
 function auditLog() {}
 
 // 매장 배지 쪽
@@ -245,7 +262,9 @@ save('2610', 1, '다시 교체했습니다');
 ok('글을 바꾸면 재제출 1줄', openRows().map(function (x) { return x[1]; }), ['재제출']);
 ok('재제출 문구', (openRows()[0] || [])[5], '10월 1번 개선요청을 보완해 다시 제출했습니다');
 r = audit(1, '반려');
-ok('두 번째 보완 요청은 재반려 · 사유 = 다시 보완 요청', [r.audit, rowOf(1)[8]], ['재반려', '다시 보완 요청']);
+ok('★두 번째 보완 요청은 거절 (보완 요청은 한 번만)★ · 알림은 열린 채', [r.ok, r.code, /한 번만/.test(r.error), openRows().length], [false, 'CONFLICT', true, 1]);
+r = audit(1, '미조치');
+ok('미조치 처리 → 검수 칸 재반려 · 사유 = 미조치 처리', [r.audit, rowOf(1)[8]], ['재반려', '미조치 처리']);
 save('2610', 1, '다시 교체했습니다', { photo: { dataUrl: 'data:y' } });
 ok('★글은 같고 사진만 바꿔도★ 재제출', openRows().map(function (x) { return x[1]; }), ['재제출']);
 audit(1, '확정');
@@ -346,17 +365,17 @@ BADGE_ITEMS = [
   { no: 4, status: '진행중', state: '진행' },                  // 종전 그대로 → 센다
   { no: 5, status: '기한 지남', state: '미조치', waive: true }, // 점수 제외 → 안 센다
   { no: 6, status: '재제출기한 지남', state: '완료' },         // 센다
-  { no: 7, status: '반려', state: '완료' },                    // 이미 다시 올림 → 안 센다
+  { no: 7, status: '완료(검수 전)', state: '완료', resub: true }, // 이미 다시 올림(보완본) → 안 센다 (J9 — 상태가 말한다)
   { no: 8, status: '확정', state: '미조치' },                  // 확정은 완료 칸이 비어도 안 센다
+  { no: 9, status: '기한 후 완료', state: '완료' },            // 기한 뒤에 올린 완료 → 할 일 아님
 ];
-notifySheet(AUTH_SS, true).appendRow(['2026-10-10 10:00:00', '재제출', '금종제과', '2610', 7, 'x', '열림', '', '']);
 r = fnNotifyBadge(ME);
 ok('★보완 요청을 센다★ — 1·4·6번 = 3', r.store && r.store.todo, 3);
 CACHE = {};
 BADGE_ITEMS = [{ no: 1, status: '반려', state: '완료' }, { no: 7, status: '반려', state: '완료' }];
 AUTH_BROKEN = true;
 r = fnNotifyBadge(ME);
-ok('알림 원장을 못 읽으면 반려는 전부 센다 (배지는 ok)', [r.ok, r.store && r.store.todo], [true, 2]);
+ok('★배지는 알림 원장을 안 본다★ — 원장이 터져도 반려 2건을 센다 (배지는 ok)', [r.ok, r.store && r.store.todo], [true, 2]);
 AUTH_BROKEN = false; CACHE = {};
 BADGE_ITEMS = [{ no: 1, status: null, state: '완료' }, { no: 2, status: null, state: '진행' }, { no: 3, status: null, state: '미조치' }];
 r = fnNotifyBadge(ME);
@@ -380,6 +399,101 @@ ok('오늘 날짜를 찍는다', !!PROPSTORE.NOTIFY_TIDY_DAY, true);
 nt.appendRow(['2020-01-01 09:00:00', '검수대기', '정매장', '2610', 1, '또 오래된 처리', '처리', '2020-01-02 09:00:00', '개선확정']);
 save('2610', 2, '끝');
 ok('★하루 한 번★ — 같은 날 두 번째는 안 지운다', dataRows().some(function (x) { return x[5] === '또 오래된 처리'; }), true);
+
+// ── ⑫ 완료 제출일 · 보완본 · 보완 요청 한 번만 (2026-09-17 J1·J9·J16) ─────────
+console.log('\n⑫ 완료 제출일 (옛 이월 칸 T) · 보완본 · 보완 요청 한 번만');
+reset();
+var TAB = function () { return STORE_TABS['2610']; };
+var SUB = function (no) { return TAB()._get(ROW0 + no - 1, 20); };
+var TODAY = Utilities.formatDate(new Date(), 'x', 'yyyy-MM-dd');
+r = save('2610', 1, '');
+ok('빈 완료로 저장 → 제출일 안 적음', SUB(1), '');
+r = save('2610', 1, '교체 완료');
+ok('처음 완료 → 제출일 = 오늘', SUB(1), TODAY);
+ok('★저장 응답에 상태가 실린다★ — 완료(검수 전) · overdue 아님 · resub 아님',
+   [r.item.status, r.item.overdue, r.item.resub], ['완료(검수 전)', false, false]);
+TAB()._set(ROW0, 20, '2026-10-01');            // 처음 올린 날이 따로 있었다고 치고
+save('2610', 1, '교체 완료 — 문구만 고침');
+ok('완료 문구만 고쳐 저장 → 제출일 그대로 (처음 올린 날)', SUB(1), '2026-10-01');
+save('2610', 1, '');
+ok('완료를 비움 → 제출일도 비움', SUB(1), '');
+
+console.log('  · 규칙 전에 올린 완료(제출일 없음)');
+TAB()._set(ROW0 + 1, 14, '예전에 올린 완료');
+save('2610', 2, '예전에 올린 완료 — 고침');
+ok('고쳐 저장해도 제출일을 새로 박지 않는다', SUB(2), '');
+
+console.log('  · 보완 요청 → 보완본');
+save('2610', 3, '청소함');
+ok('3번 제출일 = 오늘', SUB(3), TODAY);
+r = audit(3, '반려');
+ok('보완 요청 ok · 재제출기한 적힘', [r.ok, r.audit, r.redo], [true, '반려', '2099-12-31']);
+ok('★보완 요청이 제출일을 비운다★', SUB(3), '');
+ok('보완본 전 상태 = 반려 · resub 아님', [r.status, r.resub], ['반려', false]);
+r = save('2610', 3, '청소함');
+ok('글·사진을 안 바꾸고 저장 → 제출일 그대로 빈칸 · 상태 반려', [SUB(3), r.item.status], ['', '반려']);
+r = save('2610', 3, '다시 꼼꼼히 청소함');
+ok('보완본 → 제출일 = 오늘', SUB(3), TODAY);
+ok('★보완본은 「완료(검수 전)」 · resub★', [r.item.status, r.item.resub, r.item.overdue], ['완료(검수 전)', true, false]);
+TAB()._set(ROW0 + 2, 20, '2026-10-05');
+save('2610', 3, '다시 꼼꼼히 청소함 — 사진 추가', { photo: { dataUrl: 'data:z' } });
+ok('보완본을 또 고쳐도 제출일 그대로 (보완본 처음 올린 날)', SUB(3), '2026-10-05');
+r = audit(3, '반려');
+ok('★두 번째 보완 요청 거절★', [r.ok, r.code], [false, 'CONFLICT']);
+ok('거절이면 아무것도 안 바꾼다 (검수 칸 반려 · 제출일 그대로)', [TAB()._get(ROW0 + 2, 17), SUB(3)], ['반려', '2026-10-05']);
+r = audit(3, '확정');
+ok('보완본 개선확정 → 확정 · ★재제출기한은 남긴다★', [r.status, TAB()._get(ROW0 + 2, 18)], ['확정', '2099-12-31']);
+r = audit(3, '반려');
+ok('★확정을 거쳐도 두 번째 보완 요청은 거절★', [r.ok, r.code, TAB()._get(ROW0 + 2, 17)], [false, 'CONFLICT', '확정']);
+r = audit(3, '');
+ok('보완본이 온 뒤 검수 취소 → 재제출기한 남김 · 보완본은 여전히 기한 안', [TAB()._get(ROW0 + 2, 18), r.status], ['2099-12-31', '완료(검수 전)']);
+r = audit(3, '반려');
+ok('★검수 취소를 거쳐도 두 번째 보완 요청은 거절★', [r.ok, r.code], [false, 'CONFLICT']);
+
+console.log('  · 잘못 누른 보완 요청 되돌리기 (보완본 전 검수 취소)');
+save('2610', 6, '끝냄');
+audit(6, '반려');
+r = audit(6, '');
+ok('보완본 전 검수 취소 → 재제출기한도 지움 · 완료(검수 전)', [r.ok, TAB()._get(ROW0 + 5, 18), r.redo, r.status], [true, '', null, '완료(검수 전)']);
+r = audit(6, '반려');
+ok('그 뒤 보완 요청은 다시 된다 (거둔 요청은 센 적 없음)', [r.ok, r.audit], [true, '반려']);
+
+console.log('  · 미조치 처리');
+r = audit(4, '미조치');
+ok('보완 요청 안 한 건에는 미조치 처리 거절', [r.ok, r.code], [false, 'CONFLICT']);
+save('2610', 4, '함');
+audit(4, '반려');
+r = audit(4, '미조치');
+ok('보완 요청한 건 → 미조치 처리 = 재반려 · 미조치 · 새 문구',
+   [r.audit, r.status, r.statusWhy], ['재반려', '미조치', '보완 요청 뒤 미조치로 처리되었습니다']);
+r = audit(4, '반려');
+ok('미조치 처리한 건에 보완 요청도 거절', [r.ok, r.code], [false, 'CONFLICT']);
+r = audit(4, '');
+ok('검수 취소는 된다 · 재제출기한은 남는다(미조치 처리 뒤라 거둔 요청이 아님)', [r.ok, r.audit, TAB()._get(ROW0 + 3, 18)], [true, '', '2099-12-31']);
+r = audit(4, '반려');
+ok('미조치 처리 → 검수 취소를 거쳐도 보완 요청 거절', [r.ok, r.code], [false, 'CONFLICT']);
+
+console.log('  · 기한 뒤에 올린 완료');
+TAB()._set(ROW0 + 4, 2, '2000-01-01');          // 5번 조치기한을 먼 과거로
+r = save('2610', 5, '늦게 했습니다');
+ok('기한 뒤 완료 → 기한 후 완료 · overdue 아님', [r.item.status, r.item.overdue], ['기한 후 완료', false]);
+ok('why = 조치기한 … 이 지난 뒤 완료했습니다', r.item.statusWhy, '조치기한 2000-01-01 이 지난 뒤 완료했습니다 — 개선율에는 넣지 않습니다');
+r = audit(5, '반려');
+ok('★기한 뒤 완료에는 보완 요청 거절★ · 검수 칸 그대로', [r.ok, r.code, TAB()._get(ROW0 + 4, 17)], [false, 'CONFLICT', '']);
+r = audit(5, '확정');
+ok('개선확정은 된다 · 상태는 여전히 기한 후 완료', [r.ok, r.status], [true, '기한 후 완료']);
+
+console.log('  · 보완본을 보완 기한 뒤에 올림');
+TAB()._set(ROW0 + 5, 18, '2000-01-01');         // 6번(위에서 다시 보완 요청함) 보완 기한을 먼 과거로
+r = save('2610', 6, '늦은 보완본');
+ok('보완 기한 뒤 보완본 → 기한 후 완료 · resub · why 는 보완 기한',
+   [r.item.status, r.item.resub, r.item.statusWhy.indexOf('보완 기한 2000-01-01') === 0], ['기한 후 완료', true, true]);
+
+console.log('  · 사본 시험 경로(fileId)도 제출일을 적는다');
+reset();
+r = fnStoreSave({ id: 'admin', role: '관리자' },
+  { ym: '2610', no: 2, rev: 'R', dept: '주방', owner: '김', plan: '', doneNote: '끝', fileId: 'TEST1' }, '금종제과');
+ok('사본 저장 ok · 제출일 = 오늘 · 알림 없음', [r.ok, SUB(2), dataRows().length], [true, TODAY, 0]);
 
 console.log('\n' + (fail ? '✗ ' + fail + '개 실패 · ' : '✓ 전부 통과 · ') + pass + '개 통과');
 process.exit(fail ? 1 : 0);

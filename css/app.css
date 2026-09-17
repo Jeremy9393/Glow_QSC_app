@@ -576,3 +576,7 @@ details[open] > .foldHead::before { content: '▾ '; }
    ★열을 새로 만들지 않고 점수 뒤에 붙인다★ — 표가 넓어지면 폰에서 가로로 밀린다.
    숫자보다 작고 흐리게 둔다: 읽을 때 점수가 먼저 오고 등급이 딸려 와야 한다. */
 .sumTable .gradeTag { font-size: 10.5px; color: var(--sub); margin-left: 3px; font-weight: 400; font-variant-numeric: normal; }
+
+/* 평가표 화면에 권한 없는 계정(매장 등)이 들어왔을 때 — 안내문만 남기고 문항·점수·제출 줄을 감춘다
+   (2026-09-17 담당자 · qsc.html / shopper.html 의 권한 안내 스크립트가 body 에 noAccess 를 붙인다) */
+body.noAccess .wrap > :not(.authNote), body.noAccess .bottombar { display: none !important; }

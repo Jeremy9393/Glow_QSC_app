@@ -207,7 +207,7 @@
         go.className = 'miniBtn warn';
         go.textContent = '지금 반영합니다';
         go.onclick = function () {
-          if (!confirm(ym + ' 의 MS점수를 매장 파일에 지금 반영할까요?\n' +
+          if (!confirm(ym + ' 의 MS점수를 매장 파일과 통합시트에 지금 반영할까요?\n' +
             '매장 화면에 점수가 보이게 됩니다.')) return;
           monthClose(true);
         };

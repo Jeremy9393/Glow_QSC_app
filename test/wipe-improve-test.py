@@ -20,7 +20,7 @@ def cut(name):
     raise SystemExit('%s 끝을 못 찾음' % name)
 
 
-body = cut('improveScan') + '\n\n' + cut('wipeImprove')
+body = cut('storeShareCols') + '\n\n' + cut('improveScan') + '\n\n' + cut('wipeImprove')
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
@@ -126,12 +126,27 @@ ok('★검수 칸을 모른다면 안 건드린다★', sh._v[1][16] === '남아
 ok('extra=0', w.extra === 0, 'extra=' + w.extra);
 IC_MODE = IC_NEW;
 
-console.log('\n[5] 비고(P)는 건드리지 않는다 — 누구 칸인지 확인 안 됨');
+console.log('\n[5] ★비고(P)도 매장 몫이다 — 함께 지우고, 비고만 적은 줄도 「매장이 적은 줄」로 센다★ (2026-09-17 J52)');
 CLEARED = [];
-sh = build(true, true);
-sh._v[1][15] = '본사 메모';
+sh = build(false, false);
+sh._v[1][15] = '매장 비고만 적음';
+var sc5 = improveScan(sh);
+ok('★비고만 적은 줄 → touched 1★ (종전 K~O 판정은 0)', sc5.touched === 1, 'touched=' + sc5.touched);
 w = wipeImprove(sh);
-ok('P열 그대로', sh._v[1][15] === '본사 메모', '값: ' + JSON.stringify(sh._v[1][15]));
+ok('★P열(비고) 지워졌다★', sh._v[1][15] === '', '남음: ' + JSON.stringify(sh._v[1][15]));
+ok('되돌리기가 알려 주는 매장 몫 건수도 1', w.touched === 1, 'touched=' + w.touched);
+
+console.log('\n[5-2] impCols 가 담당부서~비고 자리를 알려 주면 그 범위를 쓴다');
+IC_MODE = { ok: true, row0: 2, due: 2, state: 3, body: 10, isNew: true, dept: 11, memo: 16,
+            audit: 17, redo: 18, waive: 19, roll: 20 };
+CLEARED = [];
+sh = build(false, true);
+sh._v[1][15] = '비고'; sh._v[1][16] = '확정';
+w = wipeImprove(sh);
+ok('P 지움 · Q(검수)도 지움 · touched 1', sh._v[1][15] === '' && sh._v[1][16] === '' && w.touched === 1, JSON.stringify(w));
+ok('Q(검수) 칸은 매장 몫 범위에 안 들어간다 — 검수만 있는 줄은 touched 0', (function () {
+  var s2 = build(false, true); return improveScan(s2).touched === 0; })());
+IC_MODE = IC_NEW;
 
 console.log('\n[6] 개선요청이 원래 없으면 조용히 끝난다');
 CLEARED = [];
@@ -150,4 +165,16 @@ print(r.stdout)
 if r.stderr:
     print('--- stderr ---')
     print(r.stderr[:2000])
-sys.exit(r.returncode)
+
+# 같은 회차 재제출(writeStoreQscInto)의 「매장이 적었나」 판정도 같은 범위(K~P)인가 — 글자로 본다 (2026-09-17 J52)
+wsq = cut('writeStoreQscInto')
+py_fail = 0
+for name, cond in [
+    ('writeStoreQscInto 가 storeShareCols 로 매장 몫 범위를 잡는다', 'storeShareCols(IC)' in wsq),
+    ('writeStoreQscInto 에 옛 K~O 고정 루프(c <= 13)가 없다', 'c <= 13' not in wsq),
+    ('improveScan 에도 옛 K~O 고정 루프가 없다', 'c <= 13' not in cut('improveScan')),
+]:
+    print(('  ok   ' if cond else '  ✗    ') + name)
+    if not cond:
+        py_fail += 1
+sys.exit(1 if (r.returncode or py_fail) else 0)

@@ -778,19 +778,23 @@
 
         /* [이름 변경]·[삭제] (2026-09-11 담당자 요청) — 본인 계정과 중복 줄에는 두지 않는다.
            이름 변경은 계정만이 아니라 지난 기록·제출 코드·NA프리셋의 매장명까지 바꾼다(서버 account.rename). */
-        const rnBtn = document.createElement('button');
-        rnBtn.className = 'miniBtn';
-        rnBtn.type = 'button';
-        rnBtn.textContent = '이름 변경';
-        rnBtn.onclick = function () { if (openId === a.id && panelKind === 'rename') closePanel(); else openRename(a); };
-        act.appendChild(rnBtn);
+        /* ★전 매장(*) 계정(관리자·F&B팀 등)에는 두지 않는다★ (2026-09-17 담당자) — 삭제는 서버가
+           어차피 거절하고(「전 매장 권한 계정은 여기서 지울 수 없습니다」), 이름 변경은 매장 개명 도구라 뜻이 맞지 않는다 */
+        if (String(a.scope || '').trim() !== '*') {
+          const rnBtn = document.createElement('button');
+          rnBtn.className = 'miniBtn';
+          rnBtn.type = 'button';
+          rnBtn.textContent = '이름 변경';
+          rnBtn.onclick = function () { if (openId === a.id && panelKind === 'rename') closePanel(); else openRename(a); };
+          act.appendChild(rnBtn);
 
-        const delBtn = document.createElement('button');
-        delBtn.className = 'miniBtn warn';
-        delBtn.type = 'button';
-        delBtn.textContent = '삭제';
-        delBtn.onclick = function () { doDelete(a); };
-        act.appendChild(delBtn);
+          const delBtn = document.createElement('button');
+          delBtn.className = 'miniBtn warn';
+          delBtn.type = 'button';
+          delBtn.textContent = '삭제';
+          delBtn.onclick = function () { doDelete(a); };
+          act.appendChild(delBtn);
+        }
       }
     }
 

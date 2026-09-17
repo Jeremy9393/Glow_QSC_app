@@ -140,7 +140,9 @@ const Api = (function () {
     /* 응답을 못 읽었고(_unparsed) 조회라면 딱 한 번 조용히 다시 묻는다 — 위 READ_ACTIONS 주석.
        ★화면에는 아무 말도 하지 않는다★ — 이미 '불러오는 중' 덮개가 떠 있고, 두 번째도 실패하면
        종전과 똑같은 오류가 그대로 화면에 간다. */
-    if (data && data._unparsed && !opts._reread && READ_ACTIONS[action]) {
+    /* admin.maint 는 조회(빈 payload)와 켜기·끄기(on/off)를 한 이름으로 쓴다 — ★켜기·끄기는 쓰기라 다시 보내지 않는다★ (2026-09-17) */
+    const isMaintWrite = action === 'admin.maint' && payload && (payload.on || payload.off);
+    if (data && data._unparsed && !opts._reread && READ_ACTIONS[action] && !isMaintWrite) {
       await sleep(REREAD_MS);
       return call(action, payload, {
         reqId: reqId, legacyType: opts.legacyType, _retried: opts._retried, _reread: true,

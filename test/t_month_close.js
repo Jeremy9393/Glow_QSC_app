@@ -39,21 +39,33 @@ function impJudge(r, today, tz, ym, final) {
   const audit = S(r.audit);
   const doneNote = S(r.doneNote);
   const plan = S(r.plan);
+  const due = r.due ? dateOfCell(r.due, tz) : '';
+  const redo = r.redo ? dateOfCell(r.redo, tz) : '';
+  /* ★날짜 모양일 때만 쓴다★ — 시트 수식의 ISNUMBER 와 같은 뜻. 옛 이월 표시(숫자 1)가 남은 칸을 날짜로 읽지 않는다 */
+  const D = function (s) { return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : ''; };
+  const sub = (doneNote && r.sub) ? D(dateOfCell(r.sub, tz)) : '';
+  const limit = D(redo) || D(due);
+  const late = !!(sub && limit && sub > limit);
+  const lateWhy = (D(redo) ? '보완 기한 ' : '조치기한 ') + limit + ' 이 지난 뒤 완료했습니다 — 개선율에는 넣지 않습니다';
 
-  if (audit === '재반려') return { state: '미조치', why: '재제출한 뒤에도 다시 반려되었습니다' };
+  /* '재반려' = 「미조치 처리」 버튼 (J16 · 보완 요청은 한 번만). 값 이름은 옛 탭의 검수 목록과 맞추려고 그대로 둔다 */
+  if (audit === '재반려') return { state: '미조치', why: '보완 요청 뒤 미조치로 처리되었습니다' };
   if (audit === '반려') {
-    const redo = r.redo ? dateOfCell(r.redo, tz) : '';
+    if (sub) {   // 보완본이 올라왔다
+      if (late) return { state: final ? '미조치' : '기한 후 완료', why: lateWhy, redo: redo || null, resub: true, late: true };
+      return { state: '완료(검수 전)', why: '', redo: redo || null, resub: true };
+    }
     if (redo && redo < today) {
-      return { state: final ? '미조치' : '재제출기한 지남', why: '재제출기한 ' + redo + ' 이 지났습니다', redo: redo };
+      return { state: final ? '미조치' : '재제출기한 지남', why: '보완 기한 ' + redo + ' 이 지났습니다', redo: redo };
     }
     if (final) return { state: '미조치', why: '보완 기한 전에 마감했습니다', redo: redo || null };
     return { state: '반려', why: '', redo: redo || null };
   }
+  if (late) return { state: final ? '미조치' : '기한 후 완료', why: lateWhy, due: due || null, late: true };
   if (audit === '확정') return { state: '확정', why: '' };
   if (doneNote) return { state: '완료(검수 전)', why: '' };
 
   /* ★기한이 먼저다★ — 진행 내용을 적었어도 조치기한이 지났으면 '기한 지남'이다 (2026-09-15 담당자) */
-  const due = r.due ? dateOfCell(r.due, tz) : '';
   if (due && due < today) {
     return { state: final ? '미조치' : '기한 지남', why: '조치기한 ' + due + ' 이 지났습니다', due: due };
   }
@@ -88,13 +100,21 @@ function impStateFormula(c, r) {
   const A = function (col) { return '$' + colLetter(col) + r; };
   const B = A(c.due), J = A(c.body), M = A(c.plan), N = A(c.done);
   const Q = A(c.audit), R = A(c.redo);
+  const T = c.roll ? A(c.roll) : '';
+  const SUB = T ? 'AND(' + N + '<>"",ISNUMBER(' + T + '))' : 'FALSE';
+  const L = T ? 'AND(' + N + '<>"",ISNUMBER(' + T + '),IF(ISNUMBER(' + R + '),' + T + '>' + R + ',AND(ISNUMBER(' + B + '),' + T + '>' + B + ')))' : 'FALSE';
   return '=IF(' + J + '="","",' +
     'IF(' + Q + '="재반려","미조치",' +
-    'IF(' + Q + '="반려",IF(AND(ISNUMBER(' + R + '),TODAY()>' + R + '),"미조치","반려"),' +
+    /* 보완 기한이 지난 반려 건은 월중에는 「재제출기한 지남」 — impJudge 와 같다. 「미조치」는 월 채점 확정 때
+       서버가 값으로 덮는다 (2026-09-17 최종검수 — 이 자리만 월중에 「미조치」를 내 앱·요약 건수와 달랐다)
+       ★보완본이 올라왔으면 보완 기한이 지나도 「재제출기한 지남」이 아니다★ (J9) */
+    'IF(' + Q + '="반려",IF(' + SUB + ',IF(' + L + ',"기한 후 완료","완료(검수 전)"),' +
+      'IF(AND(ISNUMBER(' + R + '),TODAY()>' + R + '),"재제출기한 지남","반려")),' +
+    'IF(' + L + ',"기한 후 완료",' +
     'IF(' + Q + '="확정","확정",' +
     'IF(' + N + '<>"","완료(검수 전)",' +
     'IF(AND(ISNUMBER(' + B + '),TODAY()>' + B + '),"기한 지남",' +
-    'IF(' + M + '<>"","진행중","미착수")))))))';
+    'IF(' + M + '<>"","진행중","미착수"))))))))';
 }
 function fnMonthClose(ctx, payload) {
   const p = payload || {};
@@ -149,13 +169,18 @@ function fnMonthClose(ctx, payload) {
 
     let audit = String(at(v, g.audit) == null ? '' : at(v, g.audit)).trim();
     const doneNote = String(at(v, g.done) == null ? '' : at(v, g.done)).trim();
-    /* ① 미검수 자동확정 — 완료 보고가 있는데 검수를 안 한 건 */
-    if (!audit && doneNote) { audit = '확정'; plan.push(row + '행 자동확정'); }
-
     const cellIn = {
       audit: audit, redo: at(v, g.redo), doneNote: doneNote,
-      plan: at(v, g.plan), due: at(v, g.due),
+      plan: at(v, g.plan), due: at(v, g.due), sub: g.roll ? at(v, g.roll) : '',
     };
+    /* 오늘 기준 판정(final=false) — 자동확정과 ④가 함께 본다 */
+    const live = impJudge(cellIn, today, tz, ym, false);
+    /* ① 미검수 자동확정 — 기한 안에 올린 완료 보고인데 검수를 안 한 건.
+       ★보완 요청 뒤 보완 기한 안에 다시 올린 건도 같다★ (2026-09-17 J9 — 본사가 다시 안 봤어도 기한 안 완료다).
+       ★기한 뒤에 올린 완료('기한 후 완료')는 확정 도장을 찍지 않는다★ (J1) — 아래 final 판정이 미조치로 굳힌다. */
+    if (live.state === '완료(검수 전)' && audit !== '확정') {
+      audit = '확정'; cellIn.audit = '확정'; plan.push(row + '행 자동확정');
+    }
     const jd = impJudge(cellIn, today, tz, ym, true);
 
     const waive = at(v, g.waive) === true;
@@ -164,7 +189,6 @@ function fnMonthClose(ctx, payload) {
     /* ④ 기한이 남은 미완료 — 오늘 기준(final=false)으로 반려·진행중·미착수면 아직 기한 안이다.
        ★확정하면 이 건도 미조치다★ — 그래서 먼저 보여 주고 force 로만 마감한다(아래) */
     if (!waive) {
-      const live = impJudge(cellIn, today, tz, ym, false);
       const left = live.state === '반려' ? live.redo
         : (live.state === '진행중' || live.state === '미착수') ? live.due : null;
       if (left) pending.push({ no: i + 1, row: row, state: live.state, due: left });
@@ -256,9 +280,92 @@ ok('③ 개선율 1/4 = 0.25 (진행중·반려도 분모에 남는다)', rt.rat
 ok('③ rolled 칸 없음', !('rolled' in rt), rt);
 ok('③ 발행 0건 → null', impRate([]).rate === null);
 
-const f = impStateFormula({ due: 2, body: 10, plan: 13, done: 14, audit: 17, redo: 18 }, 12);
+console.log('⑦ 완료 제출일 (J1·J9)');
+ok('⑦ 조치기한 안에 올린 완료 → 완료(검수 전)', J({ doneNote: '함', due: '2026-10-15', sub: '2026-10-15' }) === '완료(검수 전)');
+ok('⑦ 조치기한 뒤에 올린 완료 → 기한 후 완료', J({ doneNote: '함', due: '2026-10-15', sub: '2026-10-16' }) === '기한 후 완료');
+ok('⑦ 기한 후 완료 why 는 조치기한 · 개선율 안내', impJudge({ doneNote: '함', due: '2026-10-15', sub: '2026-10-16' }, T, TZ, '2610', false).why ===
+   '조치기한 2026-10-15 이 지난 뒤 완료했습니다 — 개선율에는 넣지 않습니다');
+ok('⑦ 제출일 없음(규칙 전 완료) → 기한 안으로 본다', J({ doneNote: '함', due: '2026-10-01' }) === '완료(검수 전)');
+ok('⑦ 제출일이 숫자 1(옛 이월 표시) → 날짜로 안 본다', J({ doneNote: '함', due: '2026-10-01', sub: 1 }) === '완료(검수 전)');
+ok('⑦ 완료 칸이 비면 제출일을 안 본다', J({ plan: 'x', due: '2026-11-01', sub: '2026-11-05' }) === '진행중');
+ok('⑦ 검수 확정이어도 기한 뒤 완료면 기한 후 완료', J({ audit: '확정', doneNote: '함', due: '2026-10-15', sub: '2026-10-18' }) === '기한 후 완료');
+ok('⑦ 확정(final): 기한 후 완료 → 미조치', J({ doneNote: '함', due: '2026-10-15', sub: '2026-10-18' }, true) === '미조치');
+ok('⑦ 확정(final): 기한 안 완료 + 검수 확정 → 확정', J({ audit: '확정', doneNote: '함', due: '2026-10-15', sub: '2026-10-15' }, true) === '확정');
+ok('⑦ 보완 요청 뒤 보완본(보완 기한 안) → 완료(검수 전) · resub', (function () {
+  const x = impJudge({ audit: '반려', redo: '2026-10-19', doneNote: '다시 함', sub: '2026-10-18', due: '2026-10-01' }, T, TZ, '2610', false);
+  return x.state === '완료(검수 전)' && x.resub === true; })());
+ok('⑦ ★보완본이 있으면 보완 기한이 지나도 「재제출기한 지남」이 아니다★', J({ audit: '반려', redo: '2026-10-19', doneNote: '다시 함', sub: '2026-10-19' }) === '완료(검수 전)');
+ok('⑦ 보완본을 보완 기한 뒤에 올림 → 기한 후 완료 (why 는 보완 기한)', (function () {
+  const x = impJudge({ audit: '반려', redo: '2026-10-19', doneNote: '다시 함', sub: '2026-10-20' }, T, TZ, '2610', false);
+  return x.state === '기한 후 완료' && x.resub === true && x.why.indexOf('보완 기한 2026-10-19') === 0; })());
+ok('⑦ 보완본 없음 + 보완 기한 지남 → 재제출기한 지남 · why 는 「보완 기한 … 이 지났습니다」', (function () {
+  const x = impJudge({ audit: '반려', redo: '2026-10-19', doneNote: '처음 것' }, T, TZ, '2610', false);
+  return x.state === '재제출기한 지남' && x.why === '보완 기한 2026-10-19 이 지났습니다'; })());
+ok('⑦ 확정 뒤에도 재제출기한이 남아 있으면 그것과 견준다 (보완본 기한 안 → 확정)', J({ audit: '확정', redo: '2026-10-19', due: '2026-10-01', doneNote: 'x', sub: '2026-10-12' }) === '확정');
+ok('⑦ 재반려(미조치 처리) → 미조치 · 새 문구', (function () {
+  const x = impJudge({ audit: '재반려', doneNote: 'x' }, T, TZ, '2610', false);
+  return x.state === '미조치' && x.why === '보완 요청 뒤 미조치로 처리되었습니다'; })());
+ok('⑦ 옛 문구(재제출한 뒤에도·재제출기한 …이 지났습니다)가 Code.gs 판정에 없다',
+   impJudge.toString().indexOf('재제출한 뒤에도') < 0 && impJudge.toString().indexOf("'재제출기한 ' +") < 0);
+const rt2 = impRate([{ state: '확정' }, { state: '기한 후 완료' }, { state: '완료(검수 전)' }, { state: '미착수' }]);
+ok('⑦ 개선율: 기한 후 완료는 분자 아님 · 분모엔 남음 (2/4)', rt2.done === 2 && rt2.denom === 4 && rt2.rate === 0.5, rt2);
+
+const f = impStateFormula({ due: 2, body: 10, plan: 13, done: 14, audit: 17, redo: 18, roll: 20 }, 12);
 ok('④ 수식: 「기한 지남」 판정이 「진행중」보다 앞', f.indexOf('"기한 지남"') > 0 && f.indexOf('"기한 지남"') < f.indexOf('"진행중"'), f);
 ok('④ 수식 괄호 짝', (f.match(/\(/g) || []).length === (f.match(/\)/g) || []).length, f);
+ok('④ 수식: 보완 기한 지난 반려는 월중에 「재제출기한 지남」 (impJudge 와 같음 · 미조치 아님)',
+   f.indexOf('"재제출기한 지남","반려"') > 0 && f.indexOf('),"미조치","반려")') < 0, f);
+ok('④ 수식: 제출일 칸(T) 을 본다', f.indexOf('$T12') > 0, f);
+const f0 = impStateFormula({ due: 2, body: 10, plan: 13, done: 14, audit: 17, redo: 18 }, 12);
+ok('④ 수식: 제출일 칸을 모르면 FALSE 로 두고 깨지지 않는다', f0.indexOf('$T') < 0 && f0.indexOf('$12') < 0 &&
+   (f0.match(/\(/g) || []).length === (f0.match(/\)/g) || []).length, f0);
+
+/* ⑧ ★시트 수식 ↔ 서버 판정 무작위 대조★ — 수식 글자를 JS 로 옮겨 계산한다.
+   날짜는 시트처럼 일련번호(숫자), 빈 칸은 "" 다. 수식에 나오는 것은 IF·AND·ISNUMBER·TODAY·비교뿐이다. */
+function serial(s) { const p = s.split('-'); return Date.UTC(+p[0], +p[1] - 1, +p[2]) / 864e5 + 25569; }
+function IF(c, a, b) { return c ? a : b; }
+function AND() { for (let i = 0; i < arguments.length; i++) if (!arguments[i]) return false; return true; }
+function ISNUMBER(v) { return typeof v === 'number'; }
+function evalFormula(fml, cells) {
+  const js = fml.slice(1)
+    .replace(/\$([A-Z]+)12/g, function (_, col) { return 'C.' + col; })
+    .replace(/<>/g, '!=').replace(/([^!<>=])=(?!=)/g, '$1==')
+    .replace(/TODAY\(\)/g, 'TODAY').replace(/\bFALSE\b/g, 'false');
+  return Function('C', 'TODAY', 'IF', 'AND', 'ISNUMBER', 'return (' + js + ');')(cells, serial(T), IF, AND, ISNUMBER);
+}
+const DAYS = ['2026-10-10', '2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21', '2026-10-25'];
+let seed = 7;
+/* ★윗자리를 쓴다★ — 2의 거듭제곱으로 나누는 LCG 는 아랫자리 주기가 짧아(맨 아래 비트는 0,1 반복)
+   항목끼리 묶여 나와 어떤 조합은 영영 안 나온다. 한 번 그렇게 헛통과했다(수식을 망가뜨려도 통과). */
+function rnd(n) { seed = (seed * 1103515245 + 12345) % 2147483648; return Math.floor(seed / 65536) % n; }
+function pick(arr) { return arr[rnd(arr.length)]; }
+let same = 0, diff = [];
+for (let k = 0; k < 3000; k++) {
+  const c = {
+    audit: pick(['', '', '확정', '반려', '재반려']), doneNote: pick(['', '함']), plan: pick(['', 'x']),
+    due: pick(['', ...DAYS]), redo: pick(['', '', ...DAYS]), sub: pick(['', '', ...DAYS]),
+  };
+  const server = impJudge(c, T, TZ, '2610', false).state;
+  const toCell = function (v) { return v ? serial(v) : ''; };
+  const sheet = evalFormula(f, { J: '문장', B: toCell(c.due), M: c.plan, N: c.doneNote, Q: c.audit, R: toCell(c.redo), T: toCell(c.sub) });
+  if (server === sheet) same++; else if (diff.length < 5) diff.push({ c: c, server: server, sheet: sheet });
+}
+ok('⑧ 수식 = 서버 판정 (무작위 3000건)', same === 3000, diff);
+/* ★대조군★ — 수식 한 조각(보완본 기한 뒤 → 기한 후 완료)을 망가뜨리면 어긋남이 잡혀야 한다.
+   안 잡히면 위 3000건 대조가 그 갈래를 한 번도 안 돈 것이다. */
+seed = 7; let caught = 0;
+const broken = f.split('"기한 후 완료","완료(검수 전)"').join('"완료(검수 전)","완료(검수 전)"');
+for (let k = 0; k < 3000; k++) {
+  const c = {
+    audit: pick(['', '', '확정', '반려', '재반려']), doneNote: pick(['', '함']), plan: pick(['', 'x']),
+    due: pick(['', ...DAYS]), redo: pick(['', '', ...DAYS]), sub: pick(['', '', ...DAYS]),
+  };
+  const toCell = function (v) { return v ? serial(v) : ''; };
+  const sheet = evalFormula(broken, { J: '문장', B: toCell(c.due), M: c.plan, N: c.doneNote, Q: c.audit, R: toCell(c.redo), T: toCell(c.sub) });
+  if (sheet !== impJudge(c, T, TZ, '2610', false).state) caught++;
+}
+ok('⑧ 대조군: 수식을 망가뜨리면 어긋남이 잡힌다', broken !== f && caught > 0, caught);
+ok('⑧ 계산기가 수식을 실제로 돌렸다 (빈 본문 → 빈칸)', evalFormula(f, { J: '', B: '', M: '', N: '', Q: '', R: '', T: '' }) === '');
 
 function row(o) {
   const v = new Array(19).fill('');
@@ -307,6 +414,23 @@ ok('⑤ 응답에 마감한 미완료 수', r2.forced === 2 && !('rolled' in r2)
 reset([row({ body: 'a', done: '함' }), row({ body: 'b', plan: 'x', due: '2026-10-05' }), row({}), row({}), row({})]);
 const r3 = fnMonthClose(ctx, { store: '샘플매장', ym: '2610', apply: true });
 ok('⑤ 기한 남은 미완료가 없으면 force 없이 확정', r3.ok && !r3.dry, r3);
+
+/* ⑦ 확정 — 기한 뒤 완료 · 보완본 (J1·J9) */
+reset([
+  row({ body: 'a', done: '함', due: '2026-10-10', roll: '2026-10-09' }),                          // 기한 안 완료 → 자동확정
+  row({ body: 'b', done: '늦게 함', due: '2026-10-10', roll: '2026-10-12' }),                     // 기한 뒤 완료 → 미조치
+  row({ body: 'c', done: '보완함', audit: '반려', redo: '2026-10-19', roll: '2026-10-18' }),        // 보완본(기한 안) → 자동확정
+  row({ body: 'd', done: '보완 늦음', audit: '반려', redo: '2026-10-15', roll: '2026-10-17' }),     // 보완본(기한 뒤) → 미조치
+  row({}),
+]);
+const r4 = fnMonthClose(ctx, { store: '샘플매장', ym: '2610', apply: true });
+ok('⑦ 확정 ok (기한 남은 미완료 없음)', r4.ok && !r4.dry, r4);
+const st4 = writes.filter(function (w) { return w.col === G.state; })[0];
+ok('⑦ 상태: 확정 · 미조치 · 확정 · 미조치 · 빈칸', st4 && JSON.stringify(st4.vals) === JSON.stringify([['확정'], ['미조치'], ['확정'], ['미조치'], ['']]), st4);
+const au4 = writes.filter(function (w) { return w.col === G.audit; })[0];
+ok('⑦ 검수 칸: 기한 안 완료·보완본은 확정 도장 · 기한 뒤 완료는 그대로', au4 && JSON.stringify(au4.vals) === JSON.stringify([['확정'], [''], ['확정'], ['반려'], ['']]), au4);
+ok('⑦ 개선율 2/4 = 0.5', r4.rate.rate === 0.5 && r4.rate.done === 2, r4.rate);
+ok('⑦ 제출일 칸(T)은 확정이 쓰지 않는다', !writes.some(function (w) { return w.col === G.roll; }), writes);
 
 console.log('JS ' + pass + ' 통과 · ' + fail + ' 실패');
 process.exit(fail ? 1 : 0);

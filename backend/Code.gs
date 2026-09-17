@@ -188,7 +188,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v137', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v138', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -2646,12 +2646,9 @@ function fnNotifyBadge(ctx) {
       if (!body || !body.ok || !body.items || !body.items.length) continue;
       const items = body.items;
       markNewItems(items, store, ym, since);
-      /* 보완 요청 건이 있을 때만 알림 원장을 본다 — 평소에는 왕복이 한 번도 늘지 않는다 */
-      const needResub = items.some(function (it) { return it.status === '반려' || it.status === '재제출기한 지남'; });
-      const resub = needResub ? notifyResubNos(store, ym) : null;
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
-        if (badgeTodo(it, resub)) todo++;     // 기준은 badgeTodo 주석
+        if (badgeTodo(it)) todo++;     // 기준은 badgeTodo 주석
         if (it.isNew) fresh++;
         if (it.overdue) late++;
       }
@@ -2672,17 +2669,20 @@ function fnNotifyBadge(ctx) {
      ★다시 셀 수 없었다★ — 매장이 해야 할 일이 생겼는데 배지는 조용했다.
    ★지금★ — 새 서식(2610~)은 서버 판정(impJudge → it.status)을 따른다. 매장 화면이 쓰는 그 값이다.
      · 점수 제외 · 확정 → 할 일이 아니다
-     · 반려(보완 요청) · 재제출기한 지남 → 할 일이다. ★다만 이미 다시 올려 검수를 기다리면 아니다★ —
-       매장 저장은 검수 칸을 안 바꿔 impJudge만으로는 가를 수 없다. 그 사실은 알림 원장의
-       열린 「재제출」 줄이 갖고 있다(resub[번호]). 원장을 못 읽으면 종전처럼 센다.
+     · 반려(보완 요청) · 재제출기한 지남 → 할 일이다.
      · 나머지 → 종전 그대로(완료 칸이 비었으면 할 일)
+   ★이미 다시 올린 보완본은 상태 자체가 '완료(검수 전)'이다★ (2026-09-17 J9) — 종전에는 매장 저장이
+     검수 칸을 안 바꿔 impJudge 가 계속 '반려'라 했고, 그래서 여기서만 알림 원장의 열린 「재제출」 줄로
+     빼 주었다. 그 결과 ★홈 숫자는 빠지는데 카드는 「보완 요청」·「기한 지남」으로 남아 둘이 어긋났다★.
+     이제 impJudge 가 완료 제출일로 보완본을 알아보므로 카드와 숫자가 같은 값(status)을 본다 —
+     원장 조회(notifyResubNos)는 없앴다.
    옛 서식(status 없음)은 종전 그대로다. */
-function badgeTodo(it, resub) {
+function badgeTodo(it) {
   if (!it) return false;
   const st = String(it.status == null ? '' : it.status);
   if (!st) return it.state !== '완료';
   if (it.waive === true || st === '확정') return false;
-  if (st === '반려' || st === '재제출기한 지남') return !(resub && resub[it.no]);
+  if (st === '반려' || st === '재제출기한 지남') return true;
   return it.state !== '완료';
 }
 
@@ -2691,7 +2691,7 @@ function badgeTodo(it, resub) {
 
    ★무엇을 적나★ — 매장이 개선요청을 처음 완료로 올렸을 때(검수대기)와, 보완 요청(반려)을
      받은 뒤 다시 올렸을 때(재제출) 두 가지뿐이다. 관리자 홈 종이 「열림」 줄을 센다(notify.admin).
-   ★언제 닫나★ — 검수(개선확정·보완 요청·다시 보완 요청·점수 제외)를 하거나 매장이 완료를
+   ★언제 닫나★ — 검수(개선확정·보완 요청·미조치 처리·점수 제외)를 하거나 매장이 완료를
      취소하면 그 줄을 「처리」로 바꾼다. 지우지 않고 바꾸는 이유는 「언제 올렸고 언제 봤나」가
      시트에 남게 하려는 것이다.
    ★10월 탭(2610)부터만★ — 9월 이전은 수기·옛 서식이라 검수 칸이 없어 닫을 길이 없다.
@@ -2848,22 +2848,12 @@ function notifyOpenAll() {
   return out;
 }
 
-/* 그 매장·월에 열린 「재제출」 알림의 번호표 {번호: true}. 실패하면 빈 표(= 배지는 종전처럼 센다). */
-function notifyResubNos(store, ym) {
-  const out = {};
-  try {
-    const head = normStore(store) + '|' + auditTxt(ym) + '|';
-    notifyOpenAll().forEach(function (it) {
-      if (it.kind === '재제출' && notifyKey(it.store, it.ym, it.no).indexOf(head) === 0) out[it.no] = true;
-    });
-  } catch (e) { }
-  return out;
-}
+/* (2026-09-17 notifyResubNos 삭제 — 배지가 보완본을 상태로 알아보게 되어 원장 조회가 필요 없다 · badgeTodo 주석) */
 
 /* 매장 저장 한 번을 보고 알림을 적거나 닫는다 — fnStoreSave가 ★저장이 끝난 뒤★ 부른다.
      before/after = 저장 전·후 완료 칸(N) 글 · audit = 저장 전 검수 칸 값 · photo = 개선 후 사진을 바꿨나
    ① 채워져 있던 완료 칸이 비었다 → 열린 알림 처리(매장이 완료 취소)
-   ② 반려·재반려였고 완료 칸이 채워져 있으며 글이나 사진이 바뀌었다 → 재제출
+   ② 반려·재반려(미조치 처리)였고 완료 칸이 채워져 있으며 글이나 사진이 바뀌었다 → 재제출
    ③ 비어 있던 완료 칸이 채워졌다 → 검수대기
    ★②를 ③보다 먼저 본다★ — 보완 요청 뒤 완료 칸을 비웠다가 다시 채운 것도 「다시 올린 것」이다.
    돌려주는 값은 한 일의 이름('' = 아무것도 안 함). */
@@ -3800,6 +3790,20 @@ function msConvert(a) {
   return null;
 }
 
+/* ★제출 점수는 서버가 받은 답으로 다시 센다★ (2026-09-17 최종검수 J51)
+   종전에는 앱이 보낸 p.result.score·answered 를 그대로 적었다. 그 숫자는 화면에서 계산한 것이라
+   요청 본문만 고치면 답과 상관없는 점수가 MS_상세·통합시트·매장 파일로 흘러갔다(고객 설문 경로는 로그인도 없다).
+   규칙은 앱 Scoring.shopperScore(js/scoring.js)와 같다 — 점수 = 환산 합 ÷ 응답 수 × 100, 무응답·NA 는 뺀다.
+   ★받은 답만으로 센다★ — 키오스크로 뺀 문항은 앱이 애초에 보내지 않는다(activeQs). 답이 없으면 score=null. */
+function msScoreOf(answers) {
+  let sum = 0, n = 0;
+  (Array.isArray(answers) ? answers : []).forEach(function (a) {
+    const v = msConvert(a && a.answer);
+    if (v != null) { sum += v; n++; }
+  });
+  return { score: n ? (sum / n) * 100 : null, answered: n };
+}
+
 /* 사람이 읽을 유형 이름 */
 function msKindOf(scale) {
   const s = String(scale || '').toLowerCase();
@@ -4066,7 +4070,9 @@ function saveShopper(ss, p, ctx, isSurvey) {
      비고가 없는 문항도 한 줄씩 남긴다(QSC_상세가 74문항을 다 남기는 것과 같다) —
      '답을 안 한 것'과 '기록이 없는 것'을 구별할 수 있어야 한다. */
   const sh = sheet(ss, MS_DETAIL, MS_HEADER.slice(0));
-  const total = p.result.score == null ? '' : round1(p.result.score);
+  /* ★p.result 의 숫자는 쓰지 않는다★ — 받은 답으로 서버가 센다 (msScoreOf 주석 · J51) */
+  const sc = msScoreOf(p.answers);
+  const total = sc.score == null ? '' : round1(sc.score);
   const rows = p.answers.map(function (a) {
     const conv = msConvert(a.answer);
     return safeRow([
@@ -4074,7 +4080,7 @@ function saveShopper(ss, p, ctx, isSurvey) {
       a.answer == null ? '' : a.answer,
       conv == null ? '' : conv,             // 점수 — 문항 환산값 (0~1)
       a.memo || '',
-      p.submittedAt, route, total, p.result.answered,
+      p.submittedAt, route, total, sc.answered,
       p.overall || '', p.demographic || '', p.order || '',
       /* ★주문방법★ — 「일부만 키오스크」 매장에서만 값이 온다. 서버는 판정하지 않고
          손님이 고른 사실을 그대로 남긴다(문항을 뺄지 정하는 것은 앱이다). */
@@ -4099,7 +4105,7 @@ function saveShopper(ss, p, ctx, isSurvey) {
 
   // 통합시트 CS 칸 + 매장 파일 CS점수: 같은 달 쇼퍼가 여러 명이면 "해당 월 평균"으로 기록
   const extra = { dashboard: null, storeFile: null };
-  if (DASHBOARD_ID && p.result.score != null) {
+  if (DASHBOARD_ID && sc.score != null) {
     const avg = shopperMonthAvg(sh, p.store, p.date, ss.getSpreadsheetTimeZone());
     /* dashboard와 storeFile의 catch를 분리한다 — 합쳐 두면 매장 파일 실패가
        성공한 dashboard 결과를 오류로 덮어써 원인을 잘못 보게 된다. */
@@ -4231,7 +4237,7 @@ function fnDashboard(ctx, payload, target) {
   const key = periodKey(payload && payload.period);
   if (!key) return err('BAD_REQUEST', '기간이 올바르지 않습니다.');
   const raw = dashRaw(key);
-  if (!raw) return err('SERVER_ERROR', '전체 대시보드를 불러오지 못했습니다.');
+  if (!raw) return err('SERVER_ERROR', '통합시트를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
 
   /* 캐시에는 투영 전 원본을 담고, 투영은 응답 직전에 한다. 역할별로 캐시 키를 나누지 않는다 —
      키 설계 실수 하나가 곧 타 매장 유출이다. mine은 오직 ctx.stores로 판정한다. */
@@ -4904,7 +4910,7 @@ function readStoreTab(ss, sh, store, ym) {
       : (frz ? { state: frz, why: '' }
              : impJudge({
                  audit: at(v, g.audit), redo: at(v, g.redo), doneNote: n, plan: m,
-                 planRaw: at(v, g.plan), due: at(v, g.due),
+                 planRaw: at(v, g.plan), due: at(v, g.due), sub: g.roll ? at(v, g.roll) : '',
                }, today, tz, ym, false));
     if (g.isNew) {
       judged.push({ state: jd.state, waive: at(v, g.waive) === true });
@@ -4938,9 +4944,12 @@ function readStoreTab(ss, sh, store, ym) {
          어느 건을 뺐는지 알 수 없었다 — 「미조치」로만 보였다. */
       waive: (g.isNew && g.waive) ? (at(v, g.waive) === true) : false,   // ★점수 계산(3960행)과 같은 판정이어야 한다★
       redo: g.isNew ? (dateOfCell(at(v, g.redo), tz) || null) : null,
+      /* ★보완 요청 뒤 보완본이 올라왔는가★ (2026-09-17 J9) — 본사 검수 화면이 「보완본이 올라왔습니다」를
+         적는 근거다. 화면이 완료 칸·검수 칸을 보고 다시 판정하지 않게 서버가 준다. 확정된 달은 false. */
+      resub: !!(jd && jd.resub),
       /* 기한이 지난 미완료 건 — 요약·하단바 「기한 지남 N건」과 홈 배지(notify.badge)가 센다.
          화면은 다시 판정하지 않는다. 카드 글자는 status(statusLabel)가 맡는다. */
-      overdue: !!(jd && (jd.state === '기한 지남' || jd.state === '재제출기한 지남' || jd.state === '미조치')),
+      overdue: !!(jd && impOverdue(jd.state)),
       /* isNew는 여기서 붙이지 않는다 — 이 응답은 매장·월 단위로 캐시되는데(store:v…),
          NEW 여부는 '보는 사람의 최근접속'에 달려 있다. 캐시에 담으면 먼저 연 사람의
          기준선이 다음 사람에게 그대로 간다. fnStoreGet이 캐시 뒤에 붙인다(readOnly와 같은 이유). */
@@ -5292,14 +5301,12 @@ function fnStoreSave(ctx, payload, target) {
        (스크립트가 보호 편집자여야 애초에 기록을 할 수 있기 때문이다).
        그래서 여기서 한 번 더 막는다 — 안 그러면 확정 뒤에도 앱으로 고칠 수 있고,
        §1-7⑪ '확정 후 점수 불변'이 말뿐이 된다. ★검수에서 실제로 뚫렸다.★
-       (종전: 이월된 줄만 열었다 — 그 건이 다음 달로 넘어가 아직 답할 것이 남았기 때문이었다 §1-8) */
+       (종전: 이월된 줄만 열었다 — 그 건이 다음 달로 넘어가 아직 답할 것이 남았기 때문이었다 §1-8)
+       ★이월 예외를 뺐다★ (2026-09-17) — 「이월」 칸에는 이제 완료 제출일(날짜)이 들어간다. 종전 검사
+         `Number(이월 칸) >= 1` 을 남겨 두면 ★날짜가 든 줄이 전부 확정 뒤에도 열린다★. */
     if (g.isNew && monthClosedAt(ss, ym)) {
-      const rc = grid(sh, r, g.roll, 1, 1);
-      const rolled = rc ? Number(rc.getValue() || 0) : 0;
-      if (!(rolled >= 1)) {
-        return err('FORBIDDEN', ym.slice(0, 2) + '/' + ym.slice(2) +
-          ' 채점이 확정되어 이 항목은 더 고칠 수 없습니다.');   // 「다음 점검에서 확인」은 봐주는 말로 읽혀 뺐다 (2026-09-15 담당자)
-      }
+      return err('FORBIDDEN', ymLabel(ym) +
+        ' 채점이 확정되어 이 항목은 더 고칠 수 없습니다.');   // 「다음 점검에서 확인」은 봐주는 말로 읽혀 뺐다 (2026-09-15 담당자)
     }
 
     // 현재 개선요청~개선 후 6칸 재읽기 → rev 비교
@@ -5318,14 +5325,16 @@ function fnStoreSave(ctx, payload, target) {
 
     /* ★관리자 알림(종) 판정에 쓸 저장 전 검수 값★ — 검수 칸은 새 서식(2610~)에만 있다.
        사본 시험(fileId)·옛 서식·9월 이전 탭은 알림을 아예 보지 않는다(noteAudit=null).
-       읽기가 실패해도 저장은 계속한다 — 검수 값만 빈 것으로 본다. */
-    let noteAudit = null;
-    if (!testId && g.isNew && g.audit && ym >= NOTIFY_FROM_YM) {
-      noteAudit = '';
+       읽기가 실패해도 저장은 계속한다 — 검수 값만 빈 것으로 본다.
+     ★같은 한 번의 읽기로 완료 제출일 칸(옛 「이월」)도 본다★ (2026-09-17 J1·J9 · impSubOnSave) —
+       사본 시험 경로에서도 적는다(그래야 10/1 전에 돌려 볼 수 있다). 못 읽으면 제출일은 건드리지 않는다. */
+    let noteAudit = null, beforeRow = null;
+    if (g.isNew && g.audit) {
       try {
-        const ac = grid(sh, r, g.audit, 1, 1);
-        if (ac) noteAudit = ac.getValue();
-      } catch (e) { Logger.log('알림용 검수 칸 읽기 실패: ' + String(e)); }
+        const br = grid(sh, r, 2, 1, Math.max(14, g.last - 1));
+        if (br) beforeRow = br.getValues()[0];
+      } catch (e) { Logger.log('저장 전 검수 칸 읽기 실패: ' + String(e)); }
+      if (!testId && ym >= NOTIFY_FROM_YM) noteAudit = beforeRow ? beforeRow[g.audit - 2] : '';
     }
 
     /* 사진 — 교체·삭제면 이전 드라이브 파일을 실제로 지운다 (안 하면 고아 파일이 쌓인다).
@@ -5361,11 +5370,38 @@ function fnStoreSave(ctx, payload, target) {
       if (oRng) oRng.setValue(photoCell);
     }
 
+    /* ★완료 제출일★ (2026-09-17 J1·J9) — 기한 뒤에 올린 완료를 가르는 근거. 규칙은 impSubOnSave 주석.
+       제출일을 못 적어도 저장은 이미 끝났다 — 그 건은 제출일이 비어 「기한 안」으로 보인다(매장에 불리하지 않은 쪽). */
+    const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+    if (g.isNew && g.roll && beforeRow) {
+      try {
+        const subPut = impSubOnSave(cell(curV[4], tz), texts.doneNote, beforeRow[g.audit - 2],
+          beforeRow[g.roll - 2], photoCell !== null, today);
+        if (subPut !== null) grid(sh, r, g.roll, 1, 1).setValue(subPut);
+      } catch (e) { Logger.log('완료 제출일 기록 실패: ' + String(e)); }
+    }
+
     // 재읽기해서 rev·item 구성 — ★쓴 값으로 계산하면 안 된다★ (safe()의 아포스트로피 때문)
-    const after = grid(sh, r, g.body, 1, 6);
-    const aV = after.getValues()[0];
-    const aF = after.getFormulas()[0];
+    /* 한 줄(B~끝)을 한 번에 읽는다 — J~O 6칸은 그 안에서 자른다(옛 서식이면 B~O라 종전과 같은 칸이다) */
+    const after = grid(sh, r, 2, 1, Math.max(14, g.last - 1));
+    const rowV = after.getValues()[0];
+    const rowF = after.getFormulas()[0];
+    const aV = rowV.slice(g.body - 2, g.body + 4);
+    const aF = rowF.slice(g.body - 2, g.body + 4);
     const item = itemOf(no, aV, aF, tz, ym);
+    /* ★새 서식이면 상태도 판정해 담는다★ (2026-09-17 J9) — 종전에는 상태를 안 실어 카드가 저장 전 상태로
+       남았다(완료를 올려도 「진행 중」, 보완본을 올려도 「보완 요청」). store.get 과 같은 impJudge·impOverdue 다. */
+    if (g.isNew) {
+      const atr = function (col) { return col ? rowV[col - 2] : ''; };
+      const jd = impJudge({
+        audit: atr(g.audit), redo: atr(g.redo), sub: atr(g.roll), doneNote: item.doneNote,
+        plan: atr(g.plan), planRaw: atr(g.plan), due: atr(g.due),
+      }, today, tz, ym, false);
+      item.status = jd.state;
+      item.statusWhy = jd.why || '';
+      item.resub = !!jd.resub;
+      item.overdue = impOverdue(jd.state);
+    }
 
     const summary = recountSummary(sh, tz);
     try {
@@ -5396,6 +5432,8 @@ function capText(v) { return String(v == null ? '' : v); }
    ★2026-09-15 due·overdue·overdueDays 는 뺐다★ — 예정일을 안 보게 되어 overdue 는 상태(기한)로만
    정해지는데 이 함수는 상태를 판정하지 않는다. 빠진 칸은 화면이 직전 값을 유지하고,
    완료로 저장되면 화면이 overdue 를 내린다(store-app.js mergeItem).
+   ★2026-09-17 부터 새 서식 저장은 fnStoreSave 가 status·statusWhy·resub·overdue 를 덧붙인다★ (J9) —
+   이 함수는 여전히 판정하지 않는다(CONFLICT 응답은 J~O 6칸만 있어 판정할 수 없다).
    ★cat·text·beforePhotos(B~D열)는 담지 않는다★ — 이 함수가 받는 것은 J~O 6칸이고, 그 칸들은
    본사 몫이라 저장으로 바뀌지 않는다. 화면이 '서버가 보낸 칸만' 덮어쓰므로 직전 값이 남는다. */
 function itemOf(no, v /* J~O */, f, tz, ym) {
@@ -5437,9 +5475,10 @@ function recountSummary(sh, tz) {
       const n = String(at(v, g.done) == null ? '' : at(v, g.done)).trim();
       const jd = impJudge({
         audit: at(v, g.audit), redo: at(v, g.redo), doneNote: n, plan: m,
-        planRaw: at(v, g.plan), due: at(v, g.due),
+        planRaw: at(v, g.plan), due: at(v, g.due), sub: g.roll ? at(v, g.roll) : '',
       }, today, tz, ym, false);
       judged.push({ state: jd.state, waive: at(v, g.waive) === true });
+      /* '기한 후 완료'는 완료로도 진행으로도 세지 않는다(미조치 칸) — 개선율 분자와 같다 (2026-09-17 J1) */
       if (jd.state === '확정' || jd.state === '완료(검수 전)') done++;
       else if (jd.state === '진행중' || jd.state === '반려' || jd.state === '재제출기한 지남') prog++;
     } else {
@@ -5671,7 +5710,7 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   const colJRange = grid(sh, headRow + 1, 10, scan || 200, 1);
   const colJ = colJRange ? colJRange.getValues() : [];
   /* ── 같은 회차 재제출이면 이전 기록을 지우고 새로 쓴다 ─────────────────────
-     ★매장이 이미 뭔가 적었으면 절대 지우지 않는다★ — K~O(담당부서·담당자·예정일·완료·사진)는
+     ★매장이 이미 뭔가 적었으면 절대 지우지 않는다★ — K~P(담당부서·담당자·예정일·완료·사진·비고)는
        매장 몫이다. 본사 몫(B·C·D·J)만 갈아 끼우면 행 번호는 그대로인데 내용이 바뀌어,
        매장이 적어 둔 개선 결과가 ★엉뚱한 지적사항에 붙는다★. 그러면 아무도 눈치채지 못한다.
        그래서 그 경우에는 쓰지 않고 사유를 돌려준다 — 조용히 지우는 것이 가장 나쁘다. */
@@ -5680,14 +5719,15 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
     (!p.time || !prevDate.time || prevDate.time === timeKeyOf(p.time, fileTz(ss))));
   if (sameRound) {
     const bodyN = Math.max(0, lastRow - headRow);
-    const bodyR = grid(sh, headRow + 1, 2, bodyN, 14);   // B~O
+    const sc = storeShareCols(IC);                        // 매장 몫 K~P — improveScan 과 같은 범위 (2026-09-17 J52)
+    const bodyR = grid(sh, headRow + 1, 2, bodyN, Math.max(9, sc.c1 - 1));   // B~P
     const body = bodyR ? bodyR.getValues() : [];
     let filled = 0, storeTouched = 0;
     for (let i = 0; i < body.length; i++) {
       const hasHq = String(body[i][8] == null ? '' : body[i][8]).trim() !== '';   // J열(본문)
       if (!hasHq) continue;
       filled = i + 1;
-      for (let c = 9; c <= 13; c++) {                                             // K~O(매장 몫)
+      for (let c = sc.c0 - 2; c <= sc.c1 - 2; c++) {                              // K~P(매장 몫)
         if (String(body[i][c] == null ? '' : body[i][c]).trim() !== '') { storeTouched++; break; }
       }
     }
@@ -6367,8 +6407,9 @@ function fnMergeAuth(ctx, payload) {
 
 /* ═══ 월말 반영 — 매장 파일 MS점수를 그 달 말일 23시에 연다 ═══════════════════
    (2026-09-04 담당자 결정) 매장은 MS가 월 1회인 것을 안다. 제출 즉시 점수가 보이면
-   「이번 달 끝났다」로 읽고 남은 날 응대가 느슨해질 수 있다. 그래서 ★매장이 보는 곳만★ 늦춘다.
-   통합시트(본사)는 즉시 쓴다 — 본사는 월중에도 다 본다.
+   「이번 달 끝났다」로 읽고 남은 날 응대가 느슨해질 수 있다. 그래서 MS점수를 늦춘다.
+   ★통합시트도 같은 가드(monthClosed)로 말일에 함께 쓴다★ — 통합시트가 웹에 공개라 매장도 보기 때문이다
+   (「통합시트(본사)는 즉시 쓴다」는 2026-09-04 당일 뒤집힌 옛 설계). 본사는 월중에 「잠정 MS」로 본다.
 
    ★점검이 20일에 끝나도 말일에 열린다★ — 그것이 이 장치의 요점이다. 사람이 "끝났으니 지금
    넣자"고 판단할 여지를 없애려고 시각을 못 박았다. 그래서 기본 입구는 ★시간 트리거★다.
@@ -7972,9 +8013,20 @@ function fnMsMonthOpen(ctx, payload) {
      그 달에 남는 자료가 하나도 없으면 → 그 달 탭을 통째로 지운다 (원래 없던 상태로 돌아간다)
      남는 자료가 있으면              → ★건드리지 않고 손으로 정리하라고 알린다★
    회차가 여럿 섞인 탭에서 한 회차분만 골라내는 것은 조용히 틀리기 쉽다. 틀리느니 멈춘다. */
+/* 매장 몫 열 범위 {c0, c1} — ★담당부서~비고(K~P)★ (2026-09-17 최종검수 J52)
+   종전에는 K~O 로 박혀 있어 ★비고(P)만 적은 줄은 「매장이 안 건드린 줄」로 보였고, 되돌리기도 P를 남겼다★.
+   비고는 매장 몫이다(storeCellsIn 보호 범위 · impCols 의 dept~memo). 머리글로 찾은 자리를 쓰되,
+   개선요청 본문이 J(10)가 아닌 표(2601~2604 옛 서식 등)는 아래 쓰는 곳들이 J를 박아 두었으므로
+   섞지 않고 종전 자리 K~P(11~16)로 둔다. improveScan · wipeImprove · writeStoreQscInto 가 같이 쓴다. */
+function storeShareCols(IC) {
+  if (IC && IC.ok && IC.body === 10 && IC.dept && IC.memo && IC.memo >= IC.dept) return { c0: IC.dept, c1: IC.memo };
+  return { c0: 11, c1: 16 };
+}
+
 /* 개선요청 표를 비운다 — 본사 몫인 B(기한)·D(사진)·J(문장)만.
    ★C는 건드리지 않는다★ — 상태 수식이 들어 있고, 지우면 그 줄만 영원히 빈 상태가 된다.
-   ★K~O도 건드리지 않는다★ — 매장 몫이다(담당부서·담당자·진행/완료 내용·개선 후 사진).
+   ★K~P도 건드리지 않는다★ — 매장 몫이다(담당부서·담당자·진행/완료 내용·개선 후 사진·비고).
+   (⚠아래 wipeImprove 주석 — 2026-08-27 부터 되돌리기는 매장 몫도 함께 지운다. 이 두 줄은 종전 설계다)
    ★매장이 이미 적은 줄이 하나라도 있으면 아무것도 지우지 않고 그 사실을 돌려준다★ —
      본사의 실수를 되돌리면서 매장이 한 일을 지우면 안 된다.
      기록 경로(writeStoreQscInto의 재제출 처리)가 쓰는 판정과 같은 규칙이다. */
@@ -7997,14 +8049,15 @@ function improveScan(sh) {
 
   const lastRow = tableEndRow(sh) || sh.getMaxRows();
   const bodyN = Math.max(0, lastRow - headRow);
-  const out = { ok: true, headRow: headRow, newFmt: newFmt, IC: IC, filled: 0, touched: 0 };
+  const sc = storeShareCols(IC);
+  const out = { ok: true, headRow: headRow, newFmt: newFmt, IC: IC, filled: 0, touched: 0, sc: sc };
   if (!bodyN) return out;
-  const bodyR = grid(sh, headRow + 1, 2, bodyN, 14);   // B~O
+  const bodyR = grid(sh, headRow + 1, 2, bodyN, Math.max(9, sc.c1 - 1));   // B~매장 몫 끝(P)
   const body = bodyR ? bodyR.getValues() : [];
   for (let i = 0; i < body.length; i++) {
     if (String(body[i][8] == null ? '' : body[i][8]).trim() === '') continue;   // J열(본문)이 비면 빈 줄
     out.filled = i + 1;
-    for (let c = 9; c <= 13; c++) {                                             // K~O(매장 몫)
+    for (let c = sc.c0 - 2; c <= sc.c1 - 2; c++) {                              // K~P(매장 몫)
       if (String(body[i][c] == null ? '' : body[i][c]).trim() !== '') { out.touched++; break; }
     }
   }
@@ -8031,9 +8084,10 @@ function wipeImprove(sh) {
   const bcW = grid(sh, s.headRow + 1, s.newFmt ? s.IC.due : 2, s.filled, s.newFmt ? 1 : 2);
   const dW = grid(sh, s.headRow + 1, 4, s.filled, 1);
   const jW = grid(sh, s.headRow + 1, 10, s.filled, 1);
-  /* K~O = 매장 몫(예정일·완료일·개선 후 사진 등). improveScan 이 '매장이 손댔는가'를
-     판정할 때 보는 칸과 ★같은 범위★여야 한다(그 함수의 9~13번 자리 = K~O). */
-  const koW = grid(sh, s.headRow + 1, 11, s.filled, 5);
+  /* K~P = 매장 몫(담당부서·담당자·진행·완료·개선 후 사진·비고). improveScan 이 '매장이 손댔는가'를
+     판정할 때 보는 칸과 ★같은 범위★여야 한다 — 그래서 그 함수가 쓴 범위(s.sc)를 그대로 받는다.
+     ★비고(P)도 지운다★ (2026-09-17 J52) — 종전에는 K~O 만 지워 비고가 다음 회차 엉뚱한 줄에 남았다. */
+  const koW = grid(sh, s.headRow + 1, s.sc.c0, s.filled, s.sc.c1 - s.sc.c0 + 1);
   if (bcW) bcW.clearContent();
   if (dW) dW.clearContent();
   if (jW) jW.clearContent();
@@ -8972,8 +9026,9 @@ function impGeo(sh) {
       due: c.due, state: c.state, before: c.before, body: c.body,
       dept: c.dept, owner: c.dept + 1, plan: c.plan, done: c.done,
       after: c.after, memo: c.memo,
-      audit: c.audit, redo: c.redo, waive: c.waive, roll: c.roll,
-      last: Math.max(c.memo, c.roll || 0),
+      audit: c.audit, redo: c.redo, waive: c.waive, roll: c.roll,   // roll = 옛 「이월」 칸 = 완료 제출일 (2026-09-17)
+      /* 한 줄을 읽을 때 끝 열 — 검수·재제출기한·감점제외까지 반드시 들어가게 (이월 칸이 빠진 탭이어도) */
+      last: Math.max(c.memo, c.roll || 0, c.waive || 0, c.redo || 0, c.audit || 0),
     };
   }
   /* 옛 서식(2609 이하) — 종전에 박혀 있던 그 숫자들이다 */
@@ -9031,27 +9086,53 @@ function impFindRow(sh, g, no) {
    못박으면 매장이 그 뒤로 아무것도 하지 않는다.
    final=true(월 채점 확정)일 때만 미조치가 된다 — ★그때는 완료가 아닌 건이 전부 미조치다★.
    다음 달로 넘기는 이월은 없다(2026-09-15 담당자 — 월별 평가). 기한이 남은 건이 있으면
-   fnMonthClose 가 먼저 멈춰 묻고, 담당자가 그래도 마감하면(force) 그 건도 미조치로 친다. */
+   fnMonthClose 가 먼저 멈춰 묻고, 담당자가 그래도 마감하면(force) 그 건도 미조치로 친다.
+
+   ★기한 뒤에 올린 완료는 완료로 치지 않는다★ (2026-09-17 최종검수 J1 · 담당자 *"기한이 지나도 개선완료를
+     시키긴 해야하는데 기한 내에 못한건 완료로 치는게 아니니 개선율이 올라가면 안됨"*)
+     매장은 기한 뒤에도 완료 내용을 저장할 수 있다(막지 않는다). 다만 그 건은 '기한 후 완료'이고,
+     impRate 가 완료로 세지 않으며, 월 채점 확정(final) 때는 '미조치'로 굳는다(완료가 아닌 건은 미조치).
+     판단 근거는 ★완료 제출일★(r.sub — 옛 「이월」 칸 · impSubOnSave 주석)과 기한이다.
+       기한 = 보완 기한(재제출기한)이 적혀 있으면 그것, 없으면 조치기한. 기한 당일까지는 기한 안이다.
+     ★제출일이 비어 있으면 기한 안으로 본다★ — 이 규칙 전에 올린 완료는 날짜 기록이 없다.
+       모르는 것을 늦었다고 단정하지 않는다.
+
+   ★보완 요청 뒤 다시 올린 건은 「완료(검수 전)」다★ (J9) — 보완 요청(반려) 때 제출일 칸을 비우므로,
+     반려 건에 제출일이 있으면 그것이 보완본이다. 보완 기한 안에 올렸으면 기한 안 완료이고,
+     ★본사가 다시 보기 전까지 「기한 지남」으로 바뀌지 않는다★. 보완 기한 뒤에 올렸으면 '기한 후 완료'.
+     종전에는 반려인 동안 완료 칸을 안 봐서, 다시 올려도 카드가 「보완 요청」→「기한 지남」으로 갔다. */
 function impJudge(r, today, tz, ym, final) {
   const S = function (v) { return String(v == null ? '' : v).trim(); };
   const audit = S(r.audit);
   const doneNote = S(r.doneNote);
   const plan = S(r.plan);
+  const due = r.due ? dateOfCell(r.due, tz) : '';
+  const redo = r.redo ? dateOfCell(r.redo, tz) : '';
+  /* ★날짜 모양일 때만 쓴다★ — 시트 수식의 ISNUMBER 와 같은 뜻. 옛 이월 표시(숫자 1)가 남은 칸을 날짜로 읽지 않는다 */
+  const D = function (s) { return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : ''; };
+  const sub = (doneNote && r.sub) ? D(dateOfCell(r.sub, tz)) : '';
+  const limit = D(redo) || D(due);
+  const late = !!(sub && limit && sub > limit);
+  const lateWhy = (D(redo) ? '보완 기한 ' : '조치기한 ') + limit + ' 이 지난 뒤 완료했습니다 — 개선율에는 넣지 않습니다';
 
-  if (audit === '재반려') return { state: '미조치', why: '재제출한 뒤에도 다시 반려되었습니다' };
+  /* '재반려' = 「미조치 처리」 버튼 (J16 · 보완 요청은 한 번만). 값 이름은 옛 탭의 검수 목록과 맞추려고 그대로 둔다 */
+  if (audit === '재반려') return { state: '미조치', why: '보완 요청 뒤 미조치로 처리되었습니다' };
   if (audit === '반려') {
-    const redo = r.redo ? dateOfCell(r.redo, tz) : '';
+    if (sub) {   // 보완본이 올라왔다
+      if (late) return { state: final ? '미조치' : '기한 후 완료', why: lateWhy, redo: redo || null, resub: true, late: true };
+      return { state: '완료(검수 전)', why: '', redo: redo || null, resub: true };
+    }
     if (redo && redo < today) {
-      return { state: final ? '미조치' : '재제출기한 지남', why: '재제출기한 ' + redo + ' 이 지났습니다', redo: redo };
+      return { state: final ? '미조치' : '재제출기한 지남', why: '보완 기한 ' + redo + ' 이 지났습니다', redo: redo };
     }
     if (final) return { state: '미조치', why: '보완 기한 전에 마감했습니다', redo: redo || null };
     return { state: '반려', why: '', redo: redo || null };
   }
+  if (late) return { state: final ? '미조치' : '기한 후 완료', why: lateWhy, due: due || null, late: true };
   if (audit === '확정') return { state: '확정', why: '' };
   if (doneNote) return { state: '완료(검수 전)', why: '' };
 
   /* ★기한이 먼저다★ — 진행 내용을 적었어도 조치기한이 지났으면 '기한 지남'이다 (2026-09-15 담당자) */
-  const due = r.due ? dateOfCell(r.due, tz) : '';
   if (due && due < today) {
     return { state: final ? '미조치' : '기한 지남', why: '조치기한 ' + due + ' 이 지났습니다', due: due };
   }
@@ -9064,6 +9145,8 @@ function impJudge(r, today, tz, ym, final) {
 
      분모 = 발행 − 감점제외
      분자 = 완료(검수 전) + 확정
+            ★'기한 후 완료'는 분자에 없다★ (2026-09-17 J1) — 기한 뒤에 올린 완료는 완료로 치지 않는다.
+            분모에는 그대로 남는다(impJudge 주석).
 
    ★발행이 0건이면 1(100%)이다★ — 개선할 것이 없었다는 뜻이므로 만점이 맞다.
      0으로 치면 지적이 하나도 없는 매장이 종합점수 10%를 통째로 못 받아 오히려 손해를 본다.
@@ -9088,6 +9171,32 @@ function impRate(recs) {
        분모가 0이면(발행은 있는데 전부 감점제외) 이 달에 따질 것이 없으므로 만점이 맞다. */
     rate: issued === 0 ? null : (denom > 0 ? Math.round((done / denom) * 100) / 100 : 1),
   };
+}
+
+/* 날짜가 지나 빨갛게 올릴 상태인가 — 요약·하단바 「기한 지남 N건」과 홈 배지가 센다.
+   ★store.get(readStoreTab)과 저장 응답(fnStoreSave)이 이 한 곳을 같이 쓴다★ — 두 벌이면 갈라진다.
+   '기한 후 완료'는 넣지 않는다 — 매장이 할 일이 남은 건이 아니다. */
+function impOverdue(state) {
+  return state === '기한 지남' || state === '재제출기한 지남' || state === '미조치';
+}
+
+/* ★완료 제출일★ — 매장 저장 한 번을 보고 제출일 칸(옛 「이월」 칸)에 무엇을 쓸지 정한다 (2026-09-17 J1·J9)
+     돌려주는 값: null = 건드리지 않는다 · '' = 비운다 · today = 오늘로 적는다
+   ① 완료 칸을 비웠다                            → 비운다 (매장이 완료를 거둬들였다)
+   ② 빈 완료 칸을 채웠다                         → 오늘 (처음 올린 날)
+   ③ 보완 요청(반려) 뒤 글·사진을 바꿔 다시 올렸고 제출일이 비어 있다 → 오늘 (보완본을 처음 올린 날)
+      — 보완 요청 때 fnImproveAudit 가 이 칸을 비운다. 그래서 반려 건의 제출일 = 보완본 제출일이다.
+   그 밖(이미 올린 완료 문구를 고쳐 저장 등)은 ★건드리지 않는다★ — 「처음 올린 날」이 기준이다.
+   ★이 규칙 전에 올린 완료(제출일 없음)에는 새로 날짜를 박지 않는다★ — 고쳐 저장했다고 오늘로
+     찍으면 기한 안에 한 일이 늦은 일로 뒤집힌다. 판단 기준은 notifyOnSave 의 재제출 판정과 같다. */
+function impSubOnSave(before, after, audit, sub0, photo, today) {
+  const S = function (v) { return String(v == null ? '' : v).trim(); };
+  const b = S(before), a = S(after), au = S(audit);
+  const has = S(sub0) !== '';
+  if (!a) return has ? '' : null;
+  if (!b) return today;
+  if (au === '반려' && !has && (b !== a || photo)) return today;
+  return null;
 }
 
 /* 개선율 칸에 무엇을 보일 것인가 — ★빈칸의 두 가지 뜻을 가른다★ (2026-09-16 담당자 결정)
@@ -9117,6 +9226,16 @@ function rateShown(sh, lm, rate) {
      C  구분 → 상태   대분류는 2026-08-20에 이미 비우기로 했다(매장은 질문지를 모른다)
      비고 뒤에 넷  검수 · 재제출기한 · 감점제외 · 이월   ← 뒤 둘은 열째 숨긴다
    매장이 쓰던 담당부서~비고는 ★자리가 그대로다★ — 보호 범위(storeCellsIn)도 그대로다.
+
+   ★「이월」 칸은 이제 ★완료 제출일★을 담는다★ (2026-09-17 최종검수 J1·J9)
+     이월은 2026-09-15 에 없앴고(월별 평가) 칸만 숨은 채 비어 있었다. 기한 뒤에 올린 완료를 가르려면
+     「언제 올렸나」가 시트에 남아야 하는데, ★원본 탭 칸 구성을 바꾸지 않으려고★ 그 빈 칸을 쓴다.
+     머리글 글자는 그대로 「이월」이다(바꾸면 26곳 원본 탭을 고쳐야 한다) — 코드는 이 칸을 g.roll 로 부른다.
+     쓰는 곳: fnStoreSave(impSubOnSave) · 비우는 곳: 보완 요청(fnImproveAudit) · 제출 되돌리기(wipeImprove).
+     읽는 곳: impJudge(r.sub) · 상태 수식(impStateFormula)이 같은 순서로 본다.
+   ★검수 칸의 '재반려'는 「미조치 처리」다★ (2026-09-17 J16 · 보완 요청은 한 번만) — 값 이름을 바꾸지 않은
+     이유: 이미 만든 탭의 검수 칸 입력규칙이 ['확정','반려','재반려'] 이고 「거부」로 걸려 있어, 새 이름을
+     쓰면 그 탭에서 쓰기가 막힌다. 화면·안내 글만 「미조치 처리」로 적는다.
 
    ★복제가 끝난 다음에 부른다★ — makeMonthTabIn은 지난 달 탭을 그대로 베낀다.
      9월 탭은 문수가 손으로 8월을 복사해 만드므로 옛 서식이다. 새 칸이 이미 있다고
@@ -9199,18 +9318,30 @@ function impCols(sh) {
    적었어도 '기한 지남'이다. 매장이 진행 내용에 적는 예정일은 보지 않는다
    (2026-09-15 담당자 *"그냥 기한을 넘냐 안넘느냐만 보면 되잖아"*).
    ★'미조치' 판정은 서버가 한다★(월 채점 확정 때 이 칸을 값으로 덮어쓴다).
-   기한만 지난 건은 '기한 지남'으로 적는다 — 사람을 탓하는 말이 아니라 날짜를 말하는 말이다. */
+   기한만 지난 건은 '기한 지남'으로 적는다 — 사람을 탓하는 말이 아니라 날짜를 말하는 말이다.
+   ★완료 제출일(T · 옛 「이월」 칸)도 impJudge 와 같은 순서로 본다★ (2026-09-17 J1·J9)
+     L  = 완료 칸이 있고 제출일이 날짜이며, 그 날짜가 기한(보완 기한이 있으면 그것, 없으면 조치기한)보다 뒤
+     반려 건에 제출일이 있으면 보완본이다 → L 이면 '기한 후 완료', 아니면 '완료(검수 전)'
+     그 밖의 건은 L 이면 '기한 후 완료'를 확정·완료보다 먼저 적는다. */
 function impStateFormula(c, r) {
   const A = function (col) { return '$' + colLetter(col) + r; };
   const B = A(c.due), J = A(c.body), M = A(c.plan), N = A(c.done);
   const Q = A(c.audit), R = A(c.redo);
+  const T = c.roll ? A(c.roll) : '';
+  const SUB = T ? 'AND(' + N + '<>"",ISNUMBER(' + T + '))' : 'FALSE';
+  const L = T ? 'AND(' + N + '<>"",ISNUMBER(' + T + '),IF(ISNUMBER(' + R + '),' + T + '>' + R + ',AND(ISNUMBER(' + B + '),' + T + '>' + B + ')))' : 'FALSE';
   return '=IF(' + J + '="","",' +
     'IF(' + Q + '="재반려","미조치",' +
-    'IF(' + Q + '="반려",IF(AND(ISNUMBER(' + R + '),TODAY()>' + R + '),"미조치","반려"),' +
+    /* 보완 기한이 지난 반려 건은 월중에는 「재제출기한 지남」 — impJudge 와 같다. 「미조치」는 월 채점 확정 때
+       서버가 값으로 덮는다 (2026-09-17 최종검수 — 이 자리만 월중에 「미조치」를 내 앱·요약 건수와 달랐다)
+       ★보완본이 올라왔으면 보완 기한이 지나도 「재제출기한 지남」이 아니다★ (J9) */
+    'IF(' + Q + '="반려",IF(' + SUB + ',IF(' + L + ',"기한 후 완료","완료(검수 전)"),' +
+      'IF(AND(ISNUMBER(' + R + '),TODAY()>' + R + '),"재제출기한 지남","반려")),' +
+    'IF(' + L + ',"기한 후 완료",' +
     'IF(' + Q + '="확정","확정",' +
     'IF(' + N + '<>"","완료(검수 전)",' +
     'IF(AND(ISNUMBER(' + B + '),TODAY()>' + B + '),"기한 지남",' +
-    'IF(' + M + '<>"","진행중","미착수")))))))';
+    'IF(' + M + '<>"","진행중","미착수"))))))))';
 }
 
 /* ★표 서식을 끝 줄까지 편다★ (2026-09-08 · 2026-09-07 담당자 지적을 뒤늦게 처리)
@@ -9355,12 +9486,15 @@ function upgradeMonthTab(sh, dry) {
   try { if (sh.getColumnWidth(c.due) < 88) sh.setColumnWidth(c.due, 88); } catch (e) { }
   try { if (sh.getColumnWidth(c.state) < 96) sh.setColumnWidth(c.state, 96); } catch (e) { }
   sh.getRange(c.row0, c.redo, n, 1).setNumberFormat('yyyy-mm-dd').setHorizontalAlignment('center');
+  /* 옛 「이월」 칸 = 완료 제출일 (2026-09-17 J1) — 숨긴 칸이지만 열어 봤을 때 날짜로 읽히게 */
+  try { sh.getRange(c.row0, c.roll, n, 1).setNumberFormat('yyyy-mm-dd'); } catch (e) { }
 
   const fs = [];
   for (let i = 0; i < n; i++) fs.push([impStateFormula(c, c.row0 + i)]);
   sh.getRange(c.row0, c.state, n, 1).setFormulas(fs).setHorizontalAlignment('center');
 
-  /* 검수는 세 말만 들어간다. 빈칸 = 아직 보지 않았다는 뜻이다 (설계 §4 — 검수는 의무가 아니다) */
+  /* 검수는 세 말만 들어간다. 빈칸 = 아직 보지 않았다는 뜻이다 (설계 §4 — 검수는 의무가 아니다)
+     '재반려' = 「미조치 처리」 (2026-09-17 J16) — 이름을 바꾸면 이미 만든 탭과 목록이 갈라진다(IMP_TAIL 위 주석) */
   try {
     const rule = SpreadsheetApp.newDataValidation()
       .requireValueInList(['확정', '반려', '재반려'], true)
@@ -9779,8 +9913,9 @@ function templateTabIn(ss, dry, rebuild) {
 
    [월 채점 확정]을 누르면 그 달이 닫힌다:
 
-     ① 미검수 건 일괄 자동확정   — 완료 보고가 있는데 검수를 안 한 건은 '확정'으로 본다
+     ① 미검수 건 일괄 자동확정   — 기한 안에 올린 완료 보고(보완본 포함)인데 검수를 안 한 건은 '확정'으로 본다
                                    (설계 §4: 검수는 의무가 아니다. 안 누른 건은 확정으로 친다)
+                                   ★기한 뒤에 올린 완료는 확정하지 않고 미조치로 굳는다★ (2026-09-17 J1)
      ② 상태를 ★값으로 굳힌다★   — 수식은 TODAY()를 보므로 그냥 두면 지난 달을 열 때마다 바뀐다
      ③ 미조치 확정               — 완료가 아닌 건은 전부 '미조치'가 된다 (2026-09-15 · 이월 없음)
      ④ 기한이 남은 미완료        — 있으면 멈추고 보여 준다. 담당자가 그래도 마감하면(force) 미조치
@@ -9904,13 +10039,18 @@ function fnMonthClose(ctx, payload) {
 
     let audit = String(at(v, g.audit) == null ? '' : at(v, g.audit)).trim();
     const doneNote = String(at(v, g.done) == null ? '' : at(v, g.done)).trim();
-    /* ① 미검수 자동확정 — 완료 보고가 있는데 검수를 안 한 건 */
-    if (!audit && doneNote) { audit = '확정'; plan.push(row + '행 자동확정'); }
-
     const cellIn = {
       audit: audit, redo: at(v, g.redo), doneNote: doneNote,
-      plan: at(v, g.plan), due: at(v, g.due),
+      plan: at(v, g.plan), due: at(v, g.due), sub: g.roll ? at(v, g.roll) : '',
     };
+    /* 오늘 기준 판정(final=false) — 자동확정과 ④가 함께 본다 */
+    const live = impJudge(cellIn, today, tz, ym, false);
+    /* ① 미검수 자동확정 — 기한 안에 올린 완료 보고인데 검수를 안 한 건.
+       ★보완 요청 뒤 보완 기한 안에 다시 올린 건도 같다★ (2026-09-17 J9 — 본사가 다시 안 봤어도 기한 안 완료다).
+       ★기한 뒤에 올린 완료('기한 후 완료')는 확정 도장을 찍지 않는다★ (J1) — 아래 final 판정이 미조치로 굳힌다. */
+    if (live.state === '완료(검수 전)' && audit !== '확정') {
+      audit = '확정'; cellIn.audit = '확정'; plan.push(row + '행 자동확정');
+    }
     const jd = impJudge(cellIn, today, tz, ym, true);
 
     const waive = at(v, g.waive) === true;
@@ -9919,7 +10059,6 @@ function fnMonthClose(ctx, payload) {
     /* ④ 기한이 남은 미완료 — 오늘 기준(final=false)으로 반려·진행중·미착수면 아직 기한 안이다.
        ★확정하면 이 건도 미조치다★ — 그래서 먼저 보여 주고 force 로만 마감한다(아래) */
     if (!waive) {
-      const live = impJudge(cellIn, today, tz, ym, false);
       const left = live.state === '반려' ? live.redo
         : (live.state === '진행중' || live.state === '미착수') ? live.due : null;
       if (left) pending.push({ no: i + 1, row: row, state: live.state, due: left });
@@ -10364,8 +10503,22 @@ function fnStoreFixSummary(ctx, payload) {
    재제출기한 = ★반려일 +7일과 원래 기한 중 긴 쪽★ — 마감 전에 반려하면 원 기한이 더 넉넉할 수
      있는데, 그때 7일로 줄이면 반려가 오히려 기한을 앞당기는 벌이 된다.
 
-   ★재제출한 뒤 또 반려하면 '재반려'다★ — 무한 루프를 막는다. 그 뒤로는 미조치로 굳고,
-     되살리는 것은 관리자가 검수 칸을 비우는 길뿐이다. */
+   ★보완 요청은 한 번만이다★ (2026-09-17 최종검수 J16 · 담당자 *"보완요청은 딱 1번만 진행 될 수 있게
+     다시 변경해줘"* · 보완본도 부족하면 *"내가 개인적으로 연락해서 다시 진행하도록 유도하거나 미조치 처리
+     시킬꺼야"*) — 종전에는 반려 건에 또 반려가 오면 '재반려'로 받았다. 이제는 ★거절한다★.
+     그 자리의 버튼은 「미조치 처리」(verdict '미조치')이고, 검수 칸에는 ★'재반려'를 적는다★ —
+     이미 만든 탭의 검수 칸 입력규칙(['확정','반려','재반려'] · 거부)이 새 이름을 받지 않기 때문이다.
+     미조치 처리는 보완 요청한 건에만 된다. 되살리는 길은 [검수 취소]다.
+
+   ★재제출기한 칸은 보완 요청 때 쓰고, 확정·미조치 처리·(보완본이 온 뒤의) 검수 취소에는 남긴다★ (2026-09-17 J1·J9·J16)
+     종전에는 확정·취소 때 비웠다. 그러면 ①보완 기한 안에 다시 올린 건을 개선확정하는 순간 기한이 조치기한으로
+     돌아가 보완본이 '기한 뒤 완료'로 뒤집히고 ②확정·취소를 거쳐 두 번째 보완 요청을 열 수 있었다.
+     ★재제출기한이 적힌 건에는 보완 요청을 다시 받지 않는다★. 보완본이 오기 전의 검수 취소만 그 칸을 비운다
+     (잘못 누른 보완 요청을 통째로 거두는 길).
+   ★보완 요청 때 완료 제출일(옛 「이월」 칸)을 비운다★ — 그 뒤 매장이 올리는 것이 보완본이고, 그 날짜를
+     보완 기한과 견준다(impJudge · impSubOnSave).
+   ★기한 뒤에 올린 완료('기한 후 완료')에는 보완 요청을 받지 않는다★ — 보완 요청은 새 기한을 주는 일인데,
+     그 기한 안에 다시 올리면 기한 뒤에 한 완료가 완료로 바뀐다(J1 에 어긋난다). 개선확정·점수 제외는 된다. */
 function fnImproveAudit(ctx, payload) {
   const p = payload || {};
   const ym = String(p.ym || '').trim();
@@ -10380,8 +10533,8 @@ function fnImproveAudit(ctx, payload) {
      (Code.gs impRate 의 `if (r.waive) { waived++; return; }`). 계산식은 손대지 않았다.
      ★시트에는 체크가 그대로 남는다★ — 담당자가 원한 「시트엔 기록」이 이것이다. */
   const doWaive = (p.waive === true || p.waive === false);
-  if (!doWaive && ['확정', '반려', ''].indexOf(verdict) < 0) {
-    return err('BAD_REQUEST', "검수는 '확정'·'반려'·빈칸만 가능합니다.");
+  if (!doWaive && ['확정', '반려', '미조치', ''].indexOf(verdict) < 0) {
+    return err('BAD_REQUEST', "검수는 '확정'·'반려'·'미조치'·빈칸만 가능합니다.");
   }
 
   let ss, label;
@@ -10441,28 +10594,50 @@ function fnImproveAudit(ctx, payload) {
       return { ok: true, store: label, ym: ym, no: no, waive: p.waive === true };
     }
 
-    const cur = String(grid(sh, r, g.audit, 1, 1).getValue() || '').trim();
-    let put = verdict, redo = '';
+    const W = Math.max(14, g.last - 1);
+    const judgeRow = function (row) {
+      const at0 = function (col) { return col ? row[col - 2] : ''; };
+      return impJudge({
+        audit: at0(g.audit), redo: at0(g.redo), sub: at0(g.roll),
+        doneNote: at0(g.done), plan: at0(g.plan), planRaw: at0(g.plan), due: at0(g.due),
+      }, today, tz, ym, false);
+    };
+    const before = grid(sh, r, 2, 1, W).getValues()[0];
+    const cur = String(before[g.audit - 2] == null ? '' : before[g.audit - 2]).trim();
+    /* 재제출기한이 적혀 있으면 ★이 건은 이미 한 번 보완 요청을 받았다★ — 확정·검수 취소를 거쳐도 남겨 두므로
+       그 길로 두 번째 보완 요청을 여는 틈이 없다. (보완본이 오기 전에 검수 취소하면 요청을 통째로 거둔 것으로
+       보고 아래에서 함께 지운다 — 잘못 누른 보완 요청을 되돌리는 길이다.) */
+    const hadRedo = String(dateOfCell(before[g.redo - 2], tz) || '').trim() !== '';
+    let put = verdict, redo = null;   // redo === null → 재제출기한 칸을 건드리지 않는다
     if (verdict === '반려') {
-      put = (cur === '반려' || cur === '재반려') ? '재반려' : '반려';
-      if (put === '반려') {
-        const plus7 = impPlusDays(today, IMP_REDO_DAYS, tz);
-        const dl = dateOfCell(grid(sh, r, g.due, 1, 1).getValue(), tz);
-        redo = (dl && plus7 && dl > plus7) ? dl : plus7;   // 긴 쪽
+      if (cur === '반려' || cur === '재반려' || hadRedo) {
+        return err('CONFLICT', '보완 요청은 한 건에 한 번만 할 수 있습니다. 보완본이 부족하면 「미조치 처리」를 눌러 주세요.');
       }
+      if (judgeRow(before).state === '기한 후 완료') {
+        return err('CONFLICT', '기한이 지난 뒤 완료한 건이라 보완 요청을 할 수 없습니다 — 개선율에는 들어가지 않습니다.');
+      }
+      const plus7 = impPlusDays(today, IMP_REDO_DAYS, tz);
+      const dl = dateOfCell(before[g.due - 2], tz);
+      redo = (dl && plus7 && dl > plus7) ? dl : plus7;   // 긴 쪽
+    } else if (verdict === '미조치') {
+      if (cur !== '반려' && cur !== '재반려') {
+        return err('CONFLICT', '미조치 처리는 보완 요청한 건에만 할 수 있습니다.');
+      }
+      put = '재반려';   // 값 이름은 옛 탭 검수 목록과 맞춘다 (함수 앞 주석)
+    } else if (verdict === '' && cur === '반려' && !judgeRow(before).resub) {
+      redo = '';        // 보완본이 오기 전의 검수 취소 = 보완 요청을 거둔다 → 보완 기한도 지운다
     }
     grid(sh, r, g.audit, 1, 1).setValue(put);
-    grid(sh, r, g.redo, 1, 1).setValue(redo);
+    if (redo !== null) grid(sh, r, g.redo, 1, 1).setValue(redo);
+    /* 보완 요청 — 완료 제출일을 비워 보완본 제출일을 새로 받는다 */
+    if (verdict === '반려' && g.roll) grid(sh, r, g.roll, 1, 1).setValue('');
     SpreadsheetApp.flush();
 
     /* ★쓴 값이 아니라 시트를 다시 읽어 판정한다★ — 날짜 서식이 값을 어떻게 저장했는지는
        시트가 안다. 쓴 값으로 계산하면 화면과 시트가 갈라진다. */
-    const row = grid(sh, r, 2, 1, Math.max(14, g.last - 1)).getValues()[0];
+    const row = grid(sh, r, 2, 1, W).getValues()[0];
     const at = function (col) { return row[col - 2]; };
-    const jd = impJudge({
-      audit: at(g.audit), redo: at(g.redo),
-      doneNote: at(g.done), plan: at(g.plan), planRaw: at(g.plan), due: at(g.due),
-    }, today, tz, ym, false);
+    const jd = judgeRow(row);
 
     if (!p.fileId) dropStoreCache(label, ym);   // 매장이 바로 보게
 
@@ -10470,14 +10645,14 @@ function fnImproveAudit(ctx, payload) {
        검수 취소('')는 닫지 않는다: 다시 볼 것이 생긴 쪽이다. 실패해도 검수는 이미 끝났다. */
     if (!p.fileId && put) {
       try {
-        notifyResolve(label, ym, no, put === '확정' ? '개선확정' : (put === '재반려' ? '다시 보완 요청' : '보완 요청'));
+        notifyResolve(label, ym, no, put === '확정' ? '개선확정' : (put === '재반려' ? '미조치 처리' : '보완 요청'));
       } catch (e) { Logger.log('알림 처리 실패: ' + String(e)); }
     }
 
     return {
       ok: true, store: label, ym: ym, no: no,
       audit: put, redo: dateOfCell(at(g.redo), tz) || null,
-      status: jd.state, statusWhy: jd.why || '',
+      status: jd.state, statusWhy: jd.why || '', resub: !!jd.resub,
     };
   } finally {
     try { lock.releaseLock(); } catch (e) { }
@@ -11507,211 +11682,8 @@ function unprotectStoreTabs(stores, page) {
 }
 
 
-/* ══════════════════════════════════════════════════════════════
-   새 월별 양식 v2 — 2026-10월부터 (2026-08-20 사용자와 설계)
-
-   ★이 시트가 하는 일은 하나다★
-     본사가 "이거 고쳐 주세요"를 적고, 매장이 "이렇게 고쳤습니다"를 적는다.
-     그 둘이 맞물려 요청·진행·완료·개선율이 저절로 나오고, 개선율은 종합점수의 10%가 된다.
-
-   ★왜 새로 만드는가 — 옛 양식은 사람이 지켜야 하는 규칙이 있었다★
-     '진행 내용'과 '완료 내용' 칸이 따로 있어서 "아직이면 왼쪽, 다 됐으면 오른쪽"을 지켜야 했다.
-     26개 매장 × 여러 담당자에게 이 규칙은 반드시 깨진다 — 실제로 미착수인데 완료 칸에 적는
-     일이 있었다. ★그래서 칸을 합쳤다.★ 틀릴 칸이 없으면 틀릴 수 없다.
-
-   ★상태는 매장이 고르지 않는다. 시트가 스스로 안다★
-       완료일 있음            → 완료
-       '본사 협의' 체크        → 본사 확인 대기   (개선율 분모에서 빠진다)
-       예정일 있음            → n/n 예정
-       조치 내용만 있음        → 진행중
-       아무것도 없음          → 미착수
-
-   ★개선율 = 완료 ÷ (전체 − 본사협의)★ (사용자 결정)
-     본사가 결정해 줘야 하는 건은 매장 책임이 아니므로 분모에서 뺀다.
-     요청이 없거나 전부 본사협의면 빈칸이고, 종합점수 산식이 빈칸을 만점(1)으로 본다.
-
-   ★열 배치 — 본사 몫과 매장 몫이 한 번에 갈린다★
-     A NO. · B 구분 · C 문항 · D 개선요청사항 · E 개선 전 · F 상태(수식)   ← 본사 몫
-     G 담당부서 · H 담당자 · I 조치 내용 · J 예정일 · K 완료일 · L 본사협의 · M 개선 후 · N 비고  ← 매장 몫
-     보호는 'G11:N{끝}만 열기' 한 구간으로 끝난다 — 열을 세다 틀릴 자리가 없다.
-     ★머리글에 '담당부서'와 '비고'가 있어야 한다★ — storeCellsIn 이 그 둘로 매장 칸을 찾는다.
-   ══════════════════════════════════════════════════════════════ */
-
-const V2_ROW0 = 11;      // 본문 첫 줄
-const V2_ROWS = 50;      // 표 줄 수 (11~60)
-const V2_HEAD = 10;      // 머리글 줄
-
-/* 점수 → 등급. 엑셀 채점기준과 같은 경계(전부 '이상'). */
-function v2GradeFormula(cell) {
-  return '=IF(' + cell + '="","",IFS(' + cell + '>=93,"우수",' + cell + '>=85,"양호",' +
-    cell + '>=76,"보통",' + cell + '>=66,"미흡",' + cell + '>=55,"주의",TRUE,"부적합"))';
-}
-
-/* 한 탭을 새 양식으로 그린다. 빈 시트를 받아 채운다. */
-function buildV2Tab(sh, ym, storeName) {
-  const R0 = V2_ROW0, RN = V2_ROWS, END = R0 + RN - 1, H = V2_HEAD;
-  sh.clear();
-  try { sh.clearConditionalFormatRules(); } catch (e) { }
-  if (sh.getMaxColumns() > 14) sh.deleteColumns(15, sh.getMaxColumns() - 14);
-  if (sh.getMaxColumns() < 14) sh.insertColumnsAfter(sh.getMaxColumns(), 14 - sh.getMaxColumns());
-  if (sh.getMaxRows() < END + 2) sh.insertRowsAfter(sh.getMaxRows(), END + 2 - sh.getMaxRows());
-
-  const title = (storeName || '') + '  ' + ymLabel(ym) + ' QSC 현황';
-  sh.getRange('A1:N1').merge().setValue(title)
-    .setFontSize(15).setFontWeight('bold').setVerticalAlignment('middle');
-  sh.setRowHeight(1, 38);
-
-  /* ── 요약 (2~8행) ──────────────────────────────────────────
-     ★라벨 글자를 바꾸지 말 것★ — 앱(labelMap/labelValue)이 이 글자로 값 칸을 찾는다. */
-  const put = function (r, c, v) { sh.getRange(r, c).setValue(v); };
-  const lab = function (r, c, v) {
-    sh.getRange(r, c).setValue(v).setFontWeight('bold').setBackground('#f1f3f4')
-      .setHorizontalAlignment('right');
-  };
-
-  lab(3, 1, '방문일');       put(3, 2, '');
-  lab(3, 4, '점검자');       put(3, 5, '');
-  lab(4, 1, '위생점수');     lab(4, 4, '위생등급');
-  lab(5, 1, 'CS점수');       lab(5, 4, 'CS등급');
-  sh.getRange(4, 5).setFormula(v2GradeFormula('$B$4'));
-  sh.getRange(5, 5).setFormula(v2GradeFormula('$B$5'));
-  sh.getRange('B4:B5').setNumberFormat('0.0');
-
-  lab(6, 1, '개선요청');   lab(6, 3, '개선완료');
-  lab(6, 5, '개선예정/진행'); lab(6, 7, '본사협의');
-  /* ★개선요청 칸은 반드시 =COUNTA(D…) 형태로 둔다★ — tableEndRow 가 이 수식에서 표 끝 줄을 읽는다.
-     그 값이 곧 보호 예외 범위의 끝이 된다. 손으로 숫자를 적으면 표 끝을 아무도 모르게 된다. */
-  sh.getRange(6, 2).setFormula('=COUNTA(D' + R0 + ':D' + END + ')');
-  sh.getRange(6, 4).setFormula('=COUNTA(K' + R0 + ':K' + END + ')');
-  sh.getRange(6, 6).setFormula('=MAX(0,$B$6-$D$6-$H$6)');
-  sh.getRange(6, 8).setFormula('=COUNTIF(L' + R0 + ':L' + END + ',TRUE)');
-
-  lab(7, 1, '개선율');
-  /* 완료 ÷ (전체 − 본사협의). 분모가 0이면 빈칸 — 종합 산식이 빈칸을 만점으로 본다. */
-  sh.getRange(7, 2).setFormula('=IF($B$6-$H$6<=0,"",$D$6/($B$6-$H$6))').setNumberFormat('0%');
-  sh.getRange('C7:N7').merge()
-    .setValue('완료 ÷ (개선요청 − 본사협의).  본사가 결정해 줘야 하는 건은 매장 몫이 아니므로 빼고 셉니다.')
-    .setFontSize(10).setFontColor('#666666');
-
-  lab(8, 1, '종합점수');   lab(8, 4, '종합등급');
-  sh.getRange(8, 2).setFormula('=IF(COUNT($B$4,$B$5)=0,"",$B$4*0.6+$B$5*0.3+IF($B$7="",1,$B$7)*100*0.1)')
-    .setNumberFormat('0.0');
-  sh.getRange(8, 5).setFormula(v2GradeFormula('$B$8'));
-  sh.getRange('A8:N8').setBackground('#fff8e1');
-  sh.getRange(8, 1, 1, 5).setFontWeight('bold');
-
-  /* ── 표 머리글 (10행) ─────────────────────────────────── */
-  const HEAD = ['NO.', '구분', '문항', '개선요청사항', '개선 전',
-    '상태', '담당부서', '담당자', '조치 내용', '예정일', '완료일', '본사협의', '개선 후', '비고'];
-  sh.getRange(H, 1, 1, 14).setValues([HEAD])
-    .setFontWeight('bold').setHorizontalAlignment('center')
-    .setVerticalAlignment('middle').setWrap(true);
-  sh.getRange(H, 1, 1, 6).setBackground('#e8eaed');    // 본사 몫
-  sh.getRange(H, 7, 1, 8).setBackground('#e6f4ea');    // 매장 몫
-  sh.setRowHeight(H, 34);
-  sh.getRange(9, 1, 1, 6).merge().setValue('▼ 본사가 적습니다')
-    .setFontSize(10).setFontColor('#5f6368');
-  sh.getRange(9, 7, 1, 8).merge().setValue('▼ 매장이 적습니다')
-    .setFontSize(10).setFontColor('#137333').setFontWeight('bold');
-
-  /* ── 본문 ─────────────────────────────────────────────── */
-  const nos = [];
-  for (let i = 0; i < RN; i++) nos.push(['=IF($D' + (R0 + i) + '="","",ROW()-' + (R0 - 1) + ')']);
-  sh.getRange(R0, 1, RN, 1).setFormulas(nos).setHorizontalAlignment('center');
-
-  /* 상태 — ★매장이 고르지 않는다★ */
-  const st = [];
-  for (let i = 0; i < RN; i++) {
-    const r = R0 + i;
-    st.push(['=IF($D' + r + '="","",' +
-      'IF($K' + r + '<>"","완료",' +
-      'IF($L' + r + '=TRUE,"본사 확인 대기",' +
-      'IF($J' + r + '<>"",TEXT($J' + r + ',"m/d")&" 예정",' +
-      'IF($I' + r + '<>"","진행중","미착수")))))']);
-  }
-  sh.getRange(R0, 6, RN, 1).setFormulas(st).setHorizontalAlignment('center').setFontWeight('bold');
-
-  sh.getRange(R0, 12, RN, 1).insertCheckboxes();                      // 본사협의
-  const onlyDate = SpreadsheetApp.newDataValidation().requireDate()
-    .setAllowInvalid(false)
-    .setHelpText('날짜만 넣을 수 있습니다. 「완료」·「O」 같은 글자는 들어가지 않습니다.').build();
-  sh.getRange(R0, 10, RN, 2).setDataValidation(onlyDate).setNumberFormat('yyyy-mm-dd');  // 예정일·완료일
-
-  const kind = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['위생', '매장관리', '서류'], true).setAllowInvalid(false).build();
-  sh.getRange(R0, 2, RN, 1).setDataValidation(kind);
-
-  sh.getRange(R0, 1, RN, 14).setVerticalAlignment('top').setWrap(true);
-  sh.getRange(R0, 1, RN, 14).setBorder(true, true, true, true, true, true,
-    '#dadce0', SpreadsheetApp.BorderStyle.SOLID);
-
-  /* ── 눈에 띄게 ─────────────────────────────────────────
-     ★막는 것이 아니라 알아채게 하는 장치다★ — 막는 일은 위의 '칸 합치기'와 날짜 유효성이 한다. */
-  const rules = [];
-  const body = sh.getRange(R0, 1, RN, 14);
-  rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND($D' + R0 + '<>"",$K' + R0 + '<>"",$I' + R0 + '="")')
-    .setBackground('#fce8e6')     // 완료일은 있는데 조치 내용이 비었다
-    .setRanges([body]).build());
-  rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND($D' + R0 + '<>"",$K' + R0 + '<>"")')
-    .setBackground('#e6f4ea')     // 완료
-    .setRanges([body]).build());
-  rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND($D' + R0 + '<>"",$L' + R0 + '=TRUE)')
-    .setBackground('#e8f0fe')     // 본사 확인 대기
-    .setRanges([body]).build());
-  sh.setConditionalFormatRules(rules);
-
-  const W = [46, 90, 110, 320, 90, 110, 90, 80, 300, 96, 96, 76, 90, 160];
-  for (let c = 0; c < W.length; c++) sh.setColumnWidth(c + 1, W[c]);
-  sh.setFrozenRows(H);
-  sh.setFrozenColumns(4);
-  return sh;
-}
-
-/* ★새 양식 견본을 하나 만든다★ — 인자 없이 편집기에서 실행한다.
-   실매장 파일에 닿지 않는다. 새 스프레드시트를 만들어 그 안에만 그린다. */
-function makeV2Sample() {
-  const ss = SpreadsheetApp.create('[새 양식 v2] 매장 월별 QSC현황 — 구조확인용');
-  const sh = ss.getSheets()[0];
-  sh.setName('2610');
-  buildV2Tab(sh, '2610', '금종제과 익산');
-
-  /* 눈으로 보기 좋게 예시를 몇 줄 넣는다 — 상태 칸이 스스로 바뀌는 것을 보여 준다 */
-  sh.getRange(3, 2).setValue(new Date());
-  sh.getRange(3, 5).setValue('문수');
-  sh.getRange(4, 2).setValue(88);
-  sh.getRange(5, 2).setValue(92);
-  const R0 = V2_ROW0;
-  sh.getRange(R0, 2, 5, 3).setValues([
-    ['위생', 'A-05', '원산지 표시, 알레르기표시 미게시 (고객이 잘 보이는 위치)'],
-    ['위생', 'C-03', '소비기한 경과 제품 진열'],
-    ['매장관리', 'F-15', '홀 체류 쾌적성 미흡 — 냉방 온도 관리'],
-    ['서류', 'A-01', '인허가 서류 미비치 (자가품질검사 성적서)'],
-    ['매장관리', 'D-07', '집기 파손 — 교체 필요'],
-  ]);
-  sh.getRange(R0, 7, 5, 5).setValues([
-    ['홀', '김OO', '게시물 새로 출력해 부착 완료', '', new Date()],
-    ['주방', '이OO', '전 품목 소비기한 재점검, 폐기 처리', '', new Date()],
-    ['홀', '박OO', '냉방 설정 조정 중, 서큘레이터 추가 검토', new Date(new Date().getTime() + 7 * 864e5), ''],
-    ['관리', '최OO', '', '', ''],
-    ['홀', '정OO', '본사 승인 필요 — 집기 교체 예산', '', ''],
-  ]);
-  sh.getRange(R0 + 4, 12).setValue(true);   // 마지막 건 = 본사 협의 필요
-
-  const url = ss.getUrl();
-  const msg = ['=== 새 양식 v2 견본을 만들었습니다 ===', url, '',
-    '보실 것:',
-    '  · F열 상태 — 아무도 안 적었는데 완료/진행중/예정/미착수/본사 확인 대기가 나옵니다',
-    '  · B7 개선율 — 완료 2 ÷ (요청 5 − 본사협의 1) = 50%',
-    '  · B8 종합 — 88×0.6 + 92×0.3 + 50%×0.1',
-    '  · K열(완료일)에 「완료」라고 적어 보십시오 — 시트가 거부합니다',
-    '  · 4번째 줄은 아무것도 안 적어서 미착수, 5번째 줄은 본사협의 체크',
-  ].join('\n');
-  Logger.log(msg);
-  return msg;
-}
+/* (2026-09-17 최종검수 J56 — 옛 견본 「새 월별 양식 v2」 buildV2Tab · makeV2Sample · v2GradeFormula · V2_* 상수를 지웠다.
+   실제로 쓰는 10월 서식은 upgradeMonthTab 이 지난 달 탭을 올려 만든다. 부르는 곳 없음을 확인하고 지웠다.) */
 
 function testStoreCopy(srcId, ym) {
   const SRC = srcId || '1mUSyz0ItpTa5HsUKVHWqxhD3wTobdP9xJO4NdNQ0InE'; // 금종제과_익산 (원본 — 읽기만)

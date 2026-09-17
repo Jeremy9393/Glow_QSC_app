@@ -37,7 +37,7 @@ async function initShopperForm(opts) {
     /* ★두 줄을 하나로 합쳤다★ (2026-09-04 담당자) — 「이유를 적어라」와 「판단이 어려우면 비고에」가
        따로 있어 말이 겹치고 상자만 길어졌다. 뒷줄의 기능(비고만 적어도 응답으로 인정)은 그대로다. */
     { html: '<b>아니오 혹은 낮은 점수</b>를 고른 문항은 <b>비고에 이유를 간단히</b> 작성 부탁드립니다. ' +
-        '기억이 안 나거나 판단이 어려운 문항도 비고에 상황을 적어 주시면 됩니다. ' +
+        '기억이 안 나거나 판단이 어려운 예/아니오 문항도 비고에 상황을 적어 주시면 됩니다. ' +
         '(매장을 개선하는 데 큰 도움이 됩니다.)' },
     /* ★「연령대·성별은 본인 기준」 줄은 2026-09-04 담당자 지시로 뺐다★ — 같은 말이 아래 칸에
        세 번 더 있다: 칸 이름 「연령대·성별 (작성자 본인) *」 · 칸 안내문 「직원이 아닌 본인 기준
@@ -321,7 +321,9 @@ async function initShopperForm(opts) {
     if (q.scale === 'likert') {
       if (typeof answer === 'number' && answer <= 2) return '어떤 점이 아쉬웠는지 알려주세요' + (e ? ' (예: ' + e[0] + ')' : '');
       if (typeof answer === 'number' && answer >= 4) return '좋았던 점이 있다면 적어 주세요' + (e ? ' (예: ' + e[1] + ')' : ' (선택)');
-      return '점수를 고르기 어려우면 여기에 상황을 적어주세요';
+      /* 만족도는 점수가 있어야 제출된다(isFilled) — 「비고만 적으면 된다」로 읽히지 않게 (2026-09-17) */
+      if (typeof answer === 'number') return '떠오르는 점이 있으면 적어 주세요 (선택)';
+      return '1~5점 중 하나를 꼭 골라 주세요. 이유가 있으면 여기에 적어 주세요';
     }
     if (answer === '아니오') return '어떤 상황이었는지 알려주세요' + (e ? ' (예: ' + e[0] + ')' : '');
     if (answer === '예') return '좋았던 점이 있다면 적어 주세요' + (e ? ' (예: ' + e[1] + ')' : ' (선택)');
@@ -510,7 +512,9 @@ async function initShopperForm(opts) {
       : '<div class="opts"><button data-v="예">예</button><button data-v="아니오">아니오</button>' +
         (ADMIN ? '<button data-v="NA">NA</button>' : '') + '</div>';
     card.innerHTML =
-      '<div class="q"><span class="no">' + q.no + '</span><span class="txt"></span></div>' +
+      /* 일련번호 동그라미(1~38)는 뺐다 (2026-09-17 담당자) — 글 앞 「2-1.」과 번호가 두 벌이었고,
+         안내·되묻기 창은 「2-1」로 말하며 키오스크 매장은 일련번호가 건너뛰었다 */
+      '<div class="q"><span class="txt"></span></div>' +
       optsHtml +
       '<input type="text" class="why" maxlength="200">';
     $('.q .txt', card).textContent = q.text;
@@ -639,9 +643,16 @@ async function initShopperForm(opts) {
     const missing = act.length - answered;
     if (missing > 0) {
       // 완료 게이트: 답변 또는 비고 중 하나는 반드시 — 미완료 상태로는 제출 불가
+      /* ★어느 문항인지 번호로★ · ★만족도는 점수가 필수★ (2026-09-17 최종검수) — 종전 문구는
+         「비고에 적어 주세요」뿐이라, 만족도 문항에 비고만 적은 손님이 어디를 채울지 몰랐다 */
+      const miss = act.filter(function (q) { return !isFilled(q.no); }).map(function (q) {
+        return (String(q.text).match(/^(\d+-\d+)\./) || [])[1] || String(q.no);
+      });
+      const missShown = miss.slice(0, 8).join(', ') + (miss.length > 8 ? ' 외 ' + (miss.length - 8) + '개' : '');
       alert(ADMIN
-        ? '입력하지 않은 문항이 ' + missing + '개 있습니다.\n확인하지 못한 관찰 문항은 NA로 처리해 주세요. (만족도 문항은 1~5 필수)'
-        : '아직 답변하지 않은 문항이 ' + missing + '개 있습니다.\n답을 선택하거나, 판단이 어려우면 비고에 상황을 적어 주세요.');
+        ? '입력하지 않은 문항이 ' + missing + '개 있습니다 (' + missShown + ').\n확인하지 못한 관찰 문항은 NA로 처리해 주세요. (만족도 문항은 1~5 필수)'
+        : '아직 답하지 않은 문항이 ' + missing + '개 있습니다 (' + missShown + ').\n' +
+          '예/아니오 문항은 답을 고르거나 비고에 상황을 적어 주시고, 1~5점 문항은 점수를 꼭 골라 주세요.');
       return;
     }
     /* ★어느 문항인지 번호로 알려 준다★ (2026-09-04 담당자) — 종전에는 개수만 말해서

@@ -55,6 +55,9 @@
     '반려': '보완 요청',
     '재제출기한 지남': '보완 기한 지남',
     '미조치': '다음 점검 시 확인',
+    /* 기한 뒤에 올린 완료 (2026-09-17 J1) — 완료 내용은 받지만 개선율에는 넣지 않는다.
+       왜 그런지는 서버가 statusWhy 로 한 줄 준다. 날짜를 말하는 말이라 매장에게도 그대로 적는다. */
+    '기한 후 완료': '기한 후 완료',
   };
   /* ★매장에게는 「다음 점검 시 확인」·「보완 기한 지남」을 쓰지 않는다 — 둘 다 「기한 지남」★ (2026-09-15 담당자)
      *"다음 점검시 확인이라고 해두면 다음 점검때 확인되면 봐주는거처럼 보여서 … 나만(점검자) 알고있으면"*
@@ -76,6 +79,7 @@
     '기한 지남': 'todo',
     '재제출기한 지남': 'todo',
     '미조치': 'todo',
+    '기한 후 완료': '',      // 할 일이 남은 건 아니다(빨강 아님) · 개선율에 안 들어가므로 완료 초록도 아니다
   };
   /* 카드 왼쪽 빨간 선을 붙일 상태 — 날짜가 지난 것만이다 */
   const URGENT = { '기한 지남': 1, '재제출기한 지남': 1, '미조치': 1 };
@@ -490,7 +494,7 @@
       if (snap) {
         data = snap; fromSnap = true;
         renderAll();
-        showState('오프라인 — 마지막으로 받아둔 화면입니다. 저장은 전파가 되는 곳에서 해 주세요.');
+        showState('오프라인 — 인터넷 연결이 됐을 당시 마지막으로 받아둔 화면입니다. 저장은 인터넷이 연결되는 곳에서 해 주세요.');
       } else {
         clearBody();
         showState('오프라인이라 불러오지 못했습니다. 전파가 되는 곳에서 다시 열어 주세요.');
@@ -627,9 +631,30 @@
        ★sum.todo는 시트 라벨 '미조치'에서 온 값이다. 값은 그대로 쓰고 화면에만 '시작 전'으로 적는다 —
          아직 손대지 않았다는 사실은 같은데, 앞의 말은 잘못을 세는 말이고 뒤의 말은 순서를 세는 말이다. */
     const seg = [];
-    if (typeof sum.prog === 'number') seg.push('진행 ' + sum.prog);
-    seg.push('완료 ' + done);
-    if (typeof sum.todo === 'number') seg.push('시작 전 ' + sum.todo);
+    /* ★새 서식(상태가 있는 달)은 카드 상태대로 센다★ (2026-09-17 담당자 「카드 상태대로 세기」)
+       시트 요약 칸은 「미조치」 = 요청 − 완료 − 진행이라 기한 지남·기한 후 완료가 「시작 전」에 섞여 들어갔다.
+       카드와 같은 data.items 를 세야 요약·카드·하단바가 어긋나지 않는다. 옛 달(status 없음)은 종전대로 시트 칸. */
+    const arr = (data && data.items) || [];
+    const byStatus = arr.length && arr.every(function (it) { return it && str(it.status); });
+    if (byStatus) {
+      const k = { prog: 0, done: 0, late: 0, lateDone: 0, todo: 0 };
+      arr.forEach(function (it) {
+        const s = str(it.status);
+        if (s === '진행중' || s === '반려') k.prog++;
+        else if (s === '확정' || s === '완료(검수 전)') k.done++;
+        else if (s === '기한 지남' || s === '재제출기한 지남' || s === '미조치') k.late++;
+        else if (s === '기한 후 완료') k.lateDone++;
+        else k.todo++;
+      });
+      seg.push('진행 ' + k.prog, '완료 ' + k.done);
+      if (k.late) seg.push('기한 지남 ' + k.late);
+      if (k.lateDone) seg.push('기한 후 완료 ' + k.lateDone);
+      seg.push('시작 전 ' + k.todo);
+    } else {
+      if (typeof sum.prog === 'number') seg.push('진행 ' + sum.prog);
+      seg.push('완료 ' + done);
+      if (typeof sum.todo === 'number') seg.push('시작 전 ' + sum.todo);
+    }
     /* ★요약에는 건수만 적는다★ (2026-09-04 담당자) — 개선율과 진행바는 화면 하단바에 늘 떠 있다.
        같은 숫자를 한 화면에 두 번 적으면, 둘이 어긋나 보일 때 어느 쪽이 맞는지 아무도 모른다. */
     fin.appendChild(document.createTextNode('개선요청사항 ' + req + '건 (' + seg.join(' · ') + ')'));
@@ -850,13 +875,14 @@
        서버가 필드를 안 보내면 undefined → 거짓으로 떨어져 뱃지가 안 붙는다(같은 이유로 이게 맞다). */
     /* 조치기한 — 새 서식에서만 온다(옛 달은 null이라 칸이 안 뜬다).
        보완 요청을 받은 건은 ★그 기한이 아니라 보완 기한★을 보여 준다. 원래 기한은 이미 지났고,
-       매장이 봐야 하는 날짜는 '언제까지 다시 올려야 하나'다. */
+       매장이 봐야 하는 날짜는 '언제까지 다시 올려야 하나'다.
+       ★보완본을 이미 올린 건(it.resub)도 보완 기한을 보여 준다★ (2026-09-17 J9) — 그 건의 기한은 보완 기한이다. */
     function paintDue() {
       const st = str(it.status);
       const redo = str(it.redo);
       const dl = str(it.deadline);
       let txt = '';
-      if (st === '반려' || st === '재제출기한 지남') {
+      if (st === '반려' || st === '재제출기한 지남' || it.resub) {
         if (redo) txt = '보완 기한 ' + dueLabel(redo) + '까지';
       } else if (dl) {
         txt = '기한 ' + dueLabel(dl) + '까지';
@@ -905,11 +931,21 @@
       /* ★점수 제외가 켜져 있으면 그것부터 말한다★ (2026-08-27) — 이 건은 개선율 분모에서
          빠져 있어서 검수 상태(미조치·진행중…)가 점수에 아무 영향을 주지 않는다.
          그 사실을 안 보여 주면 담당자가 「왜 미조치인데 점수가 안 깎이지」로 헤맨다. */
+      /* ★보완본이 올라왔는지 서버가 알려 준다(it.resub)★ (2026-09-17 J9) — 검수 칸은 여전히 '반려'라
+         그것만 보면 「보완 요청했습니다」로 남아, 다시 볼 건인지 알 수 없었다.
+         ★'재반려' = 「미조치 처리」★ (J16 · 값 이름은 옛 탭 검수 목록과 맞추려고 그대로다) */
+      const st0 = str(it.status);
+      const redoTxt = str(it.redo) ? dueLabel(it.redo) : '';
       const note = it.waive
         ? '이 건은 점수에서 빼 두었습니다 — 개선율 계산에 들어가지 않습니다'
-        : a === '확정' ? '개선확정했습니다'
-        : a === '반려' ? ('보완 요청했습니다' + (str(it.redo) ? ' · ' + dueLabel(it.redo) + '까지' : ''))
-        : a === '재반려' ? '보완본을 다시 요청했습니다 — 다음 점검에서 확인합니다'
+        : a === '확정' ? ('개선확정했습니다' + (st0 === '기한 후 완료' ? ' — 기한 뒤에 올린 완료라 개선율에는 들어가지 않습니다' : ''))
+        : a === '반려' && it.resub
+          ? (st0 === '기한 후 완료'
+            ? '보완본이 보완 기한' + (redoTxt ? '(' + redoTxt + ')' : '') + ' 뒤에 올라왔습니다 — 개선율에는 들어가지 않습니다'
+            : '보완본이 올라왔습니다 — 확인해 주세요' + (redoTxt ? ' (보완 기한 ' + redoTxt + ')' : ''))
+        : a === '반려' ? ('보완 요청했습니다' + (redoTxt ? ' · ' + redoTxt + '까지' : ''))
+        : a === '재반려' ? '미조치로 처리했습니다'
+        : st0 === '기한 후 완료' ? '기한 뒤에 올린 완료입니다 — 개선율에는 들어가지 않습니다'
         : '아직 검수하지 않았습니다';
       auditNote.textContent = note;
 
@@ -933,7 +969,13 @@
       }
       btn('점수 제외', '', function () { waive(true); });
       if (a !== '확정') btn('개선확정', 'ok', function () { audit('확정'); });
-      if (a !== '재반려') btn(a === '반려' ? '다시 보완 요청' : '보완 요청', 'warn', function () { audit('반려'); });
+      /* ★보완 요청은 한 번만★ (2026-09-17 J16 · 담당자 *"보완요청은 딱 1번만 진행 될 수 있게"*)
+         보완 요청한 건(반려)에는 그 자리에 「미조치 처리」를 둔다 — 보완본도 부족하면 담당자가 직접 연락하거나
+         미조치로 처리한다. 이미 미조치 처리한 건(재반려)에는 둘 다 없다(되살리는 길은 검수 취소).
+         ★기한 뒤에 올린 완료에는 보완 요청을 두지 않는다★ (J1 · 서버도 거절한다 — fnImproveAudit 주석)
+         ★보완 기한(it.redo)이 남아 있으면 이미 한 번 요청한 건이다★ — 확정·검수 취소를 거쳐도 다시 두지 않는다. */
+      if (a === '반려') btn('미조치 처리', 'warn', function () { audit('미조치'); });
+      else if (a !== '재반려' && st0 !== '기한 후 완료' && !str(it.redo)) btn('보완 요청', 'warn', function () { audit('반려'); });
       if (a) btn('검수 취소', '', function () { audit(''); });
     }
 
@@ -962,14 +1004,14 @@
     }
 
     async function audit(verdict) {
-      /* ★보완 요청만 한 번 더 묻는다★ — 매장 화면의 상태가 바뀌고 기한이 새로 잡히기 때문이다.
+      /* ★보완 요청·미조치 처리만 한 번 더 묻는다★ — 매장 화면의 상태가 바뀌기 때문이다.
          개선확정과 취소는 되돌릴 수 있으므로 묻지 않는다(누를 때마다 묻는 창은 곧 무시된다). */
       if (verdict === '반려') {
-        const again = str(it.audit) === '반려';
-        const msg = again
-          ? '보완본을 다시 요청하시겠습니까?\n\n두 번째 요청부터는 이 건이 다음 점검에서 확인하는 것으로 넘어갑니다.'
-          : '이 건에 보완을 요청하시겠습니까?\n\n매장 화면에 「보완 요청」으로 뜨고, 기한이 새로 잡힙니다.';
-        if (!confirm(msg)) return;
+        if (!confirm('이 건에 보완을 요청하시겠습니까?\n\n매장 화면에 「보완 요청」으로 뜨고, 보완 기한이 새로 잡힙니다.\n' +
+          '보완 요청은 한 건에 한 번만 할 수 있습니다.')) return;
+      }
+      if (verdict === '미조치') {
+        if (!confirm('이 건을 미조치로 처리하시겠습니까?\n\n매장 화면에는 「기한 지남」으로 뜨고, 개선율에 들어가지 않습니다.')) return;
       }
       const btns = auditBtns.querySelectorAll('button');
       btns.forEach(function (b) { b.disabled = true; });
@@ -982,11 +1024,12 @@
         return;
       }
       /* ★서버가 돌려준 값만 반영한다★ — 화면에서 다음 상태를 추측하면 시트와 갈라진다
-         (예: 반려 → 재반려로 넘어가는 판정은 시트의 현재 값을 봐야 안다). */
+         (예: 보완본이 올라왔는지·기한 뒤 완료인지는 시트의 현재 값을 봐야 안다). */
       it.audit = str(r.audit);
       it.redo = r.redo || null;
       it.status = str(r.status) || it.status;
       it.statusWhy = str(r.statusWhy);
+      it.resub = r.resub === true;
       fill(it);
     }
 

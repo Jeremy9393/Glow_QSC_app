@@ -79,7 +79,7 @@ const Maint = (function () {
     box.style.cssText =
       'position:fixed;inset:0;z-index:2147483000;background:#fff;' +
       'display:flex;align-items:center;justify-content:center;padding:24px;' +
-      'font:15px/1.7 -apple-system,BlinkMacSystemFont,"Malgun Gothic","맑은 고딕",sans-serif;color:#222';
+      'font:15px/1.7 "NanumSquare",-apple-system,BlinkMacSystemFont,"Malgun Gothic","맑은 고딕",sans-serif;color:#222';   // 글꼴은 나눔스퀘어 (담당자 규칙 · app.css @font-face)
 
     const card = document.createElement('div');
     card.style.cssText = 'max-width:420px;width:100%;text-align:center';
