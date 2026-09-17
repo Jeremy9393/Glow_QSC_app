@@ -1,6 +1,6 @@
 {
- "sha256": "36d9ace672a8201161cf3b02280c82d4b584295d2b8af43a2b7db9bed6d972f1",
- "version": 141,
- "when": "2026-09-17 13:22:01",
- "description": "계정 관리 비밀번호 보기 — 관리자 비밀번호 재확인(account.revealPw)"
+ "sha256": "72e2cda859f38f1a610d928f291d95ff7f853faf37b1881276d0608f5ffac8c2",
+ "version": 142,
+ "when": "2026-09-17 13:58:00",
+ "description": "NAS 아카이빙 자료 admin.archiveData (읽기)"
 }
