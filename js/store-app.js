@@ -554,7 +554,8 @@
       return;
     }
     if (!fromSnap) {
-      if (data.readOnly) showState('지금은 조회만 가능합니다. 개선보고 입력은 준비되는 대로 열립니다.');
+      // 막힌 이유는 서버가 준다(readOnlyWhy — 9월까지의 달 · 아직 안 온 달) · 없으면 종전 문구
+      if (data.readOnly) showState(str(data.readOnlyWhy) || '지금은 조회만 가능합니다. 개선보고 입력은 준비되는 대로 열립니다.');
       else if (!Auth.can('store', '쓰기')) showState('조회 권한만 있습니다. 개선보고 입력은 매장 담당자 계정으로 해 주세요.');
       else showState('');
     }

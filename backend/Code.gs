@@ -188,7 +188,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v139', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v140', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -2619,6 +2619,9 @@ function fnNotifyBadge(ctx) {
   /* 관리자(전체 범위)에게는 store를 아예 담지 않는다 — 26곳 합계는 '내가 할 일'이 아니고,
      그걸 세려면 26개 파일을 열어야 해서 홈이 수십 초가 된다. 관리자의 현황은 status.month다. */
   if (!ctx.stores || ctx.stores.all) return { ok: true, ym: ym };
+  /* ★조회만 되는 달은 세지 않는다★ (2026-09-17 · storeWriteBlock 주석) — 9월까지는 앱에서 고칠 수 없는데
+     홈 숫자가 「할 일」로 떠 있으면 매장이 눌러 보고 헷갈린다. 10/1 부터 그 달(2610) 숫자가 뜬다. */
+  if (storeWriteBlock(ctx, ym)) return { ok: true, ym: ym };
   const list = ctx.stores.list || [];
   if (!list.length) return { ok: true, ym: ym };
   /* ★매장 수 상한★ — list는 `계정` D열을 콤마로 쪼갠 것이라 길이 제한이 없다. 지역담당 계정에
@@ -4558,10 +4561,14 @@ function fnStoreGet(ctx, payload, target) {
   /* ★사람마다 달라지는 값은 캐시가 아니라 여기서 붙인다★
      readOnly는 권한이, isNew는 그 계정의 최근접속이 정한다. 캐시에 담으면 먼저 연 사람의
      권한·기준선이 다음 사람에게 그대로 간다. */
-  /* ★권한만 본다★ — 매장 개선보고는 권한이 있으면 늘 저장된다.
+  /* ★권한 + 열린 달★ — 매장 개선보고는 권한이 있고 그 달이 열려 있으면 저장된다(storeWriteBlock 주석 · 2026-09-17).
      (종전에는 스크립트 속성도 함께 봐서, 그것이 비어 있으면 권한이 있는 매장에도
-      「지금은 조회만 가능합니다」가 떴다. 2026-08-27에 그 조건을 걷어냈다.) */
-  out.readOnly = !can(ctx.role, 'store', '쓰기').allow;
+      「지금은 조회만 가능합니다」가 떴다. 2026-08-27에 그 조건을 걷어냈다.)
+     ★막힌 달이어도 FORBIDDEN 으로 돌려주지 않는다★ — 불러오기 단계의 FORBIDDEN 은 화면이 홈으로 보낸다.
+     조회는 되게 두고 readOnly + 이유(readOnlyWhy)만 붙인다. */
+  const writeWhy = storeWriteBlock(ctx, ym);
+  out.readOnly = !can(ctx.role, 'store', '쓰기').allow || !!writeWhy;
+  if (writeWhy) out.readOnlyWhy = writeWhy;
   markNewItems(out.items, store, ym, seenBaseline(ctx.id));
   attachAdminLive(out, ctx, store, ym);
   return out;
@@ -5240,6 +5247,23 @@ function dropStoreCache(store, ym) {
 
 /* ---------- 매장현황 저장 (명세 §11-2 · 3단계) ---------- */
 
+/* ★매장 계정의 개선보고 저장이 열리는 달★ (2026-09-17 담당자 선택 「앱에서 막기」)
+     *"매장 계정은 10월1일부터 작성 가능한걸로 설정할까?.. 어차피 9월은 스프레드시트에서
+       불러오기만 하는 내용이니까 매장에서 수정을 하면 안되거든"*
+   ① 2610 전 달(옛 서식 · 9월까지)은 ★영구히 조회만★ — 그 달의 정본은 스프레드시트다.
+      날짜로만 막으면 10/1 이 지나는 순간 9월 탭이 다시 열린다(옛 서식 저장 경로는 fnStoreSave 에 살아 있다).
+   ② 지금 달보다 뒤의 달(12월 베타 탭 등)은 그 달이 오기 전엔 조회만 — 그래서 10/1 0시 전에는 저장되는 달이 없다.
+   관리자(계정관리 쓰기)는 막지 않는다 — 시험·대리 입력용. ★role 이름을 비교하지 않는다★(ADMIN_MENU 주석).
+   채점 확정 잠금은 따로 있다(fnStoreSave 의 monthClosedAt).
+   돌려주는 값: '' = 저장 열림 · 글자 = 막힌 이유(매장 화면에 그대로 뜬다 — 불러오기는 readOnlyWhy, 저장은 FORBIDDEN 문구) */
+function storeWriteBlock(ctx, ym) {
+  if (can(ctx && ctx.role, ADMIN_MENU, '쓰기').allow) return '';
+  const y = String(ym || '');
+  if (y < '2610') return '9월까지의 기록은 앱에서 조회만 가능합니다.';
+  if (y > curYymm()) return '아직 시작되지 않은 달이라 조회만 가능합니다 — ' + ymLabel(y) + ' 1일부터 입력할 수 있습니다.';
+  return '';
+}
+
 /* ★K~O만 쓴다★. 본사 몫인 B·C·D·J를 쓰는 코드 경로를 매장 기능층에 아예 만들지 않는다
    (§8-3 방어④). 열 번호를 계산하는 코드가 없으므로 오프셋 실수로 본사 칸을 덮을 수 없다. */
 function fnStoreSave(ctx, payload, target) {
@@ -5256,6 +5280,11 @@ function fnStoreSave(ctx, payload, target) {
   const store = target;
   const ym = String(payload.ym || '').trim();
   if (!validYm(ym)) return err('BAD_REQUEST', '월이 올바르지 않습니다.');
+  /* ★매장 계정은 열린 달에만 저장한다★ (2026-09-17 · storeWriteBlock 주석) — 화면이 입력칸을 이미 잠그지만
+     열어 둔 옛 화면·직접 호출도 여기서 막는다. 파일을 열기 전에 거절한다.
+     FORBIDDEN 이어도 화면은 홈으로 보내지 않고 이 문구를 그 카드에 띄운다(store-app.js 「조회 전용 기간」 주석). */
+  const writeWhy = storeWriteBlock(ctx, ym);
+  if (writeWhy) return err('FORBIDDEN', writeWhy);
   const no = payload.no;
   /* ★Number('')===0 이라 이 검사를 빼면 12행(첫 데이터 행)에 쓴다★ */
   if (!(typeof no === 'number' && no >= 1 && no === Math.floor(no))) {

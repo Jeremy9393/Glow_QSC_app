@@ -55,7 +55,7 @@ FUNCS = ['fnStoreSave', 'fnImproveAudit', 'fnNotifyBadge', 'fnNotifyAdmin', 'bad
          'notifyScan', 'notifySheet', 'notifyTouched', 'maybeTidyNotify', 'tidyNotify',
          'notifyKey', 'notifyCacheKey', 'capText', 'validYm', 'normStore', 'auditTxt',
          'auditCut', 'stampFull', 'safe', 'safeRow', 'delRows', 'cell', 'err', 'grid',
-         'sheet', 'impJudge', 'impSubOnSave', 'impOverdue', 'ymLabel']
+         'sheet', 'impJudge', 'impSubOnSave', 'impOverdue', 'ymLabel', 'storeWriteBlock']
 CONSTS = ['PHOTO_EMBED', 'AUTH_NOTIFY_SHEET', 'NOTIFY_HEADER', 'NOTIFY_COLS', 'NOTIFY_FROM_YM',
           'NOTIFY_KEEP_DAYS', 'NOTIFY_SCAN', 'NOTIFY_LIST_MAX', 'BADGE_MAX_STORES', 'IMP_REDO_DAYS']
 body = '\n'.join(const(c) for c in CONSTS) + '\n\n' + '\n\n'.join(cut(f) for f in FUNCS)
@@ -302,12 +302,15 @@ audit(6, '반려');
 ok('보완 요청 → 처리', [rowOf(6)[6], rowOf(6)[8]], ['처리', '보완 요청']);
 
 // ── ⑥ 9월 탭 ───────────────────────────────────────────────
-console.log('\n⑥ 2609 탭');
+/* 2026-09-17 담당자 「앱에서 막기」 — 매장 계정은 9월까지의 달에 저장하지 못한다(storeWriteBlock).
+   종전 이 자리는 「저장 ok · 알림 없음 · 시트에는 쓰였다」였다 — ★일부러 바꾼 동작이다★ */
+console.log('\n⑥ 2609 탭 — 매장 저장 거절');
 reset();
+var before2609 = STORE_TABS['2609']._get(ROW0, 14);
 r = save('2609', 1, '끝');
-ok('저장 ok', r.ok, true);
+ok('저장 거절 FORBIDDEN · 이유 문구', [r.ok, r.code, String(r.error).indexOf('9월까지의 기록은') === 0], [false, 'FORBIDDEN', true]);
 ok('알림 없음', dataRows().length, 0);
-ok('시트에는 쓰였다', STORE_TABS['2609']._get(ROW0, 14), '끝');
+ok('시트에는 안 쓰였다', STORE_TABS['2609']._get(ROW0, 14), before2609);
 
 // ── ⑦ 알림이 터져도 ────────────────────────────────────────
 console.log('\n⑦ 알림 쓰기가 예외를 던져도');
