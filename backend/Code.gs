@@ -213,7 +213,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v147', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v149', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -365,6 +365,8 @@ function actionTable() {
     'store.makeTab':      { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnStoreMakeTab },
     /* 매장 파일 「월별 QSC현황표」의 VLOOKUP 주소 수리 — 기본이 미리보기다. */
     'store.fixSummary':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 2 * KB, fn: fnStoreFixSummary },
+    /* 빈 월 탭의 개선율 칸을 원본 탭 수식으로 되돌리기 — 기본이 미리보기다 (2026-09-22) */
+    'store.resetRate':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnStoreResetRate },
     /* [월 채점 확정] — 그 달을 닫는다. 기본이 미리보기다. */
     'month.close':        { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMonthClose },
     /* 감사로그 40일 정리 — 평소엔 하루 한 번 자동으로 돈다. 이 액션은 지금 바로 돌려보거나
@@ -384,6 +386,8 @@ function actionTable() {
     'admin.undoSubmit':   { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnUndoSubmit },
     /* NAS 아카이빙 자료 — 관리자 시트의 그 달 QSC·MS 답을 archive.py 가 받는 모양으로 (읽기만 · 2026-09-17) */
     'admin.archiveData':  { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnArchiveData },
+    /* 한 달 원자료 그대로 — QSC_회차·QSC_상세·MS_상세·NA프리셋의 그 달 줄 (읽기만 · 2026-09-22 12월 베타 보관용) */
+    'admin.monthDump':    { menu: ADMIN_MENU, act: '읽기', scope: 'none', max: 1 * KB, fn: fnMonthDump },
     /* 인증 시트를 응답 시트로 합치기 — 일회성. 기본이 미리보기다. */
     'admin.mergeAuth':    { menu: ADMIN_MENU, act: '쓰기', scope: 'none', max: 1 * KB, fn: fnMergeAuth },
     /* 매장 월 탭 보호 — 인자가 없으면 대상 목록만 보여준다(아무것도 걸지 않는다). */
@@ -8968,6 +8972,86 @@ function fnArchiveData(ctx, payload) {
   });
 
   return { ok: true, ym: ym, month: month, stores: out, fetchedAt: nowIso() };
+}
+
+/* ---------- 한 달 원자료 그대로 (2026-09-22) ----------
+   담당자: *"12월로 테스트 돌렸던건 다시 전부 아무것도 안했던 상태로 원상복구 … 테스트해둔건 따로 파일로 하나 만들어서 보관만 해놓고"*
+   되돌리기(fnUndoSubmit)는 시트 줄을 지우고 시트 줄 삭제에는 휴지통이 없다 — 지우기 전에 ★빠짐없이★ 떠 둬야 한다.
+   archiveData 는 붙여넣기용이라 MS 가 둘 이상이면 최근 1건만 싣고 사진·제출시각·입력경로를 싣지 않는다. 그래서 따로 둔다.
+   ★읽기만 한다★ — QSC_회차·QSC_상세·MS_상세·NA프리셋에서 그 달(점검일·방문일·갱신일 기준) 줄을
+   머리글과 함께 ★화면에 보이는 글자 그대로(getDisplayValues)★ 돌려준다. 계정·감사로그 탭은 싣지 않는다.
+     await Api.call('admin.monthDump', {ym:'2612'}) */
+function fnMonthDump(ctx, payload) {
+  const ym = String((payload || {}).ym || '').trim();
+  if (!validYm(ym)) return err('BAD_REQUEST', 'ym 형식이 올바르지 않습니다 (예: 2612)');
+  const month = '20' + ym.slice(0, 2) + '-' + ym.slice(2, 4);
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const tz = ssTz();
+  const tabs = {};
+  [['QSC_회차', 2], ['QSC_상세', 1], [MS_DETAIL, MS_COL.date], ['NA프리셋', 3]].forEach(function (t) {
+    const sh = ss.getSheetByName(t[0]);
+    if (!sh) { tabs[t[0]] = { head: [], rows: [] }; return; }
+    const last = sh.getLastRow(), nc = sh.getLastColumn();
+    const head = nc ? sh.getRange(1, 1, 1, nc).getDisplayValues()[0] : [];
+    const rows = [];
+    if (last >= 2 && nc) {
+      const rng = sh.getRange(2, 1, last - 1, nc);
+      const v = rng.getValues(), d = rng.getDisplayValues();
+      for (let i = 0; i < v.length; i++) {
+        if (dateOfCell(v[i][t[1] - 1], tz).slice(0, 7) === month) rows.push(d[i]);
+      }
+    }
+    tabs[t[0]] = { head: head, rows: rows };
+  });
+  return { ok: true, ym: ym, month: month, tabs: tabs, fetchedAt: nowIso() };
+}
+
+/* ---------- 빈 월 탭의 개선율 칸을 원본 수식으로 되돌리기 (2026-09-22) ----------
+   새 서식에서는 매장이 개선보고를 저장할 때 recountSummary 가 개선율 칸(보통 H9)을 ★값★으로 덮는다(§1-8).
+   그 뒤 되돌리기로 표만 비우면 그 값(예: 1 = 100%)이 빈 탭에 그대로 남는다 — 12월 베타 원상복구에서
+   스탠다드브레드 해운대로 확인(나머지 19곳은 매장이 저장한 적이 없어 수식 그대로였다).
+   그 탭에 다음 점검이 들어가면 매장이 다시 저장하기 전까지 개선율이 옛 값으로 보이고 통합시트 종합에도 그대로 간다.
+   ★원본 탭(TPL_NEW)의 같은 라벨 칸 수식을 그대로 옮겨 적는다★ — 표가 비어 있을 때만 · 확정된 달은 안 한다 ·
+   원본 칸이 수식이 아니면 짐작해서 적지 않는다 · 기본이 미리보기다.
+     await Api.call('store.resetRate', {store:'스탠다드브레드 해운대', ym:'2612'})               ← 미리보기
+     await Api.call('store.resetRate', {store:'스탠다드브레드 해운대', ym:'2612', apply:true})   ← 적는다
+   ⚠되돌리기(fnUndoSubmit)가 표를 비울 때 이 칸까지 되돌리게 하는 것은 아직 안 했다 — 현재상황.md 참조. */
+function fnStoreResetRate(ctx, payload) {
+  const p = payload || {};
+  const store = String(p.store || '').trim();
+  const ym = String(p.ym || '').trim();
+  const apply = p.apply === true;
+  if (!store) return err('BAD_REQUEST', '매장명을 주십시오.');
+  if (!validYm(ym)) return err('BAD_REQUEST', 'ym 형식이 올바르지 않습니다 (예: 2612)');
+  const id = storeFileId(store);
+  if (!id) return err('NOT_FOUND', '매장 파일을 찾지 못했습니다: ' + store);
+  const ss = ssOpen(id);
+  const sh = ss.getSheetByName(ym);
+  if (!sh) return err('NOT_FOUND', ym + ' 탭이 없습니다.');
+  if (monthClosedAt(ss, ym)) return err('MONTH_CLOSED', ymLabel(ym) + ' 채점이 확정된 달입니다 — 손대지 않습니다.');
+  const s = improveScan(sh);
+  if (!s.ok) return err('CONFLICT', '개선요청 표를 읽지 못했습니다: ' + s.why);
+  if (s.filled) return err('CONFLICT', '개선요청 표에 ' + s.filled + '줄이 있습니다 — 빈 탭에서만 되돌립니다.');
+  const pr = labelValue(labelMap(sh), ['개선율']);
+  if (!pr.found || !pr.row) return err('CONFLICT', ym + ' 탭에서 「개선율」 칸을 못 찾았습니다.');
+  const tpl = ss.getSheetByName(TPL_NEW);
+  if (!tpl) return err('CONFLICT', '원본 탭(' + TPL_NEW + ')이 없습니다.');
+  const tp = labelValue(labelMap(tpl), ['개선율']);
+  if (!tp.found || !tp.row) return err('CONFLICT', '원본 탭에서 「개선율」 칸을 못 찾았습니다.');
+  const tc = grid(tpl, tp.row, tp.col, 1, 1);
+  const want = tc ? String(tc.getFormula() || '') : '';
+  if (!want) return err('CONFLICT', '원본 탭의 개선율 칸이 수식이 아닙니다 — 짐작해서 적지 않습니다.');
+  const cell = grid(sh, pr.row, pr.col, 1, 1);
+  if (!cell) return err('CONFLICT', '개선율 칸을 열지 못했습니다.');
+  const a1 = cell.getA1Notation();
+  const curF = String(cell.getFormula() || '');
+  const was = curF || cell.getValue();
+  if (curF === want) return { ok: true, same: true, store: store, ym: ym, cell: a1, formula: want };
+  if (!apply) return { ok: true, preview: true, store: store, ym: ym, cell: a1, now: was, will: want };
+  cell.setFormula(want);
+  SpreadsheetApp.flush();
+  dropStoreCache(store, ym);
+  return { ok: true, done: true, store: store, ym: ym, cell: a1, was: was, now: want, value: cell.getValue() };
 }
 
 function fnUndoSubmit(ctx, payload) {
