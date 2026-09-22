@@ -139,6 +139,7 @@
   // 감점식: 전 문항 0건(이상 없음)에서 시작 — 개선 필요한 것만 입력하면 됨
   allItems.forEach(function (it) { state.values[it.no] = 0; });
   const updaters = {};
+  const chipPainters = {};   // 문항 칩만 다시 그리는 손잡이 — 일반 1건의 점수가 바뀌면 recompute 가 부른다
   const cardEls = {};
   let photoTarget = null;
   /* 사진 임시저장(IndexedDB)이 이 기기에서 살아 있는가.
@@ -149,6 +150,18 @@
   function setPhotoDraft(on) { photoDraftOn = on; window.QscPhotoDraft.on = on; }
 
   function sevLabel(sev) { return sev === 'S1' ? '★★' : sev === 'S2' ? '★' : ''; }
+
+  /* 지금 입력 상태로 본 일반 문항 1건의 점수 = 100 ÷ 해당 일반 문항 수 (★2026-09-22 팀장 승인★)
+     문항 하나를 NA 로 바꾸면 해당 문항 수가 줄어 ★다른 일반 문항의 1건 점수까지 바뀐다★ —
+     그래서 칩은 recompute 가 한꺼번에 다시 그린다(chipPainters). */
+  function curItems() {
+    return allItems.map(function (it) {
+      return { severity: it.severity || '', value: state.values[it.no] == null ? null : state.values[it.no] };
+    });
+  }
+  function genPer() { return Scoring.generalBase(curItems()).per; }
+  // 감점 표시 — 소수 첫째 자리 (3.448… → 3.4 · 8 → 8)
+  function pts(n) { return String(Scoring.round1(n)); }
 
   $('#resetBtn').onclick = function () {
     if (!confirm('모든 입력(건수·사진·비고)을 지우고 새 점검을 시작할까요?')) return;
@@ -163,7 +176,7 @@
   $('#verInfo').textContent = '평가표 ' + (Q.version || master.version) + ' 기준';
   if ($('#wLine')) {
     const R = Scoring.RULES;
-    $('#wLine').textContent = '감점: 일반 1건 −' + R.general.per +
+    $('#wLine').textContent = '감점: 일반 1건 = ' + R.general.total + ' ÷ 해당 일반 문항 수(NA 제외 · 58문항이면 1.72점)' +
       ' · ★ 문항당 −' + R.S2.first + '(추가 −' + R.S2.more + ', 상한 ' + R.S2.cap + ')' +
       ' · ★★ 문항당 −' + R.S1.first + '(추가 −' + R.S1.more + ', 상한 ' + R.S1.cap + ') / ';
   }
@@ -519,16 +532,21 @@
       const cnt = $('.cnt', card);
       if (typeof v === 'number') { cnt.textContent = v; cnt.className = v > 0 ? 'cnt hot' : 'cnt'; }
       else { cnt.textContent = '–'; cnt.className = 'cnt empty'; }
+      paintChip();
+      renderCases(v);
+    }
+
+    function paintChip() {
+      const v = state.values[it.no] == null ? null : state.values[it.no];
       const chip = $('.score-chip', card);
-      const d = Scoring.itemDeduct(v, it.severity);
+      const d = Scoring.itemDeduct(v, it.severity, genPer());
       if (d === null) { chip.textContent = '미확인'; chip.className = 'score-chip'; }
       else if (d === 'NA') { chip.textContent = 'NA 제외'; chip.className = 'score-chip s-na'; }
       else if (d === 0) { chip.textContent = '이상 없음'; chip.className = 'score-chip s-o'; }
       else {
-        chip.textContent = (it.severity ? sevLabel(it.severity) + ' ' : '') + '−' + d + '점';
+        chip.textContent = (it.severity ? sevLabel(it.severity) + ' ' : '') + '−' + pts(d) + '점';
         chip.className = 'score-chip ' + (it.severity ? 's-x' : 's-d');
       }
-      renderCases(v);
     }
 
     /* ★건마다 한 칸을 그린다★ (2026-09-04)
@@ -589,6 +607,7 @@
       }
     }
     updaters[it.no] = update;
+    chipPainters[it.no] = paintChip;
     update();
     return card;
   }
@@ -623,21 +642,18 @@
   gnav.appendChild(aSum);
 
   // ---------- 집계 ----------
-  function evalNow() {
-    return Scoring.evaluate(allItems.map(function (it) {
-      return { severity: it.severity || '', value: state.values[it.no] == null ? null : state.values[it.no] };
-    }));
-  }
-  function groupStats(items) {
+  function evalNow() { return Scoring.evaluate(curItems()); }
+  /* 영역별 감점 — per 는 evaluate 가 낸 genPer(일반 1건의 점수). 중대는 상한 전 원값이다(엑셀 세부 영역과 같다). */
+  function groupStats(items, per) {
     let cases = 0, deduct = 0, issue = 0;
     items.forEach(function (it) {
       const v = state.values[it.no];
-      const d = Scoring.itemDeduct(v == null ? null : v, it.severity);
+      const d = Scoring.itemDeduct(v == null ? null : v, it.severity, per);
       if (typeof d === 'number' && d > 0) { deduct += d; issue++; cases += v; }
     });
     return { cases: cases, deduct: deduct, issue: issue };
   }
-  function fmtM(n) { return n > 0 ? '−' + n : '0'; }
+  function fmtM(n) { return n > 0 ? '−' + pts(n) : '0'; }
   /* 하단 바의 실시간 감점 표시 — ★심각도별로 나눠 보여준다★ (2026-08-20)
      종전에는 '개선 필요 6건'이라고 한 덩어리로만 보여서, 그 6건이 일반인지 중대인지 알 수 없었다.
      점검 중에 가장 알고 싶은 것은 '중대가 걸렸는가'이므로 ★·★★는 색으로도 구분한다.
@@ -650,7 +666,7 @@
       seg.push('<span class="bb-crit">' + label + ' ' + t.cases + '건 −' + t.capped +
         (t.capHit ? ' 상한' : '') + '</span>');
     };
-    seg.push('일반 ' + res.genCases + '건' + (res.genDeduct ? ' −' + res.genDeduct : ''));
+    seg.push('일반 ' + res.genCases + '건' + (res.genDeduct ? ' −' + pts(res.genDeduct) : ''));
     tier(res.s2, R.S2.label);
     tier(res.s1, R.S1.label);
     if (res.na) seg.push('NA ' + res.na);
@@ -661,10 +677,15 @@
 
   function recompute() {
     const res = evalNow();
+    /* 일반 1건의 점수는 해당 문항 수에 달려 있다 — NA 하나가 바뀌면 다른 일반 문항 칩의 숫자도 바뀐다 */
+    allItems.forEach(function (it) {
+      const v = state.values[it.no];
+      if (!it.severity && typeof v === 'number' && v > 0 && chipPainters[it.no]) chipPainters[it.no]();
+    });
     Q.qsc_groups.forEach(function (g, gi) {
-      const st = groupStats(g.items);
+      const st = groupStats(g.items, res.genPer);
       $('#gstat' + gi).innerHTML = '개선 필요 ' + st.cases + '건' +
-        (st.deduct ? ' · <span class="gscore">감점 ' + st.deduct + '</span>' : '');
+        (st.deduct ? ' · <span class="gscore">감점 ' + pts(st.deduct) + '</span>' : '');
       $('#nav' + gi + ' .n').textContent = st.cases + '건';
     });
     $('#bbScore').textContent = res.qsc == null ? '—' : 'QSC ' + res.qsc.toFixed(1) + '점';
@@ -680,8 +701,10 @@
     const body = $('#sumBody');
     body.innerHTML = '';
     const R = Scoring.RULES;
+    /* 1건의 점수는 소수 둘째 자리까지 보인다(1.72) — 첫째 자리(1.7)로 보이면 「58문항 × 1.7 ≠ 100」으로 읽힌다 */
+    const perTxt = res.genN ? String(Math.round(res.genPer * 100) / 100) : '0';
     const rows = [
-      ['일반 문항 감점 (1건 = −' + R.general.per + '점)',
+      ['일반 문항 감점 (1건 = ' + R.general.total + ' ÷ 해당 ' + res.genN + '문항 = ' + perTxt + '점)',
         res.genItems + '문항 / ' + res.genCases + '건', fmtM(res.genDeduct)],
       ['★ 중대운영 (문항당 −' + R.S2.first + ' · 추가 건당 −' + R.S2.more + ' · 상한 −' + R.S2.cap + ')',
         res.s2.items + '문항 / ' + res.s2.cases + '건' + (res.s2.capHit ? ' · 상한 도달(원값 ' + res.s2.raw + ')' : ''),
@@ -702,7 +725,7 @@
     if (ref) {
       ref.innerHTML = '';
       Q.qsc_groups.forEach(function (g) {
-        const st = groupStats(g.items);
+        const st = groupStats(g.items, res.genPer);
         const tr = document.createElement('tr');
         tr.innerHTML = '<td>' + shortName(g.name) + '</td>' +
           '<td class="r">' + fmtM(st.deduct) + '</td>' +
@@ -727,12 +750,12 @@
     } else {
       off.forEach(function (it) {
         const v = state.values[it.no];
-        const d = Scoring.itemDeduct(v, it.severity);
+        const d = Scoring.itemDeduct(v, it.severity, res.genPer);
         const ph = shotCount(it.no);
         const row = document.createElement('div');
         row.className = 'offRow' + (it.severity ? ' crit' : '');
         row.innerHTML = '<span class="no">' + (it.code || it.no) + '</span><span class="t"></span><span class="v">' +
-          v + '건 · −' + d + '점' + (ph ? ' · 사진 ' + ph : '') + '</span>';
+          v + '건 · −' + pts(d) + '점' + (ph ? ' · 사진 ' + ph : '') + '</span>';
         $('.t', row).textContent = (it.severity ? '[' + sevLabel(it.severity) + '] ' : '') + it.text;
         row.onclick = function () {
           if (cardEls[it.no]) cardEls[it.no].scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -822,13 +845,16 @@
       submittedAt: new Date().toISOString(),
       result: {
         final: res.qsc, qsc: res.qsc, grade: res.grade,
-        criticalDeduct: res.criticalDeduct, genDeduct: res.genDeduct,
+        /* 일반 감점은 소수 첫째 자리로 보낸다 — QSC_회차 「일반감점」 칸이 QSC점수와 같은 자릿수가 되게 */
+        criticalDeduct: res.criticalDeduct, genDeduct: Scoring.round1(res.genDeduct),
         s1: { items: res.s1.items, cases: res.s1.cases, deduct: res.s1.capped },
         s2: { items: res.s2.items, cases: res.s2.cases, deduct: res.s2.capped },
       },
       items: allItems.map(function (it) {
         const v = state.values[it.no] == null ? null : state.values[it.no];
-        const d = Scoring.itemDeduct(v, it.severity);
+        /* 문항별 감점(QSC_상세 「감점」 칸)은 소수 둘째 자리 — 1건 1.72 가 그대로 보여 손으로 검산할 수 있게 */
+        const d0 = Scoring.itemDeduct(v, it.severity, res.genPer);
+        const d = typeof d0 === 'number' ? Math.round(d0 * 100) / 100 : d0;
         return {
           no: it.no, code: it.code || '', row: it.row, text: it.text,
           severity: it.severity || '', critical: !!it.severity, group: it.group,

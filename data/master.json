@@ -1,6 +1,6 @@
 {
- "version": "2026-09-17",
- "source_sha": "15428203049a",
+ "version": "2026-09-22",
+ "source_sha": "5027aaf077d4",
  "source": "QSC·MS 평가표.xlsx",
  "stores": [
   "금종제과",
@@ -31,7 +31,8 @@
   "호우주의보 익선"
  ],
  "scoring": {
-  "general_per_case": 1,
+  "general_total": 100,
+  "qsc_round": 1,
   "S2": {
    "label": "★",
    "name": "중대운영",

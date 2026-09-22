@@ -36,8 +36,9 @@ function ok(n, c, e) {
 
 console.log('\n[1] ★점수 계산은 사유와 무관하다★ — NA는 어느 사유든 똑같이 빠진다');
 ok('NA 는 감점이 아니다', Scoring.itemDeduct('NA', 'S2') === 'NA', String(Scoring.itemDeduct('NA', 'S2')));
-ok('0건은 0점', Scoring.itemDeduct(0, '') === 0);
-ok('일반 3건은 3점', Scoring.itemDeduct(3, '') === 3);
+ok('0건은 0점', Scoring.itemDeduct(0, '', 100 / 58) === 0);
+// ★2026-09-22★ 일반 1건 = 100 ÷ 해당 일반 문항 수 — 1건 점수(per)를 넘긴다(해당 50이면 2점)
+ok('일반 3건 = 3 × 1건 점수', Scoring.itemDeduct(3, '', 2) === 6);
 ok('별표 1건은 8점', Scoring.itemDeduct(1, 'S2') === 8, String(Scoring.itemDeduct(1, 'S2')));
 ok('미확인은 null', Scoring.itemDeduct(null, '') === null);
 

@@ -1,6 +1,6 @@
 {
- "sha256": "117c74114b332a47e1500032df6b5c9eba1328825d740918d433cc7e6ac7e083",
- "version": 146,
- "when": "2026-09-18 02:17:23",
- "description": "문항을 서버가 내려준다 — config.questions(qsc 권한) · survey.questions(제출 코드 먼저) · 공개 master.json 에서 문항 제거 (1.46)"
+ "sha256": "b498e6d019dc0ba384b6f3f4d7d25ee46a5c9e8e4654d4ceb2ca77d2439ab69a",
+ "version": 147,
+ "when": "2026-09-22 15:50:47",
+ "description": "일반 문항 준수율 배점 — 평가기준 문구 1건 = 100 ÷ 해당 일반 문항 수 (1.47)"
 }

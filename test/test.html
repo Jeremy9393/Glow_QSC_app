@@ -1,9 +1,9 @@
 ﻿<!DOCTYPE html>
 <html lang="ko">
-<head><meta charset="utf-8"><title>채점 엔진 검증 (v3.7 절대 감점제)</title></head>
+<head><meta charset="utf-8"><title>채점 엔진 검증 (일반 1건 = 100 ÷ 해당 일반 문항 수)</title></head>
 <body style="font-family:Consolas,monospace;padding:16px;background:#111;color:#eee">
-<h1 style="font-size:18px">채점 엔진 검증 — v3.7 74문항 · 절대 감점제 (★★4 · ★12 · 일반58)</h1>
-<p style="font-size:12px;color:#999">기대값은 엑셀 'QSC·MS 평가표.xlsx' 실계산(2026-08-13 전수검사)과 동일해야 한다.</p>
+<h1 style="font-size:18px">채점 엔진 검증 — 74문항 (★★4 · ★12 · 일반58) · 일반 1건 = 100 ÷ 해당 일반 문항 수 (2026-09-22)</h1>
+<p style="font-size:12px;color:#999">기대값은 엑셀 'QSC·MS 평가표.xlsx' 실계산과 같아야 한다 (2026-09-22 무작위 322건 + 반올림 경계 1,023건 엑셀 대조 일치).</p>
 <pre id="out"></pre>
 <script src="../js/scoring.js"></script>
 <script>
@@ -25,10 +25,16 @@ function build(gen, s2, s1) {
 }
 function genN(n, per) { const a = []; for (let i = 0; i < n; i++) a[i] = per || 1; return a; }
 
-// ---------- 단위: itemDeduct ----------
-ok('일반 0건 = 감점 0', Scoring.itemDeduct(0, '') === 0);
-ok('일반 1건 = 감점 1', Scoring.itemDeduct(1, '') === 1);
-ok('일반 5건 = 감점 5 (상한 없음)', Scoring.itemDeduct(5, '') === 5);
+// ---------- 단위: itemDeduct (일반은 1건 점수 per 를 넘긴다 — 해당 일반 문항 수로 정해진다) ----------
+const P58 = 100 / 58;
+ok('일반 0건 = 감점 0', Scoring.itemDeduct(0, '', P58) === 0);
+ok('일반 1건 = 100÷58 = 1.72…', near(Scoring.itemDeduct(1, '', P58), 100 / 58));
+ok('일반 5건 = 5 × 1건 점수 (상한 없음)', Scoring.itemDeduct(5, '', 2) === 10);
+ok('일반인데 per 없음 → 멈춤 (옛 1건 1점으로 조용히 돌아가지 않는다)', (function () { try { Scoring.itemDeduct(1, ''); return false; } catch (e) { return true; } })());
+ok('generalBase: NA 8개면 해당 50 · 1건 2점', (function () {
+  const b = Scoring.generalBase(build(['NA', 'NA', 'NA', 'NA', 'NA', 'NA', 'NA', 'NA'], ['NA']));
+  return b.n === 50 && b.per === 2;
+})());
 ok('★ 1건 = 감점 8', Scoring.itemDeduct(1, 'S2') === 8);
 ok('★ 2건 = 감점 10 (8+2)', Scoring.itemDeduct(2, 'S2') === 10);
 ok('★ 5건 = 감점 16 (8+2×4)', Scoring.itemDeduct(5, 'S2') === 16);
@@ -36,7 +42,7 @@ ok('★★ 1건 = 감점 12', Scoring.itemDeduct(1, 'S1') === 12);
 ok('★★ 3건 = 감점 20 (12+4×2)', Scoring.itemDeduct(3, 'S1') === 20);
 ok('NA = 채점 제외', Scoring.itemDeduct('NA', 'S1') === 'NA');
 ok('미확인 = null', Scoring.itemDeduct(null, '') === null);
-ok('소수 입력은 내림 정수 처리', Scoring.itemDeduct(2.7, '') === 2);
+ok('소수 입력은 내림 정수 처리', Scoring.itemDeduct(2.7, '', 1) === 2);
 
 // ---------- 단위: 등급 (v3.4 — 우수 93점 이상) ----------
 ok('등급: 93 = 우수 (이상 기준)', Scoring.grade(93) === '우수');
@@ -50,20 +56,43 @@ ok('등급: 55 = 주의 / 54.99 = 부적합', Scoring.grade(55) === '주의' && 
   ok('무결점 → QSC 100 우수 · 차감 0', near(r.qsc, 100) && r.grade === '우수' && r.criticalDeduct === 0, r);
 })();
 (function () {
-  const r = Scoring.evaluate(build(genN(7)));
-  ok('일반 7건 → QSC 93 우수 (이상 경계)', near(r.qsc, 93) && r.grade === '우수', r.qsc);
+  const r = Scoring.evaluate(build(genN(4)));
+  ok('58문항 일반 4건 → QSC 93.1 우수', near(r.qsc, 93.1) && r.grade === '우수' && r.genN === 58, r.qsc);
+})();
+(function () {
+  const r = Scoring.evaluate(build(genN(5)));
+  ok('58문항 일반 5건 → QSC 91.4 양호 (종전 1건 1점이면 95)', near(r.qsc, 91.4) && r.grade === '양호', r.qsc);
 })();
 (function () {
   const r = Scoring.evaluate(build(genN(8)));
-  ok('일반 8건 → QSC 92 양호', near(r.qsc, 92) && r.grade === '양호', r.qsc);
+  ok('58문항 일반 8건 → QSC 86.2 양호', near(r.qsc, 86.2) && r.grade === '양호', r.qsc);
 })();
 (function () {
   const r = Scoring.evaluate(build(genN(20)));
-  ok('일반 20건 → QSC 80', near(r.qsc, 80), r.qsc);
+  ok('58문항 일반 20건 → QSC 65.5 주의', near(r.qsc, 65.5) && r.grade === '주의', r.qsc);
 })();
 (function () {
   const r = Scoring.evaluate(build(genN(58, 2)));
-  ok('일반 116건 → QSC 0 (하한)', near(r.qsc, 0) && r.genDeduct === 116, r);
+  ok('일반 116건(58문항 × 2) → 일반 감점 200 · QSC 0 (하한)', near(r.qsc, 0) && near(r.genDeduct, 200), r);
+})();
+(function () {
+  const gen = genN(8); for (let i = 50; i < 58; i++) gen[i] = 'NA';
+  const r = Scoring.evaluate(build(gen));
+  ok('NA 8개(해당 50) + 일반 8건 → 1건 2점 · QSC 84 보통 (58문항 8건은 86.2)', near(r.qsc, 84) && r.genN === 50 && r.grade === '보통', r);
+})();
+(function () {
+  const gen = genN(3); for (let i = 48; i < 58; i++) gen[i] = 'NA';
+  const r = Scoring.evaluate(build(gen));
+  ok('해당 48문항 3건 → 93.75 → 93.8 (딱 반은 엑셀 ROUND 처럼 올린다)', near(r.qsc, 93.8) && r.grade === '우수', r.qsc);
+})();
+(function () {
+  const r = Scoring.evaluate(build([5]));
+  ok('같은 문항 5건 → 건마다 뺀다 (5 × 1.72 · 91.4)', near(r.qsc, 91.4) && r.genItems === 1 && r.genCases === 5, r);
+})();
+(function () {
+  const gen = []; for (let i = 0; i < 58; i++) gen[i] = 'NA';
+  const r = Scoring.evaluate(build(gen));
+  ok('일반 전부 NA → 해당 0 · 일반 감점 0 · QSC 100', near(r.qsc, 100) && r.genN === 0 && r.genDeduct === 0, r);
 })();
 (function () {
   const r = Scoring.evaluate(build([], [1]));
@@ -91,7 +120,7 @@ ok('등급: 55 = 주의 / 54.99 = 부적합', Scoring.grade(55) === '주의' && 
 })();
 (function () {
   const r = Scoring.evaluate(build(genN(10), [1], [1]));
-  ok('일반10 + ★★1 + ★1 → QSC 70 · 차감 20', near(r.qsc, 70) && r.criticalDeduct === 20, r);
+  ok('일반10 + ★★1 + ★1 → QSC 62.8 · 차감 20', near(r.qsc, 62.8) && r.criticalDeduct === 20, r);
 })();
 (function () {
   const r = Scoring.evaluate(build([], [], [1]));
@@ -99,7 +128,7 @@ ok('등급: 55 = 주의 / 54.99 = 부적합', Scoring.grade(55) === '주의' && 
 })();
 (function () {
   const r = Scoring.evaluate(build(genN(5), [], [1]));
-  ok('일반 5건 + ★★ 1건 → QSC 83 (총 17점 감점)', near(r.qsc, 83) && r.criticalDeduct === 12, r);
+  ok('일반 5건 + ★★ 1건 → QSC 79.4 (8.62 + 12 감점)', near(r.qsc, 79.4) && r.criticalDeduct === 12, r);
 })();
 (function () {
   const r = Scoring.evaluate(build([], genN(12), genN(4)));
