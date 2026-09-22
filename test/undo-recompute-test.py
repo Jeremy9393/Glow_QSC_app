@@ -111,7 +111,15 @@ function labelValue() { return { v: VISIT_DATE }; }
 function setByLabel(sh, label, v) { WROTE.push(['매장파일:' + label, v]); return true; }
 function setByLabelAny(sh, labels, v) { WROTE.push(['매장파일:' + labels[0], v]); return true; }
 var L_QSC = ['QSC점수'], L_MS = ['MS점수'];
-function wipeImprove() { return { ok: true, n: 0, touched: 0, extra: 0 }; }
+/* 개선요청 비우기 대역 — 결과를 바꿔 끼울 수 있고, 몇 번 불렸는지 센다 (2026-09-22) */
+var WIPE = { ok: true, n: 0, touched: 0, extra: 0 }, WIPE_CALLS = 0;
+function wipeImprove() { WIPE_CALLS++; return WIPE; }
+/* ★개선율 칸 되살리기 대역★ (2026-09-22 · 1.50) — 알맹이(resetRateCellIn)는 reset-rate-test 가 따로 잰다.
+   여기서는 「되돌리기가 언제 부르고, 결과를 어떻게 알리는가」만 본다. */
+var LAYOUT = 'new';
+function monthTabLayout() { return LAYOUT; }
+var RATE_CALLS = [], RATE_RES = { ok: true, done: true, cell: 'H9', was: 1, now: '=IFERROR(H7/H5, "")' };
+function resetRateCellIn(ss, sh, apply) { RATE_CALLS.push(apply); return RATE_RES; }
 function improveBlocked() { return null; }
 function writeDashboard(store, date, v, off) { WROTE.push(['통합시트:' + (off === 0 ? 'QSC' : 'MS'), v]); return { ok: true, cell: off === 0 ? 'BV6' : 'BX6' }; }
 var DASHBOARD_ID = 'X';
@@ -300,6 +308,82 @@ ok('#17 「쇼퍼 1건이 남습니다」 — 줄 수(2)가 아니라 제출 건
 r = fnUndoSubmit({}, { store: S, date: '2026-10-25', kind: 'shopper', apply: true, route: '관리자 입력' });
 var doneTxt = r.done.join('\n');
 ok('#18 「그 달 남은 1건 중 가장 최근 1건」 — 「평균」이라는 말이 없다', doneTxt.indexOf('건 중 가장 최근 1건') >= 0 && doneTxt.indexOf('평균') < 0, doneTxt);
+
+/* ══ 2026-09-22 (1.50) — ①통째 되돌리기도 탭을 지우지 않는다 ②개선요청을 비운 뒤 개선율 칸을 원본 수식으로 ══
+   종전: 그 달이 비면 ss.deleteSheet — 요약 탭의 '2610'!D2:I9 참조가 #REF! 로 바뀌어 다음 달 탭이 생겨도 안 이어진다.
+   종전: 개선요청만 비우고 매장 저장 때 값으로 적힌 개선율(예: 1)은 그대로 — 재제출 뒤 옛 개선율이 종합에 갔다. */
+function freshRate() { RATE_CALLS = []; RATE_RES = { ok: true, done: true, cell: 'H9', was: 1, now: '=IFERROR(H7/H5, "")' }; LAYOUT = 'new'; WIPE = { ok: true, n: 2, touched: 1, extra: 0 }; WIPE_CALLS = 0; }
+
+console.log('\n[13] ★통째 되돌리기(그 달 비움)도 탭을 지우지 않는다★ — 빈 양식으로 남기고 비운다');
+freshRate();
+reset([['2026-10-20T11:00','2026-10-20','','금종제과','','','','관리자 입력',80]],
+      [['2026-10-20T10:00','2026-10-20','10:00','금종제과','문수',92]], '2026-10-20');
+r = fnUndoSubmit({}, { store: S, date: '2026-10-20', apply: false });
+plan = r.plan.join('\n');
+ok('미리보기에 「통째로 지웁니다」가 없다', plan.indexOf('통째로 지웁니다') < 0, plan);
+ok('미리보기에 「빈 양식으로 남고」가 있다', plan.indexOf('빈 양식으로 남고') >= 0, plan);
+ok('미리보기가 통째일 때도 「개선요청 행도 함께 비우고 개선율 칸은 원본 수식으로」를 알린다', plan.indexOf('개선요청 행도 함께 비우고 개선율 칸은 원본 수식으로') >= 0, plan);
+r = fnUndoSubmit({}, { store: S, date: '2026-10-20', apply: true });
+doneTxt = (r.done || []).join('\n');
+ok('되돌리기 성공', r.ok === true, JSON.stringify(r.error || ''));
+ok('★탭을 지우지 않았다★ (deleteSheet 0번)', DELETED.length === 0, JSON.stringify(DELETED));
+ok('결과에 「탭 삭제」가 없다', doneTxt.indexOf('탭 삭제') < 0, doneTxt);
+ok('QSC·MS 점수 칸을 비웠다', wroteOf('매장파일:QSC점수') === '' && wroteOf('매장파일:MS점수') === '', JSON.stringify(WROTE));
+ok('개선요청을 비웠다(wipe 1번) · 방문일·방문시간도 비웠다', WIPE_CALLS === 1 && wroteOf('매장파일:방문일') === '' && wroteOf('매장파일:방문시간') === '', 'wipe=' + WIPE_CALLS + ' ' + JSON.stringify(WROTE));
+ok('★개선율 칸 되살리기를 실제로(apply) 1번 불렀다★', RATE_CALLS.length === 1 && RATE_CALLS[0] === true, JSON.stringify(RATE_CALLS));
+ok('결과에 「개선율 칸(H9)을 원본 수식으로 되돌렸습니다 (값 1 → 수식)」', doneTxt.indexOf('개선율 칸(H9)을 원본 수식으로 되돌렸습니다 (값 1 → 수식)') >= 0, doneTxt);
+ok('통합시트 두 칸도 비웠다', wroteOf('통합시트:QSC') === '' && wroteOf('통합시트:MS') === '', JSON.stringify(WROTE));
+
+console.log('\n[14] 한쪽(QSC) 되돌리기 = 재제출 덮어쓰기 길 — 개선요청을 비웠으면 개선율도 되살린다');
+freshRate();
+reset([], [['2026-10-20T10:00','2026-10-20','10:00','금종제과','문수',92]], '2026-10-20');
+r = fnUndoSubmit({}, { store: S, date: '2026-10-20', kind: 'qsc', apply: true });
+doneTxt = (r.done || []).join('\n');
+ok('되돌리기 성공 · 탭 그대로', r.ok === true && DELETED.length === 0, JSON.stringify(r.error || '') + JSON.stringify(DELETED));
+ok('★개선율 되살리기 1번★', RATE_CALLS.length === 1 && RATE_CALLS[0] === true, JSON.stringify(RATE_CALLS));
+ok('빈칸이던 값은 「값 빈칸 → 수식」으로 알린다', (function () { freshRate(); RATE_RES.was = '';
+  reset([], [['2026-10-20T10:00','2026-10-20','10:00','금종제과','문수',92]], '2026-10-20');
+  var t = fnUndoSubmit({}, { store: S, date: '2026-10-20', kind: 'qsc', apply: true }).done.join('\n');
+  return t.indexOf('(값 빈칸 → 수식)') >= 0; })());
+
+console.log('\n[15] 옛 서식 탭(라벨 B·값 E)은 개선율을 건드리지 않는다 — 칸 자리가 달라 원본 수식을 옮기면 틀린다');
+freshRate(); LAYOUT = 'old';
+reset([], [['2026-09-20T10:00','2026-09-20','10:00','금종제과','문수',92]], '2026-09-20');
+SHEETS['2609'] = [['매장 파일 9월 탭']];
+r = fnUndoSubmit({}, { store: S, date: '2026-09-20', kind: 'qsc', apply: true });
+ok('되돌리기 성공 · 개선요청은 비움', r.ok === true && WIPE_CALLS === 1, JSON.stringify(r.error || '') + ' wipe=' + WIPE_CALLS);
+ok('★개선율 되살리기 0번★', RATE_CALLS.length === 0, JSON.stringify(RATE_CALLS));
+
+console.log('\n[16] 개선요청을 못 비웠으면(dirty) 개선율도 안 건드린다 — 방문일을 남기는 규칙과 같은 편');
+freshRate(); WIPE = { ok: false, n: 3, touched: 0, why: '보호된 범위' };
+reset([], [['2026-10-20T10:00','2026-10-20','10:00','금종제과','문수',92]], '2026-10-20');
+r = fnUndoSubmit({}, { store: S, date: '2026-10-20', kind: 'qsc', apply: true });
+ok('dirty 로 알린다', r.ok === true && r.dirty === true, JSON.stringify(r));
+ok('★개선율 되살리기 0번★ · 방문일도 그대로', RATE_CALLS.length === 0 && wroteOf('매장파일:방문일') === undefined, JSON.stringify(RATE_CALLS) + JSON.stringify(WROTE));
+
+console.log('\n[17] 되살리기가 실패해도(원본 칸이 수식 아님 등) 되돌리기는 끝까지 간다 — 알리기만');
+freshRate(); RATE_RES = { ok: false, why: '원본 탭의 개선율 칸이 수식이 아닙니다 — 짐작해서 적지 않습니다' };
+reset([], [['2026-10-20T10:00','2026-10-20','10:00','금종제과','문수',92]], '2026-10-20');
+r = fnUndoSubmit({}, { store: S, date: '2026-10-20', kind: 'qsc', apply: true });
+doneTxt = (r.done || []).join('\n');
+ok('되돌리기 성공 · 통합시트까지 비웠다', r.ok === true && wroteOf('통합시트:QSC') === '', JSON.stringify(r.error || '') + JSON.stringify(WROTE));
+ok('결과에 「★개선율 칸을 원본 수식으로 되돌리지 못했습니다★ — 원본 탭의 개선율 칸이 수식이 아닙니다」', doneTxt.indexOf('★개선율 칸을 원본 수식으로 되돌리지 못했습니다★ — 원본 탭의 개선율 칸이 수식이 아닙니다') >= 0, doneTxt);
+
+console.log('\n[18] 이미 원본 수식이면(same) 아무 말도 덧붙이지 않는다');
+freshRate(); RATE_RES = { ok: true, same: true, cell: 'H9', was: '=IFERROR(H7/H5, "")', now: '=IFERROR(H7/H5, "")' };
+reset([], [['2026-10-20T10:00','2026-10-20','10:00','금종제과','문수',92]], '2026-10-20');
+r = fnUndoSubmit({}, { store: S, date: '2026-10-20', kind: 'qsc', apply: true });
+doneTxt = (r.done || []).join('\n');
+ok('불렀지만(1번) 결과에 개선율 말이 없다', RATE_CALLS.length === 1 && doneTxt.indexOf('개선율 칸') < 0, doneTxt);
+
+console.log('\n[19] 탭의 방문일이 다르면(손으로 만든 탭) 통째여도 개선요청·개선율을 건드리지 않고 점수 칸만');
+freshRate();
+reset([], [['2026-10-20T10:00','2026-10-20','10:00','금종제과','문수',92]], '2026-10-03');
+r = fnUndoSubmit({}, { store: S, date: '2026-10-20', apply: true });
+doneTxt = (r.done || []).join('\n');
+ok('탭을 지우지 않았다 · 개선요청 wipe 0번 · 되살리기 0번', DELETED.length === 0 && WIPE_CALLS === 0 && RATE_CALLS.length === 0, JSON.stringify(DELETED) + ' wipe=' + WIPE_CALLS + ' rate=' + RATE_CALLS.length);
+ok('「탭의 방문일이 2026-10-20가 아닙니다」로 알린다', doneTxt.indexOf('탭의 방문일이 2026-10-20가 아닙니다') >= 0, doneTxt);
+ok('점수 칸은 비웠다', wroteOf('매장파일:QSC점수') === '', JSON.stringify(WROTE));
 
 console.log('\n' + (fail ? 'X 실패 ' + fail + '건' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);

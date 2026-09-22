@@ -213,7 +213,7 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v149', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v150', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -9015,7 +9015,35 @@ function fnMonthDump(ctx, payload) {
    원본 칸이 수식이 아니면 짐작해서 적지 않는다 · 기본이 미리보기다.
      await Api.call('store.resetRate', {store:'스탠다드브레드 해운대', ym:'2612'})               ← 미리보기
      await Api.call('store.resetRate', {store:'스탠다드브레드 해운대', ym:'2612', apply:true})   ← 적는다
-   ⚠되돌리기(fnUndoSubmit)가 표를 비울 때 이 칸까지 되돌리게 하는 것은 아직 안 했다 — 현재상황.md 참조. */
+   ★되돌리기(fnUndoSubmit)도 개선요청을 비운 뒤 같은 알맹이(resetRateCellIn)로 이 칸을 되돌린다★ (2026-09-22 · 1.50)
+   — 재제출(덮어쓰기)·한쪽 되돌리기 뒤 옛 개선율이 남던 구멍. 이 액션은 그 전에 이미 비운 탭을 고치는 데 쓴다. */
+
+/* 월 탭의 개선율 칸을 원본 탭 수식으로 — ★알맹이는 여기 한 곳뿐이다★ (되돌리기·store.resetRate 가 같이 쓴다)
+   ★새 서식 탭에만 부른다★ — 옛 서식(라벨 B·값 E)은 칸 자리가 달라 원본(새 서식) 수식을 옮기면 틀린다(부르는 쪽이 monthTabLayout 로 거른다).
+   원본 칸이 수식이 아니면 짐작해서 적지 않는다(ok:false). apply 가 아니면 무엇을 할지만 돌려준다.
+   반환: { ok, same | preview | done, cell(A1), row, col, was(지금 칸 — 수식이면 수식 글자, 아니면 값), now(적을 수식), why } */
+function resetRateCellIn(ss, sh, apply) {
+  const pr = labelValue(labelMap(sh), ['개선율']);
+  if (!pr.found || !pr.row) return { ok: false, why: sh.getName() + ' 탭에서 「개선율」 칸을 못 찾았습니다' };
+  const tpl = ss.getSheetByName(TPL_NEW);
+  if (!tpl) return { ok: false, why: '원본 탭(' + TPL_NEW + ')이 없습니다' };
+  const tp = labelValue(labelMap(tpl), ['개선율']);
+  if (!tp.found || !tp.row) return { ok: false, why: '원본 탭에서 「개선율」 칸을 못 찾았습니다' };
+  const tc = grid(tpl, tp.row, tp.col, 1, 1);
+  const want = tc ? String(tc.getFormula() || '') : '';
+  if (!want) return { ok: false, why: '원본 탭의 개선율 칸이 수식이 아닙니다 — 짐작해서 적지 않습니다' };
+  const cell = grid(sh, pr.row, pr.col, 1, 1);
+  if (!cell) return { ok: false, why: '개선율 칸을 열지 못했습니다' };
+  const a1 = cell.getA1Notation();
+  const curF = String(cell.getFormula() || '');
+  const was = curF || cell.getValue();
+  const base = { ok: true, cell: a1, row: pr.row, col: pr.col, was: was, now: want };
+  if (curF === want) return Object.assign(base, { same: true });
+  if (!apply) return Object.assign(base, { preview: true });
+  cell.setFormula(want);
+  return Object.assign(base, { done: true });
+}
+
 function fnStoreResetRate(ctx, payload) {
   const p = payload || {};
   const store = String(p.store || '').trim();
@@ -9032,26 +9060,15 @@ function fnStoreResetRate(ctx, payload) {
   const s = improveScan(sh);
   if (!s.ok) return err('CONFLICT', '개선요청 표를 읽지 못했습니다: ' + s.why);
   if (s.filled) return err('CONFLICT', '개선요청 표에 ' + s.filled + '줄이 있습니다 — 빈 탭에서만 되돌립니다.');
-  const pr = labelValue(labelMap(sh), ['개선율']);
-  if (!pr.found || !pr.row) return err('CONFLICT', ym + ' 탭에서 「개선율」 칸을 못 찾았습니다.');
-  const tpl = ss.getSheetByName(TPL_NEW);
-  if (!tpl) return err('CONFLICT', '원본 탭(' + TPL_NEW + ')이 없습니다.');
-  const tp = labelValue(labelMap(tpl), ['개선율']);
-  if (!tp.found || !tp.row) return err('CONFLICT', '원본 탭에서 「개선율」 칸을 못 찾았습니다.');
-  const tc = grid(tpl, tp.row, tp.col, 1, 1);
-  const want = tc ? String(tc.getFormula() || '') : '';
-  if (!want) return err('CONFLICT', '원본 탭의 개선율 칸이 수식이 아닙니다 — 짐작해서 적지 않습니다.');
-  const cell = grid(sh, pr.row, pr.col, 1, 1);
-  if (!cell) return err('CONFLICT', '개선율 칸을 열지 못했습니다.');
-  const a1 = cell.getA1Notation();
-  const curF = String(cell.getFormula() || '');
-  const was = curF || cell.getValue();
-  if (curF === want) return { ok: true, same: true, store: store, ym: ym, cell: a1, formula: want };
-  if (!apply) return { ok: true, preview: true, store: store, ym: ym, cell: a1, now: was, will: want };
-  cell.setFormula(want);
+  if (monthTabLayout(ss, ym) !== 'new') return err('CONFLICT', ym + ' 탭은 옛 서식입니다 — 옛 서식의 개선율은 서버가 값으로 적지 않아 되돌릴 것이 없습니다.');
+  const r = resetRateCellIn(ss, sh, apply);
+  if (!r.ok) return err('CONFLICT', r.why);
+  if (r.same) return { ok: true, same: true, store: store, ym: ym, cell: r.cell, formula: r.now };
+  if (!apply) return { ok: true, preview: true, store: store, ym: ym, cell: r.cell, now: r.was, will: r.now };
   SpreadsheetApp.flush();
   dropStoreCache(store, ym);
-  return { ok: true, done: true, store: store, ym: ym, cell: a1, was: was, now: want, value: cell.getValue() };
+  const after = grid(sh, r.row, r.col, 1, 1);
+  return { ok: true, done: true, store: store, ym: ym, cell: r.cell, was: r.was, now: r.now, value: after ? after.getValue() : null };
 }
 
 function fnUndoSubmit(ctx, payload) {
@@ -9150,8 +9167,13 @@ function fnUndoSubmit(ctx, payload) {
       plan: ['되돌릴 제출을 찾지 못했습니다 — 매장명·날짜를 다시 보십시오 (아무것도 건드리지 않았습니다)'] };
   }
 
-  /* 그 달에 아무것도 안 남는가 — 매장 파일 탭을 지워도 되는지의 판단 기준이다.
-     한쪽만 되돌리는 경우(kind)에는 손대지 않은 쪽이 그대로 남으므로 탭을 지우지 않는다. */
+  /* 그 달에 아무것도 안 남는가 — 미리보기 문구만 가른다.
+     ★탭은 어떤 경우에도 지우지 않는다★ (2026-09-22 · 1.50) — 종전에는 이 값이 참이면 매장 파일 월 탭을 통째로
+     지웠다(deleteSheet). 그런데 요약 탭(월별 QSC현황표)의 그 달 칸이 =IFERROR(VLOOKUP("개선율", '2610'!D2:I9, 5, FALSE), "")
+     처럼 ★탭 이름으로★ 읽고 있어, 탭을 지우면 그 참조가 #REF! 로 바뀌고 탭이 다시 생겨도 안 이어진다
+     (→ 개선율 빈칸 → 통합시트 종합이 개선율 만점으로 +10 · 09-07 사고와 같은 꼴). 요약 탭은 본사 보호라 앱이 되살릴 수도 없다.
+     그래서 늘 빈 양식으로 남기고(점수·방문일·개선요청·개선율을 비운다) 다음 제출이 그 탭을 그대로 쓴다
+     — 2026-09-22 12월 베타 원상복구에서 담당자가 고른 방식과 같다. */
   const oneSided = (kind !== 'both');
   const monthEmpty = !oneSided && (round.monthLeft === 0) && (shop.monthLeft === 0);
   /* ★두 줄이 서로 어긋나지 않게 한다★ (2026-08-26) — 종전에는 여기서 '건드리지 않습니다 ·
@@ -9159,15 +9181,15 @@ function fnUndoSubmit(ctx, payload) {
      한쪽만 되돌릴 때도 개선요청을 지우도록 고친 뒤로 이 문구가 사실과 달라진 것이다.
      미리보기는 사람이 읽고 [정말 지웁니다]를 누르는 근거라, 여기서 어긋나면 안 된다. */
   const scoreCols = (doQsc ? 'QSC' : '') + (doQsc && doShop ? '·' : '') + (doShop ? 'MS' : '');
-  log.push(monthEmpty
-    ? ('매장 파일 ' + tab + ' 탭: 그 달에 남는 자료가 없어 통째로 지웁니다 (탭의 방문일이 ' + date + '일 때만)')
-    : ('매장 파일 ' + tab + ' 탭: 탭은 그대로 두고 ' + scoreCols + ' 점수 칸을 비웁니다' +
-      (oneSided ? ' (한쪽만 되돌리기라 탭 자체는 지우지 않습니다 — 빈 양식으로 남고 다음에 그대로 쓰입니다)'
+  log.push('매장 파일 ' + tab + ' 탭: 탭은 지우지 않고 ' + scoreCols + ' 점수 칸을 비웁니다' +
+    (monthEmpty ? ' — 그 달에 남는 자료가 없어 빈 양식으로 남고, 다음 제출이 그 탭을 그대로 씁니다'
+      : oneSided ? ' (한쪽만 되돌리기 — 손대지 않은 쪽은 그대로 남습니다)'
         : ' — 그 달에 QSC ' + round.monthLeft + '건 · 쇼퍼 ' +
-          (shop.monthLeftSubmits == null ? shop.monthLeft : shop.monthLeftSubmits) + '건이 남습니다')));   // 제출 건수(38줄=1건 · #17)
+          (shop.monthLeftSubmits == null ? shop.monthLeft : shop.monthLeftSubmits) + '건이 남습니다'));   // 제출 건수(38줄=1건 · #17)
   /* ★방문일·방문시간·개선요청은 QSC가 쓴 것이다★ — 그래서 그 달에 QSC가 하나도 안 남을 때만
-     되돌린다. 남아 있으면 그 줄들이 남은 회차의 것일 수 있어 가릴 방법이 없다(행에 회차 표식이 없다). */
-  if (doQsc && !monthEmpty) {
+     되돌린다. 남아 있으면 그 줄들이 남은 회차의 것일 수 있어 가릴 방법이 없다(행에 회차 표식이 없다).
+     ★통째(monthEmpty)일 때도 같은 문을 지난다★ (2026-09-22) — 종전에는 탭을 지우느라 이 안내(매장이 적은 답 N건)를 건너뛰었다. */
+  if (doQsc) {
     /* 미리보기에서도 매장 파일을 한 번 열어 '매장이 적은 답이 몇 건인지'를 정확히 적는다.
        ★지워지는 것을 지우기 전에 보여 주는 것이 이 화면의 존재 이유다.★ */
     let wroteN = 0;
@@ -9176,7 +9198,7 @@ function fnUndoSubmit(ctx, payload) {
       if (b) wroteN = b.touched;
     }
     log.push(round.monthLeft === 0
-      ? ('매장 파일 ' + tab + ' 탭: 방문일·방문시간·개선요청 행도 함께 비웁니다' +
+      ? ('매장 파일 ' + tab + ' 탭: 방문일·방문시간·개선요청 행도 함께 비우고 개선율 칸은 원본 수식으로 되돌립니다(새 서식 탭)' +
         (wroteN ? ('  ★매장이 적은 답 ' + wroteN + '건도 함께 지워집니다 — 다시 작성을 요청하셔야 합니다★') : ''))
       : ('매장 파일 ' + tab + ' 탭: ★개선요청 행은 그대로 둡니다★ — 그 달에 QSC ' + round.monthLeft +
         '건이 남아 어느 줄이 이 제출 것인지 가릴 수 없습니다'));
@@ -9272,14 +9294,8 @@ function fnUndoSubmit(ctx, payload) {
       const ss2 = ssOpen(fileId);
       const sh2 = ss2.getSheetByName(tab);
       if (!sh2) done.push('매장 파일 ' + tab + ' 탭이 원래 없습니다');
-      else if (monthEmpty && dateOfCell(labelValue(labelMap(sh2), ['방문일', '방문일자', '점검일', '점검일자']).v, fileTz(ss2)) !== date) {
-        /* ★탭의 방문일이 다르면 지우지 않는다★ — 응답 시트에서는 안 보이는 회차가 그 탭에
-           들어 있다는 뜻이다(담당자가 손으로 만든 탭 등). 지우면 되돌릴 수 없다. */
-        if (doQsc) setByLabelAny(sh2, L_QSC, qscAfter());
-        if (doShop) setByLabelAny(sh2, L_MS, msAfterVisible());
-        done.push('매장 파일 ' + tab + ' 탭: ★방문일이 ' + date + '가 아니라 지우지 않았습니다★ — 점수 칸만 고쳤습니다');
-      }
-      else if (monthEmpty) { ss2.deleteSheet(sh2); done.push('매장 파일 ' + tab + ' 탭 삭제'); }
+      /* ★탭은 지우지 않는다★ (2026-09-22 · 1.50) — 통째(monthEmpty)여도 아래 한 길로 비운다(위 monthEmpty 주석).
+         탭의 방문일이 이 날짜와 다르면(담당자가 손으로 만든 탭 등) 아래 길이 점수 칸만 고치고 개선요청은 손대지 않는다 — 종전과 같다. */
       else {
         const qv = doQsc ? qscAfter() : '', mv = doShop ? msAfterVisible() : '';
         if (doQsc) setByLabelAny(sh2, L_QSC, qv);
@@ -9309,6 +9325,15 @@ function fnUndoSubmit(ctx, payload) {
               ? ('개선요청 ' + w.n + '행을 비웠습니다' +
                  (w.touched ? (' (매장이 적은 답 ' + w.touched + '건도 함께 지웠습니다 — 매장에 다시 요청하셔야 합니다)') : ''))
               : '개선요청 행은 원래 없었습니다');
+            /* ★개선율 칸도 원본 수식으로★ (2026-09-22 · 1.50) — 새 서식에서는 매장이 개선보고를 저장할 때
+               recountSummary 가 이 칸을 ★값★으로 덮는다(§1-8). 표만 비우고 그 값을 두면 재제출(덮어쓰기)·다음 제출이
+               이 탭에 들어가도 매장이 다시 저장하기 전까지 옛 개선율(예: 1 = 100%)이 통합시트 종합에 간다.
+               옛 서식 탭은 서버가 값으로 적지 않고 칸 자리도 달라 건드리지 않는다. 실패해도 되돌리기는 계속한다(알리기만). */
+            if (monthTabLayout(ss2, tab) === 'new') {
+              const rr = resetRateCellIn(ss2, sh2, true);
+              if (rr.done) parts.push('개선율 칸(' + rr.cell + ')을 원본 수식으로 되돌렸습니다 (값 ' + (rr.was === '' ? '빈칸' : rr.was) + ' → 수식)');
+              else if (!rr.ok) parts.push('★개선율 칸을 원본 수식으로 되돌리지 못했습니다★ — ' + rr.why);
+            }
           } else {
             dirty = true; dirtyWhy = w.why || '';
             parts.push('★개선요청 ' + (w.n || 0) + '행을 지우지 못했습니다★ — ' + w.why +

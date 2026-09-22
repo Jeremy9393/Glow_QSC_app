@@ -1,6 +1,6 @@
 {
- "sha256": "b2158b2e8cc1f31cb363151fc83b855bbebb15e2472fdd39441df78d779d854a",
- "version": 149,
- "when": "2026-09-22 17:02:30",
- "description": "빈 월 탭 개선율 칸을 원본 수식으로 되돌리기 store.resetRate (1.49)"
+ "sha256": "6f2576b15ffa920373b805fe42e4384961abdf188d3555b17dee6ecf83bc43f4",
+ "version": 150,
+ "when": "2026-09-22 17:21:44",
+ "description": "되돌리기 보완 — 통째여도 월 탭을 지우지 않음(요약 #REF! 방지) · 개선요청 비운 뒤 개선율 칸을 원본 수식으로 (1.50)"
 }
