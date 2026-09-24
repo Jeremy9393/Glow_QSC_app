@@ -30,6 +30,13 @@ const Api = (function () {
 
   // 프론트는 한국어 문구가 아니라 이 상수로만 분기한다 (문구는 언제든 바뀐다)
   const AUTH_CODES = { AUTH_REQUIRED: 1, AUTH_EXPIRED: 1, AUTH_INVALID: 1 };
+  /* 2026-09-25 검수 · resilience-4·5 — 작성 중 로그인이 풀렸을 때의 안내(제출 경로 한 곳에서 쓴다).
+     로그인이 풀려도 임시저장은 지워지지 않는다(auth.js clear() 는 세션만 지운다 — 로그아웃만 임시저장을 치운다). */
+  const LOGIN_LOST_MSG = '로그인이 풀렸습니다. 다시 로그인하시면 작성하신 내용은 이 기기에 그대로 남아 있습니다.';
+  /* 서버가 방금 토큰을 거절해 세션을 버렸는가 — 그 뒤에는 옛 익명 봉투(legacyType)로 보내지 않는다 */
+  let tokenLost = false;
+  /* 2026-09-25 검수 · resilience-7 — 인터넷이 끊겨 제출이 서버에 닿지 못했을 때의 안내 */
+  const NET_SUBMIT_MSG = '인터넷 연결을 확인한 뒤 다시 제출해 주세요. 작성하신 내용은 그대로 남아 있습니다.';
 
   function photoCount(payload) {
     if (!payload.items) return 0;
@@ -128,7 +135,11 @@ const Api = (function () {
     const t = token();
     const reqId = opts.reqId || newReqId();
     const body = { reqId: reqId, payload: payload || {} };
-    if (t) { body.action = action; body.token = t; }
+    if (t) { body.action = action; body.token = t; tokenLost = false; }
+    /* 2026-09-25 검수 · resilience-4 — 서버가 방금 토큰을 거절했으면(아래 relogin 실패) 옛 익명 봉투로 다시 보내지 않는다.
+       종전에는 「로그인이 필요합니다」를 본 점검자가 [제출]을 한 번 더 누르면 토큰 없이 옛 경로로 저장돼
+       계정 칸이 빈 제출이 남았다(중지한 계정도 제출이 됐다). 로그인하면 token() 이 다시 생겨 위 줄로 간다. */
+    else if (opts.legacyType && tokenLost) { return { ok: false, code: 'AUTH_REQUIRED', error: LOGIN_LOST_MSG }; }
     else if (opts.legacyType) { body.type = opts.legacyType; }
     else { body.action = action; }
 
@@ -163,15 +174,15 @@ const Api = (function () {
     // 토큰이 죽었다. 되살릴 수단이 있을 때만 조용히 재로그인하고 원래 요청을 딱 1회 재시도한다.
     // 되살릴 수 없으면 서버 오류를 그대로 돌려준다 — 이 파일은 절대 화면을 옮기지 않는다
     // (점검 화면이 로그인 화면으로 튕기면 작성 중이던 내용이 통째로 날아간다).
-    if (!(await relogin())) return data;
+    if (!(await relogin())) { tokenLost = true; return data; }   // 2026-09-25 검수 · resilience-4 — 위 봉투 조립이 이 표식을 본다
     // 같은 reqId를 물려준다 — 인증 실패는 서버 게이트 5단계라 멱등 마커가 찍히기 전이고,
     // 혹시 찍혔더라도 서버가 중복으로 처리하지 않는다.
     return call(action, payload, { reqId: reqId, legacyType: opts.legacyType, _retried: true });
   }
 
   /* 기존 호출부(js/qsc-app.js:381 · js/shopper-core.js:347)를 한 줄도 고치지 않기 위한 래퍼.
-     ★NETWORK만 예외를 다시 던진다 — 두 호출부가 catch에서 "네트워크 연결을 확인해 주세요"를
-       띄우고 있어, 여기서 조용히 객체로 돌려주면 그 안내 문구가 사라진다. */
+     ★NETWORK만 예외를 다시 던진다 — 한국어 안내(NET_SUBMIT_MSG)를 실은 Error 로 던지므로 호출부는
+       e.message 를 그대로 보여 주면 된다(2026-09-25 검수 · resilience-7 — 종전에는 fetch 원래 오류를 던져 영어가 떴다). */
   async function submit(type, payload) {
     /* ★고객 설문은 'shopper'가 아니라 'survey'로 보낸다.
        js/shopper-core.js 한 파일이 관리자 평가표(shopper.html)와 고객 설문(survey.html)을 함께
@@ -203,7 +214,17 @@ const Api = (function () {
        여기서 legacyType:'survey'를 붙이면 서버 별칭표에 'survey'가 없어 BAD_REQUEST가 나거나,
        별칭이 생기더라도 익명 응답의 입력경로가 '관리자 입력'으로 잘못 적힌다. */
     const r = await call(type + '.submit', payload, type === 'survey' ? {} : { legacyType: type });
-    if (r && r.code === 'NETWORK' && r._err) throw r._err;
+    /* 2026-09-25 검수 · resilience-7 — fetch 의 원래 오류(「Failed to fetch」·iOS 「Load failed」)를 그대로 던지면
+       호출부가 e.message 를 붙여 영어가 화면에 떴다. 한국어 안내를 실은 Error 로 다시 던진다(e.code = 'NETWORK'). */
+    if (r && r.code === 'NETWORK') {
+      const ne = new Error(NET_SUBMIT_MSG);
+      ne.code = 'NETWORK';
+      ne.cause = r._err;
+      throw ne;
+    }
+    /* 2026-09-25 검수 · resilience-5 — 로그인이 풀린 경우 서버 문구(「로그인이 필요합니다.」) 대신 할 일과
+       작성 내용이 남는다는 것을 알린다. code 는 그대로 두어 화면이 로그인 안내로 분기할 수 있게 한다. */
+    if (r && !r.ok && AUTH_CODES[r.code]) r.error = LOGIN_LOST_MSG;
     return r;
   }
 
@@ -306,7 +327,13 @@ const Api = (function () {
     try { return JSON.parse(localStorage.getItem('qsc-live-config') || 'null'); } catch (e) { return null; }
   }
 
-  return { call: call, submit: submit, getConfig: getConfig, askOverwrite: askOverwrite, watchDup: watchDup, CONFIG: CONFIG };
+  /* 2026-09-25 검수 · resilience-4·5 — 응답이 「로그인이 풀렸다」인지(화면이 로그인 안내로 분기할 때 쓴다) */
+  function authLost(r) { return !!(r && !r.ok && AUTH_CODES[r.code]); }
+
+  return {
+    call: call, submit: submit, getConfig: getConfig, askOverwrite: askOverwrite, watchDup: watchDup, CONFIG: CONFIG,
+    authLost: authLost, LOGIN_LOST_MSG: LOGIN_LOST_MSG,
+  };
 })();
 
 /* auth.js가 서버 주소를 window.Api에서 찾는다(주소 단일 출처). 최상위 const는 window에

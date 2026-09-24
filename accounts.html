@@ -13,7 +13,10 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=137">
+<!-- 2026-09-25 검수 · perf-client-6 — 글꼴 먼저 받기 (주소는 css/app.css @font-face 와 똑같이 · crossorigin 필수) -->
+<link rel="preload" href="fonts/NanumSquareR.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/NanumSquareB.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/app.css?v=138">
 </head>
 <body>
 <!-- topbar (c)형 = 뒤로 + 제목 + 우측 조작 버튼.
@@ -118,12 +121,12 @@
      앱 스크립트가 실리기 전에 안내 후 홈으로 간다. 권한 사본이 없을 때(menus()===null)는
      guard가 막지 않으므로, accounts-app.js 쪽 판정도 그대로 남겨 두 겹으로 둔다.
      ★'쓰기'까지 본다★ (2026-09-17 · 최종검수 #21) — 계정 관리는 전부 쓰는 일(발급·중지·비밀번호)이라 읽기만 있는 계정은 돌려보낸다. -->
-<script src="js/maint.js?v=137"></script>
-<script src="js/ui-busy.js?v=137"></script>
-<script src="js/auth.js?v=137"></script>
+<script src="js/maint.js?v=138"></script>
+<script src="js/ui-busy.js?v=138"></script>
+<script src="js/auth.js?v=138"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts', '쓰기');</script>
-<script src="js/api.js?v=137"></script>
-<script src="js/accounts-app.js?v=137"></script>
+<script src="js/api.js?v=138"></script>
+<script src="js/accounts-app.js?v=138"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

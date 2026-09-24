@@ -5,7 +5,16 @@
   // cache:'no-store' — 데이터 파일은 항상 서버 최신본 (오프라인이면 SW 캐시 폴백)
   /* ★master.json 에는 이제 문항이 없다★ (2026-09-18 담당자 ②-1) — 매장 목록·버전·채점 상수만 있는 공개 파일이다.
      문항은 바로 아래에서 서버(config.questions)에 로그인 토큰을 붙여 받는다. */
-  const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
+  /* 2026-09-25 검수 · perf-client-2 · resilience-10 — master.json 을 기다리지 않는다.
+     여기서 쓰는 것은 매장 목록 폴백(storeList)과 버전 표시뿐이라, 문항 렌더·임시저장 복원을 그 왕복 뒤로 미룰 이유가 없다.
+     종전에는 첫 줄에서 await 했고 try 도 없어, 전파가 나쁘면 문항이 그만큼 늦게 떴고 오류 페이지(404·5xx)가 오면
+     .json() 이 터져 화면 전체(문항·매장 목록·제출 버튼)가 아무 안내 없이 멈췄다. 이제 못 받으면 빈 값으로 계속한다. */
+  let master = {};
+  let masterFailed = false;
+  const masterP = fetch('data/master.json', { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (m) { master = m || {}; return master; })
+    .catch(function (e) { masterFailed = true; console.warn('[qsc] data/master.json 을 읽지 못했습니다', e); return master; });
   const $ = function (s, el) { return (el || document).querySelector(s); };
   const DRAFT_KEY = 'qsc-draft-v2';
 
@@ -42,11 +51,31 @@
     return !!(r && !r.ok && (r.code === 'FORBIDDEN' || r.code === 'AUTH_REQUIRED' ||
       r.code === 'AUTH_EXPIRED' || r.code === 'AUTH_INVALID'));
   }
-  function hideQuestions() {
+  function hideQuestions(r) {
+    /* 2026-09-25 검수 · resilience-5 — 로그인이 풀린 것(AUTH_*)과 권한이 없는 것(FORBIDDEN)을 가른다.
+       종전에는 둘 다 「담당자만 제출할 수 있습니다」라서, 작성 중 로그인이 풀린 점검자가 권한이 없어진 줄 알았다.
+       로그인이 풀렸으면 ★문항은 감추되(토큰이 있어야만 문항이 보인다 — 2026-09-17 담당자) 임시저장은 남기고★
+       다시 로그인하는 길을 보여 준다. 로그인하고 돌아오면 임시저장이 그대로 되살아난다. */
+    const lost = !!(r && r.code !== 'FORBIDDEN' && Api.authLost && Api.authLost(r));
+    /* 2026-09-25 검수 · security-3 — 문항 사본은 로그인이 풀렸어도 늘 지운다. 계정 중지·강제 로그아웃도 AUTH_INVALID 라
+       사본을 남기면 권한이 회수된 기기에 문항이 계속 남았다. 남기는 것은 임시저장(qsc-draft-v2)·사진뿐 —
+       다시 로그인하면 사본이 없으니 서버에서 문항을 받아 그린 뒤 임시저장을 되살리는 길로 간다. */
     dropQ();
     document.body.classList.add('noAccess');   // css/app.css — 문항·입력칸·하단바를 감춘다 (qsc.html 가드와 같은 장치)
     const b = $('#submitBtn');
-    if (b) { b.disabled = true; b.textContent = '담당자만 제출할 수 있습니다'; }
+    if (b) { b.disabled = true; b.textContent = lost ? '다시 로그인 필요' : '담당자만 제출할 수 있습니다'; }
+    if (lost) showLoginLost();
+  }
+  /* #authNote(qsc.html) 에 「로그인이 풀렸다」 안내와 로그인 링크를 편다 — noAccess 상태에서도 이 줄은 보인다 */
+  function showLoginLost() {
+    const n = $('#authNote');
+    if (!n) return;
+    n.textContent = (Api.LOGIN_LOST_MSG || '로그인이 풀렸습니다. 다시 로그인하시면 작성하신 내용은 이 기기에 그대로 남아 있습니다.') + ' · ';
+    const a = document.createElement('a');
+    a.href = 'login.html?next=qsc.html';
+    a.textContent = '로그인';
+    n.appendChild(a);
+    n.style.display = '';
   }
   function showLoadFail(r) {
     const n = $('#dupNote');
@@ -69,7 +98,7 @@
   let Q = readQ();
   if (Q) {
     Api.call('config.questions', {}).then(function (r) {
-      if (deniedBy(r)) { hideQuestions(); return; }
+      if (deniedBy(r)) { hideQuestions(r); return; }
       if (!r || !r.ok || !validQ(r)) return;     // 못 받았으면(오프라인 등) 사본으로 계속
       if (r.source_sha && r.source_sha === Q.source_sha) return;
       keepQ(r);
@@ -80,7 +109,7 @@
     Busy.on('문항을 불러오는 중입니다…');
     let r = null;
     try { r = await Api.call('config.questions', {}); } catch (e) { r = null; } finally { Busy.off(); }
-    if (deniedBy(r)) { hideQuestions(); return; }
+    if (deniedBy(r)) { hideQuestions(r); return; }
     if (!r || !r.ok || !validQ(r)) { showLoadFail(r); return; }
     keepQ(r);
     Q = r;
@@ -96,6 +125,9 @@
     '확인 불가': '증빙·상황이 없어 확인하지 못했습니다',
   };
   const state = { values: {}, memos: {}, photos: {}, naWhy: {} };
+  /* 2026-09-25 검수 · field-9 — 방금 제출하고도 비우지 않은(초기화 [취소]) 내용이 어느 매장 것인가. '' = 없음.
+     임시저장(sent)에 함께 두어 새로고침 뒤에도 남는다. [초기화]·제출 후 초기화는 임시저장째 지우므로 함께 사라진다. */
+  let sentStore = '';
 
   /* ★건별로 갈라 둔다★ (2026-09-04 담당자 — 같은 문항 2건이라도 고칠 것이 다르다)
        state.memos[문항]  = ['월 누락', '일 누락']        건마다 문장 하나
@@ -173,7 +205,10 @@
     location.reload();
   };
 
-  $('#verInfo').textContent = '평가표 ' + (Q.version || master.version) + ' 기준';
+  /* 2026-09-25 검수 · perf-client-2 — master.json 을 기다리지 않으므로, 문항에 버전이 없을 때만 도착한 뒤 한 번 더 적는다 */
+  function paintVer() { $('#verInfo').textContent = '평가표 ' + (Q.version || master.version || '') + ' 기준'; }
+  paintVer();
+  if (!Q.version) masterP.then(paintVer);
   if ($('#wLine')) {
     const R = Scoring.RULES;
     $('#wLine').textContent = '감점: 일반 1건 = ' + R.general.total + ' ÷ 해당 일반 문항 수(NA 제외 · 58문항이면 1.72점)' +
@@ -220,6 +255,33 @@
     pendingStore = storeSel.value ? '' : keep;
   }
   renderStores();
+  /* 2026-09-25 검수 · perf-client-2 · resilience-10 — master.json 은 배경에서 도착한다.
+     캐시 목록(qsc-live-config)이 없던 첫 진입이면 그때 저장본 목록으로 채운다(선택값·되살릴 매장은 renderStores 가 지킨다).
+     master.json 도 못 받았고 보여 줄 목록이 하나도 없으면 ★조용히 두지 않고★ 안내와 [다시 시도]를 편다. */
+  let masterNoteOn = false;
+  function showMasterFail() {
+    const n = $('#dupNote');
+    if (!n) return;
+    n.textContent = '매장 목록을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 [다시 시도]를 눌러 주세요.\n' +
+      '작성 중인 내용은 이 기기에 그대로 남아 있습니다.\n';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = '다시 시도';
+    b.onclick = function () { saveDraft(); location.reload(); };   // 임시저장(정본)을 남긴 채 다시 연다 — 사진은 IndexedDB 에 이미 있다
+    n.appendChild(b);
+    n.style.display = '';
+    masterNoteOn = true;
+  }
+  function hideMasterFail() {
+    if (!masterNoteOn) return;
+    masterNoteOn = false;
+    const n = $('#dupNote');
+    if (n) { n.textContent = ''; n.style.display = 'none'; }
+  }
+  masterP.then(function () {
+    if (!(live && live.stores && live.stores.length)) renderStores();
+    if (masterFailed && !storeList(live).length) showMasterFail();
+  });
   // 배경 갱신 — 이 응답이 도착할 때는 문항 렌더도 임시저장 복원도 이미 끝나 있다
   Api.getConfig().then(function (cfg) {
     // 서버 주소가 없거나(연동 전) 서버·캐시 어느 쪽도 못 읽은 경우 — 지금 그려 둔 목록을 그대로 둔다
@@ -228,6 +290,7 @@
     live = cfg; // naPresetFor는 부를 때마다 live를 보므로 NA 프리셋도 이걸로 최신이 된다
     // 목록이 그대로면 손대지 않는다 — 마침 드롭다운을 열어 놓고 고르는 중일 수 있다
     if (JSON.stringify(storeList(live)) !== before) renderStores();
+    if (storeList(live).length) hideMasterFail();   // 서버 목록이 왔으면 master.json 실패 안내는 거둔다
   }).catch(function (e) {
     /* getConfig는 실패해도 캐시본을 돌려주게 돼 있어 여기까지 오는 것은 예외적이다.
        그래도 경고창은 띄우지 않는다 — 매장 목록은 캐시본이 살아 있어 점검 작성에 지장이 없고,
@@ -249,6 +312,20 @@
   $('#store').addEventListener('change', function () {
     const store = $('#store').value;
     if (!store) return;
+    /* 2026-09-25 검수 · field-9 — 방금 제출한 내용이 남은 채 다른 매장으로 바꾸면 묻는다.
+       [확인] 남은 내용을 이 매장 점검으로 이어 쓴다 · [취소] 입력을 모두 지우고 새로 시작한다([초기화]와 같은 절차). */
+    if (sentStore && store !== sentStore) {
+      if (confirm('방금 제출한 내용(' + sentStore + ')이 그대로 남아 있습니다 — 이대로 ' + store + ' 매장으로 제출할까요?\n\n' +
+        '[확인] 남은 건수·문장·사진을 이어서 씁니다.\n[취소] 입력을 모두 지우고 새 점검을 시작합니다(매장은 다시 골라 주세요).')) {
+        sentStore = '';
+        saveDraft();
+      } else {
+        localStorage.removeItem(DRAFT_KEY);
+        PhotoDraft.clear().catch(function () { /* 다음 실행의 초기화 블록이 마무리한다 */ });
+        location.reload();
+        return;
+      }
+    }
     const preset = naPresetFor(store).filter(function (no) { return updaters[no] && state.values[no] !== 'NA'; });
     if (!preset.length) return;
     if (confirm(store + '\n지난 회차에 NA(해당 없음)였던 ' + preset.length + '개 문항을 이번에도 NA로 적용할까요?\n문항 번호: ' + preset.join(', '))) {
@@ -286,6 +363,7 @@
       store: $('#store').value || pendingStore, date: $('#date').value, time: TimePick.get('time'),
       inspector: $('#inspector').value,
       values: state.values, memos: state.memos, naWhy: state.naWhy, t: Date.now(),
+      sent: sentStore || '',   // 2026-09-25 검수 · field-9 — 방금 제출하고 비우지 않은 내용의 매장
     }));
     $('#saveNote').textContent = '이 기기에 자동 임시저장됨 ' +
       (photoDraftOn ? '(사진 포함)' : '(사진 제외)') + ' · ' + new Date().toLocaleTimeString('ko-KR');
@@ -411,16 +489,36 @@
        지금 값을 붙잡아 두지 않으면 사진이 엉뚱한 곳에 붙는다. ★건 번호까지 붙잡는다★ */
     const no = photoTarget.no;
     const ci = photoTarget.ci || 0;
-    for (const f of files) {
-      const url = await PhotoPick.shrink(f);
-      const arr = photosOf(no);
-      (arr[ci] = arr[ci] || []).push(url);
+    /* 2026-09-25 검수 · perf-client-4 — 줄이는 동안 그 칸의 [사진] 버튼에 진행을 보인다(매장 개선보고 부품과 같은 규칙).
+       종전에는 여러 장을 고르면 몇 초간 아무 표시 없이 멈춰 있어 「멈췄나」 하고 다시 눌렀다.
+       버튼 글자는 끝나면 updaters[no]() 가 원래대로 다시 그린다. */
+    const pbtn = (cardEls[no] && cardEls[no].querySelectorAll('.photoBtn')[ci]) || null;
+    if (pbtn) pbtn.disabled = true;
+    /* 2026-09-25 검수 · resilience-8 — 한 장이 실패(갤럭시 고효율 HEIF·손상 파일)해도 ★그 장만 건너뛴다★.
+       종전에는 try 가 없어 실패하는 순간 아래 세 줄(다시 그리기·사진 임시저장·임시저장)이 안 돌아,
+       앞서 성공한 사진이 화면엔 안 보이면서 제출에는 실려 가고 다시 고르면 두 벌이 됐다. */
+    let fail = 0;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        if (pbtn) pbtn.textContent = '사진 처리 중 ' + (i + 1) + '/' + files.length;
+        let url = null;
+        try { url = await PhotoPick.shrink(files[i]); } catch (err) { url = null; }
+        if (!url) { fail++; continue; }
+        const arr = photosOf(no);
+        (arr[ci] = arr[ci] || []).push(url);
+      }
+    } finally {
+      if (pbtn) pbtn.disabled = false;
+      updaters[no]();
+      photoSave(no);
+      /* 사진만 붙이고 나가도 임시저장(정본)이 남게 한다 — 정본이 없으면 다음 실행에서
+         사진도 함께 비워지므로, 사진이 있는데 정본이 없는 상태를 만들면 안 된다. */
+      saveDraft();
     }
-    updaters[no]();
-    photoSave(no);
-    /* 사진만 붙이고 나가도 임시저장(정본)이 남게 한다 — 정본이 없으면 다음 실행에서
-       사진도 함께 비워지므로, 사진이 있는데 정본이 없는 상태를 만들면 안 된다. */
-    saveDraft();
+    if (fail) {
+      alert('사진 ' + fail + '장을 불러오지 못했습니다(지원하지 않는 형식이거나 손상된 파일).\n' +
+        '다른 사진은 그대로 붙었습니다. 갤럭시 「고효율 사진」으로 찍은 사진이면 갤러리에서 JPG 로 저장한 뒤 다시 골라 주세요.');
+    }
   });
 
   // ---------- 문항 카드 ----------
@@ -776,6 +874,10 @@
   $('#submitBtn').onclick = async function () {
     if (!$('#store').value.trim()) { alert('매장을 선택해 주세요.'); $('#store').focus(); return; }
     if (!$('#inspector').value.trim()) { alert('점검자를 입력해 주세요.'); $('#inspector').focus(); return; }
+    /* 2026-09-25 검수 · dates-4 — 점검일자가 비었거나 형식이 틀리면 막는다(서버도 같은 문구로 막는다).
+       날짜가 정하는 것이 많다 — 매장 파일의 월 탭·통합시트의 월 칸·재제출 되묻기가 전부 이 날짜의 달을 본다. */
+    const dateVal = String($('#date').value || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) { alert('점검일자를 선택해 주세요.'); $('#date').focus(); return; }
     // 완료 게이트: 미확인 문항이 있으면 제출 불가 — 전 문항 확인 또는 NA 처리 필수
     const res0 = evalNow();
     if (res0.blank > 0) {
@@ -835,7 +937,24 @@
     }
 
     const res = res0;
-    let msg = '개선 필요 ' + (res.genCases + res.s1.cases + res.s2.cases) + '건 · NA ' + res.na + '개' +
+    /* 2026-09-25 검수 · field-9 — 방금 제출한 내용을 비우지 않고(초기화 [취소]) 다시 내려는 경우 한 번 더 묻는다.
+       하루 두 매장을 도는 날, 앞 매장의 건수·문장·사진이 다음 매장 제출에 그대로 실리는 것을 막는다. */
+    if (sentStore) {
+      if (!confirm('방금 제출한 내용(' + sentStore + ')이 그대로 남아 있습니다 — 이대로 ' +
+        $('#store').value.trim() + ' 매장으로 제출할까요?\n\n다른 점검이라면 [취소]를 누르고 [초기화]로 입력을 지운 뒤 새로 작성해 주세요.')) return;
+    }
+    /* 2026-09-25 검수 · dates-4 — 점검일자가 이번 달이 아니면 한 번 더 묻는다.
+       낡은 임시저장이 지난 날짜(예: 9월 시험 때 날짜)를 되살려 그대로 제출되는 것을 사람이 잡게 한다.
+       달만 본다 — 10/31 점검을 11/1 에 내는 것처럼 지난 달이 맞는 경우도 있어 막지는 않는다. */
+    if (dateVal.slice(0, 7) !== todayStr().slice(0, 7)) {
+      if (!confirm('점검일자가 이번 달이 아닙니다(' + Number(dateVal.slice(5, 7)) + '월). 이대로 제출할까요?\n\n점검일자 ' + dateVal)) {
+        $('#date').focus();
+        return;
+      }
+    }
+    /* 2026-09-25 검수 · dates-4 — 확인창 첫 줄에 점검일자를 보인다(날짜를 눈으로 한 번 확인하는 가장 싼 장치) */
+    let msg = '점검일자 ' + dateVal +
+      '\n개선 필요 ' + (res.genCases + res.s1.cases + res.s2.cases) + '건 · NA ' + res.na + '개' +
       '\nQSC ' + res.qsc.toFixed(1) + '점 · ' + res.grade;
     if (res.criticalDeduct) msg += '\n중대 차감 ' + res.criticalDeduct + '점 (위 QSC 점수에 이미 반영)';
     if (!confirm(msg + '\n제출할까요?')) return;
@@ -903,6 +1022,11 @@
         // 통합시트에 자동 기입하지 않는 운영(개인 계정 스크립트)에서는 옮겨 적을 숫자를 바로 알려준다
         if (r.dashboard && r.dashboard.skipped) {
           done += '\n\n▶ 통합시트 위생 칸에 입력\n   ' + res.qsc.toFixed(1) + '%';
+        } else if (r.dashboard && r.dashboard.ok === false) {
+          /* 2026-09-25 검수 · dates-1 — 통합시트 기록 실패도 반드시 말한다(매장 파일 실패 안내와 같은 꼴).
+             종전에는 skipped 만 읽어, 「올해 통합시트가 아닙니다」·끼어든 열 거절 같은 실패가 「저장 완료」 뒤에 숨었다. */
+          done += '\n\n⚠ 통합시트에는 기록하지 못했습니다\n   ' + (r.dashboard.error || '알 수 없는 이유') +
+            '\n   통합시트의 그 달 QSC 칸을 직접 확인해 주세요(이번 점수 ' + res.qsc.toFixed(1) + '점).';
         }
         /* ★매장 파일 기록 결과를 반드시 사람에게 보인다★ (2026-08-18)
            서버는 덮어쓰기·잘림·거절을 storeFile에 담아 보내는데 화면이 읽지 않고 있었다.
@@ -942,14 +1066,30 @@
           done += '\n\n· ' + sf.warn.join('\n· ');
         }
         alert(done);
-        if (confirm('입력을 초기화할까요? (새 점검 시작)')) {
+        /* 2026-09-25 검수 · field-9 — 기존 흐름(초기화할까요?)은 그대로 두고, [취소]하면 「방금 낸 매장」을 기억해 둔다.
+           그 뒤 매장을 바꾸거나 다시 제출하면 한 번 더 묻는다(매장 change 핸들러 · 위 제출 검사).
+           기억은 임시저장에 함께 넣어 새로고침 뒤에도 남는다(saveDraft 의 sent). */
+        sentStore = payload.store;
+        if (confirm('입력을 초기화할까요? (새 점검 시작)\n\n[취소]하면 방금 제출한 내용이 화면에 그대로 남습니다.')) {
           localStorage.removeItem(DRAFT_KEY);
           PhotoDraft.clear().catch(function () { /* 아래 초기화 블록이 마무리한다 */ });
           location.reload();
+        } else {
+          saveDraft();
+        }
+      } else if (Api.authLost && Api.authLost(r)) {
+        /* 2026-09-25 검수 · resilience-4·5 — 로그인이 풀렸다. 옛 익명 경로로 다시 보내지 않고(api.js) 로그인으로 안내한다.
+           임시저장은 그대로 두고 떠난다 — 로그인 뒤 이 화면으로 돌아오면(next=qsc.html) 작성 내용·사진이 되살아난다. */
+        showLoginLost();
+        if (confirm((r.error || Api.LOGIN_LOST_MSG) + '\n\n지금 로그인 화면으로 갈까요?')) {
+          saveDraft();
+          location.href = 'login.html?next=qsc.html';
+          return;
         }
       } else alert('저장 실패: ' + (r.error || '알 수 없는 오류'));
     } catch (e) {
-      alert('저장 실패: ' + e.message);
+      /* 2026-09-25 검수 · resilience-7 — 인터넷이 끊긴 경우 api.js 가 한국어 안내를 실어 던진다(e.code 'NETWORK') */
+      alert((e && e.code === 'NETWORK') ? '제출하지 못했습니다.\n' + e.message : '저장 실패: ' + (e && e.message));
     } finally {
       /* ★finally 로 끈다★ — try 안에 중간 return 이 있다(되묻기에서 취소했을 때) */
       Busy.off();
@@ -985,6 +1125,7 @@
     Object.assign(state.values, draft.values || {});
     Object.assign(state.memos, draft.memos || {});
     Object.assign(state.naWhy, draft.naWhy || {});   // NA 사유도 되살린다
+    sentStore = String(draft.sent || '');            // 2026-09-25 검수 · field-9 — 방금 제출하고 비우지 않은 내용이면 그 매장
     allItems.forEach(function (it) { updaters[it.no](); });
     $('#saveNote').textContent = '임시저장 불러옴 (' + new Date(draft.t).toLocaleString('ko-KR') + ')';
   } else {

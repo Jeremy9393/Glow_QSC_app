@@ -83,6 +83,7 @@ function sheet(ss, name, header) {
   };
 }
 function monthClosed() { return false; }          // 월중 — 매장 파일·통합시트는 미룬다
+function qscMonthClosed() { return null; }         // 2026-09-25 검수 · dates-3 — 확정 안 된 달(확정 판정은 test/ms-closed-month-test.py 가 본다)
 function writeStoreShopper() { return { ok: true }; }
 function writeDashboard() { return { ok: true }; }
 function shopperMonthAvg() { return 0; }

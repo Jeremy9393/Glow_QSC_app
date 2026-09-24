@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QSC 점검 화면 시험</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>#out { white-space: pre-wrap; font-size: 13px; padding: 12px; background: #f6f6f6; }</style>
+</head>
+<body>
+<!-- 2026-09-25 검수 — QSC 점검 화면(js/qsc-app.js) 흐름 시험.
+     돌리는 법: 앱실행.bat(로컬 서버 localhost:8123) → http://localhost:8123/test/client-qsc-harness.html
+       ?mode=flow(기본) · ?mode=authlost · ?mode=masterfail  — 결과는 맨 위 회색 칸과 window.__result
+     ★실서버에 아무것도 보내지 않는다★ — 구글 주소로 가는 요청은 전부 이 페이지가 가로채 가짜로 답한다.
+     ★문항은 가짜다★ — 공개 저장소에 평가표 문항을 싣지 않는다(문항은 서버가 내려준다 · 2026-09-18).
+     ⚠이 주소(localhost:8123)의 점검 임시저장을 지운다 — 로컬에서 점검을 작성하는 중에는 열지 말 것(photodraft.html 과 같은 주의).
+     확인하는 것: dates-4(점검일자 검사·확인창 첫 줄·이번 달 아님 되묻기) · dates-1(통합시트 실패 안내) · field-9(방금 낸 내용 되묻기)
+       · resilience-4·5(로그인 풀림 안내 · 옛 익명 봉투 안 보냄) · resilience-7(끊김 한국어 안내) · resilience-8(사진 한 장 실패 격리)
+       · resilience-10·perf-client-2(master.json 실패에도 화면이 선다 · 안내) -->
+<pre id="out">돌리는 중…</pre>
+<div id="host"></div>
+<script>
+(async function () {
+  var MODE = new URLSearchParams(location.search).get('mode') || 'flow';
+  var out = document.getElementById('out');
+  var pass = 0, fail = 0, lines = [];
+  function ok(name, cond, info) {
+    if (cond) pass++; else { fail++; lines.push('✗ ' + name + (info !== undefined ? '  ' + JSON.stringify(info) : '')); }
+  }
+  function show(done) {
+    out.textContent = '[' + MODE + '] ' + pass + ' 통과 · ' + fail + ' 실패' + (done ? '' : ' (진행 중)') + '\n' + lines.join('\n');
+    window.__result = { mode: MODE, pass: pass, fail: fail, lines: lines, done: !!done };
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  async function until(fn, ms) {
+    var t = Date.now();
+    while (Date.now() - t < (ms || 4000)) { try { if (fn()) return true; } catch (e) { } await sleep(30); }
+    return false;
+  }
+  var $ = function (s) { return document.querySelector(s); };
+
+  // ---------- 가짜 문항(실제 평가표 문항이 아니다) ----------
+  var Q = { version: '시험판', source_sha: 'test-sha', qsc_groups: [
+    { name: '관리 (시험)', items: [
+      { no: 1, code: 'T-01', row: 1, text: '시험 문항 1', severity: 'S2', critical: true },
+      { no: 2, code: 'T-02', row: 2, text: '시험 문항 2', severity: '' },
+      { no: 3, code: 'T-03', row: 3, text: '시험 문항 3', severity: '' } ] },
+    { name: '매장 위생 (시험)', items: [
+      { no: 4, code: 'T-04', row: 4, text: '시험 문항 4', severity: 'S1', critical: true },
+      { no: 5, code: 'T-05', row: 5, text: '시험 문항 5', severity: '' } ] },
+  ] };
+
+  // ---------- 저장소 정리 (이 주소의 점검 임시저장) ----------
+  ['qsc-draft-v2', 'qsc-questions-v1', 'qsc-live-config', 'qsc-na-preset'].forEach(function (k) { localStorage.removeItem(k); });
+  if (MODE === 'authlost') localStorage.setItem('qsc-questions-v1', JSON.stringify(Q));   // 사본이 있는 갈래(배경 갱신)
+
+  // ---------- 가짜 서버 ----------
+  var sent = [];
+  var submitReply = function () { return { ok: true, storeFile: { ok: true } }; };
+  var realFetch = window.fetch.bind(window);
+  window.fetch = function (url, opt) {
+    var u = String(url);
+    if (u.indexOf('script.google.com') >= 0) {
+      var body = JSON.parse((opt && opt.body) || '{}');
+      var act = body.action || (body.type ? body.type + '.submit(옛 봉투)' : '');
+      sent.push({ act: act, token: body.token || null, type: body.type || null });
+      return new Promise(function (resolve, reject) {
+        setTimeout(function () {
+          var res;
+          try {
+            if (act === 'config.questions') res = MODE === 'authlost' ? { ok: false, code: 'AUTH_INVALID', error: '로그인이 필요합니다.' } : Object.assign({ ok: true }, Q);
+            else if (act === 'config.get') {
+              if (MODE === 'masterfail') throw new TypeError('Failed to fetch');
+              res = { ok: true, stores: ['가매장', '나매장'] };
+            }
+            else if (act === 'qsc.status') res = { ok: true, existing: [] };
+            else if (act === 'qsc.submit') res = submitReply(body);
+            else res = { ok: false, code: 'BAD_REQUEST', error: '시험 페이지가 모르는 요청: ' + act };
+          } catch (e) { reject(e); return; }
+          resolve(new Response(JSON.stringify(res), { status: 200 }));
+        }, 10);
+      });
+    }
+    if (/(^|\/)data\/master\.json/.test(u)) {
+      if (MODE === 'masterfail') return Promise.resolve(new Response('<html>503</html>', { status: 503 }));
+      return realFetch('../data/master.json', opt);
+    }
+    return realFetch(url, opt);
+  };
+
+  // ---------- 가짜 로그인(auth.js 대신) ----------
+  var tok = 'T1';
+  window.Auth = {
+    token: function () { return tok; },
+    menus: function () { return null; },            // 모른다 — 서버에 묻는다
+    can: function () { return true; },
+    relogin: function () { tok = null; return Promise.resolve(false); },
+  };
+
+  // ---------- 알림창 대역 ----------
+  var alerts = [], confirms = [], answers = [];
+  window.alert = function (m) { alerts.push(String(m)); };
+  window.confirm = function (m) { confirms.push(String(m)); return answers.length ? answers.shift() : false; };
+
+  // ---------- 화면 뼈대(qsc.html 본문 그대로 · 스크립트 제외) ----------
+  var html = await (await realFetch('../qsc.html', { cache: 'no-store' })).text();
+  var doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script').forEach(function (s) { s.remove(); });
+  document.getElementById('host').innerHTML = doc.body.innerHTML;
+
+  function load(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src + '?t=' + Date.now();              // 브라우저 캐시가 옛 js 를 주지 않게
+      s.onload = resolve; s.onerror = reject;
+      document.body.appendChild(s);
+    });
+  }
+  var files = ['../js/ui-busy.js', '../js/scoring.js', '../js/api.js', '../js/ui-time.js', '../js/ui-photo.js', '../js/qsc-app.js'];
+  for (var i = 0; i < files.length; i++) await load(files[i]);
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+  var d0 = new Date();
+  var today = d0.getFullYear() + '-' + pad(d0.getMonth() + 1) + '-' + pad(d0.getDate());
+  var pm = new Date(d0.getFullYear(), d0.getMonth() - 1, 15);
+  var prevDay = pm.getFullYear() + '-' + pad(pm.getMonth() + 1) + '-15';
+  function setVal(sel, v, evs) {
+    var el = $(sel); el.value = v;
+    (evs || ['input', 'change']).forEach(function (t) { el.dispatchEvent(new Event(t, { bubbles: true })); });
+  }
+  function submits() { return sent.filter(function (x) { return /qsc\.submit/.test(x.act); }).length; }
+  async function clickSubmit(ans) {
+    answers = ans.slice(); alerts.length = 0; confirms.length = 0;
+    $('#submitBtn').click();
+    await sleep(40);
+    await until(function () { return !$('#submitBtn').disabled; }, 4000);
+    await sleep(40);
+  }
+  function draft() { try { return JSON.parse(localStorage.getItem('qsc-draft-v2') || 'null'); } catch (e) { return null; } }
+
+  if (MODE === 'flow') {
+    ok('문항이 그려졌다', await until(function () { return document.querySelectorAll('#groups .item').length === 5; }));
+    ok('버전 표시', /시험판/.test($('#verInfo').textContent), $('#verInfo').textContent);
+    ok('매장 목록(서버)', await until(function () { return $('#store').options.length >= 3; }), $('#store').options.length);
+
+    setVal('#store', '가매장');
+    setVal('#inspector', '시험자');
+    // dates-4 — 빈 날짜
+    setVal('#date', '');
+    await clickSubmit([]);
+    ok('dates-4 빈 날짜 → 「점검일자를 선택해 주세요.」', alerts[0] === '점검일자를 선택해 주세요.', alerts);
+    ok('dates-4 빈 날짜 → 서버에 안 보냄', submits() === 0);
+    // dates-4 — 지난 달
+    setVal('#date', prevDay);
+    await clickSubmit([false]);
+    ok('dates-4 지난 달 → 「이번 달이 아닙니다(N월)」 되묻기', /^점검일자가 이번 달이 아닙니다\(\d{1,2}월\)\. 이대로 제출할까요\?/.test(confirms[0] || ''), confirms);
+    ok('dates-4 지난 달 [취소] → 안 보냄', submits() === 0);
+    // 정상 제출 + 통합시트 실패 + 초기화 [취소]
+    setVal('#date', today);
+    submitReply = function () { return { ok: true, storeFile: { ok: true }, dashboard: { ok: false, error: '시험 — 통합시트 거절' } }; };
+    await clickSubmit([true, false]);
+    ok('dates-4 확인창 첫 줄 「점검일자 ' + today + '」', (confirms[0] || '').split('\n')[0] === '점검일자 ' + today, confirms);
+    ok('제출 1건 나감(토큰 · 새 봉투)', submits() === 1 && sent.filter(function (x) { return x.act === 'qsc.submit'; })[0].token === 'T1', sent);
+    ok('dates-1 통합시트 실패 안내', /통합시트에는 기록하지 못했습니다/.test(alerts[0] || '') && /시험 — 통합시트 거절/.test(alerts[0] || ''), alerts);
+    ok('field-9 초기화 되묻기 문구', /입력을 초기화할까요\?/.test(confirms[1] || ''), confirms);
+    ok('field-9 [취소] → 임시저장에 방금 낸 매장(sent)', draft() && draft().sent === '가매장', draft());
+    // field-9 — 다시 제출
+    await clickSubmit([false]);
+    ok('field-9 다시 제출 → 「방금 제출한 내용(가매장)이 그대로 남아 있습니다」', /^방금 제출한 내용\(가매장\)이 그대로 남아 있습니다 — 이대로 가매장 매장으로 제출할까요\?/.test(confirms[0] || ''), confirms);
+    ok('field-9 [취소] → 안 보냄', submits() === 1);
+    // field-9 — 매장 바꾸기 [확인]
+    answers = [true]; confirms.length = 0;
+    setVal('#store', '나매장');
+    await sleep(30);
+    ok('field-9 매장 바꾸면 되묻기', /^방금 제출한 내용\(가매장\)이 그대로 남아 있습니다 — 이대로 나매장 매장으로 제출할까요\?/.test(confirms[0] || ''), confirms);
+    ok('field-9 [확인] → 기억을 거둔다', draft() && draft().sent === '', draft());
+
+    // resilience-4·5 — 로그인 풀림
+    submitReply = function () { return { ok: false, code: 'AUTH_INVALID', error: '로그인이 필요합니다.' }; };
+    var n0 = submits();
+    await clickSubmit([true, false]);
+    ok('resilience-5 로그인 풀림 안내 + 로그인으로 갈지 묻는다', /로그인이 풀렸습니다/.test(confirms[1] || '') && /로그인 화면으로 갈까요/.test(confirms[1] || ''), confirms);
+    ok('resilience-5 안내 줄(#authNote)이 켜지고 로그인 링크', $('#authNote').style.display === '' && !!$('#authNote a[href="login.html?next=qsc.html"]'), $('#authNote').textContent);
+    ok('resilience-4 첫 제출은 나갔다(토큰)', submits() === n0 + 1);
+    await clickSubmit([true, false]);
+    ok('resilience-4 다시 눌러도 옛 익명 봉투로 안 나간다', submits() === n0 + 1 && !sent.some(function (x) { return x.type; }), sent.slice(-3));
+    ok('resilience-4 같은 로그인 안내', /로그인이 풀렸습니다/.test(confirms[1] || ''), confirms);
+    ok('resilience-5 임시저장은 그대로', !!draft());
+    tok = 'T2';
+
+    // resilience-7 — 끊김
+    submitReply = function () { throw new TypeError('Failed to fetch'); };
+    await clickSubmit([true]);
+    ok('resilience-7 한국어 안내(인터넷 연결 확인 · 작성 내용 남음)', /^제출하지 못했습니다\.\n인터넷 연결을 확인한 뒤 다시 제출해 주세요/.test(alerts[0] || ''), alerts);
+    ok('resilience-7 「Failed to fetch」 없음', (alerts[0] || '').indexOf('Failed to fetch') < 0);
+
+    // resilience-8 — 사진 한 장 실패
+    var good = await new Promise(function (resolve) {
+      var c = document.createElement('canvas'); c.width = 40; c.height = 30;
+      var g = c.getContext('2d'); g.fillStyle = '#c33'; g.fillRect(0, 0, 40, 30);
+      c.toBlob(function (b) { resolve(new File([b], 'ok.jpg', { type: 'image/jpeg' })); }, 'image/jpeg', 0.9);
+    });
+    var bad = new File(['이건 사진이 아니다'], 'bad.heic', { type: 'image/heic' });
+    var input = $('#photoInput');
+    input.click = function () { };                     // 파일 고르는 창을 열지 않는다
+    var btn = document.querySelector('#groups .item .photoBtn');
+    btn.click();
+    alerts.length = 0;
+    var dt = new DataTransfer(); dt.items.add(good); dt.items.add(bad);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change'));
+    ok('resilience-8 실패 안내(1장)', await until(function () { return alerts.length > 0; }, 5000) && /^사진 1장을 불러오지 못했습니다/.test(alerts[0]), alerts);
+    var btn2 = document.querySelector('#groups .item .photoBtn');
+    ok('resilience-8 성공한 1장은 붙어 보인다(버튼 「사진 1」 · 다시 누를 수 있음)', btn2 && btn2.textContent === '사진 1' && !btn2.disabled, btn2 && btn2.textContent);
+  }
+
+  if (MODE === 'authlost') {
+    ok('사본으로 문항이 먼저 그려졌다', await until(function () { return document.querySelectorAll('#groups .item').length === 5; }));
+    ok('배경 갱신이 AUTH 를 받으면 감춘다(noAccess)', await until(function () { return document.body.classList.contains('noAccess'); }));
+    ok('resilience-5 버튼 「다시 로그인 필요」(「담당자만」 아님)', $('#submitBtn').textContent === '다시 로그인 필요', $('#submitBtn').textContent);
+    ok('resilience-5 안내 줄 — 로그인이 풀렸습니다 + 링크', $('#authNote').style.display === '' && /로그인이 풀렸습니다/.test($('#authNote').textContent) && !!$('#authNote a'), $('#authNote').textContent);
+    /* 2026-09-25 검수 · security-3 — 계정 중지·강제 로그아웃도 AUTH_INVALID 다. 문항 사본은 지우고 임시저장만 남긴다. */
+    ok('security-3 AUTH_INVALID 뒤 문항 사본(qsc-questions-v1)이 비어 있다', !localStorage.getItem('qsc-questions-v1'));
+  }
+
+  if (MODE === 'masterfail') {
+    ok('master.json 이 실패해도 문항이 그려진다', await until(function () { return document.querySelectorAll('#groups .item').length === 5; }));
+    ok('resilience-10 안내 — 매장 목록을 불러오지 못했습니다 + [다시 시도]',
+      await until(function () { return $('#dupNote').style.display === '' && /매장 목록을 불러오지 못했습니다/.test($('#dupNote').textContent); }) && !!$('#dupNote button'),
+      $('#dupNote').textContent);
+    ok('버전 표시에 undefined 가 없다', $('#verInfo').textContent.indexOf('undefined') < 0, $('#verInfo').textContent);
+    ok('제출 버튼은 살아 있다', !$('#submitBtn').disabled);
+  }
+
+  ['qsc-draft-v2', 'qsc-questions-v1', 'qsc-live-config', 'qsc-na-preset'].forEach(function (k) { localStorage.removeItem(k); });
+  show(true);
+})().catch(function (e) {
+  document.getElementById('out').textContent = '시험 자체 오류: ' + (e && e.stack || e);
+  window.__result = { error: String(e && e.stack || e), done: true };
+});
+</script>
+</body>
+</html>

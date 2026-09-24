@@ -11,7 +11,10 @@
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="icons/icon-192-v2.png">
 <link rel="apple-touch-icon" href="icons/icon-192-v2.png">
-<link rel="stylesheet" href="css/app.css?v=137">
+<!-- 2026-09-25 검수 · perf-client-6 — 글꼴 먼저 받기 (주소는 css/app.css @font-face 와 똑같이 · crossorigin 필수) -->
+<link rel="preload" href="fonts/NanumSquareR.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/NanumSquareB.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/app.css?v=138">
 </head>
 <body>
 <header class="topbar">
@@ -73,12 +76,12 @@
        guard('codes', '쓰기')는 Auth.menus()를 아는 상태에서 codes 쓰기 권한이 없을 때만
        denyHome()으로 안내 후 홈으로 보낸다(모르면 통과 — 저장소가 비워진 기기 보호).
        ★'쓰기'까지 본다★ (2026-09-17 · 최종검수 #21) — 발급·취소가 전부 쓰는 일이라 읽기만 있는 계정은 돌려보낸다. -->
-<script src="js/maint.js?v=137"></script>
-<script src="js/ui-busy.js?v=137"></script>
-<script src="js/auth.js?v=137"></script>
+<script src="js/maint.js?v=138"></script>
+<script src="js/ui-busy.js?v=138"></script>
+<script src="js/auth.js?v=138"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('codes', '쓰기');</script>
-<script src="js/api.js?v=137"></script>
-<script src="js/codes-app.js?v=137"></script>
+<script src="js/api.js?v=138"></script>
+<script src="js/codes-app.js?v=138"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>

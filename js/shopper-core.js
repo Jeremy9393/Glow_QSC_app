@@ -6,6 +6,11 @@
    미응답은 빈칸으로 두면 채점에서 자동 제외 — 비고만 적어도 응답으로 인정 */
 async function initShopperForm(opts) {
   const ADMIN = !!opts.admin;
+  /* 2026-09-25 검수 · dates-4 — 날짜 칸을 부르는 이름(서버 문구와 같다 · 손님 설문은 「방문 날짜」) */
+  const DATE_LABEL = ADMIN ? '점검일자' : '방문 날짜';
+  function validDate(v) { return /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')); }
+  /* 2026-09-25 검수 · resilience-2 — 결과를 모르는 제출(응답을 못 읽음·연결 끊김)의 제출시각. 다시 누르면 이 값을 그대로 쓴다. */
+  let pendingAt = '';
   /* 하단 진행률의 '0 / 38'은 HTML에 박혀 있는 숫자다. 실제 문항 수는 제출 코드를 확인한 뒤에야 알 수 있으므로,
      그 전까지는 ★틀린 숫자 대신 상태 문구★를 띄운다 — 틀린 숫자를 맞는 것처럼 보여 주는 것이 안내보다 나쁘다.
      진짜 값은 recompute()가 activeQs().length 로 덮어쓴다(문항이 늘고 줄어도 따라간다). */
@@ -14,7 +19,15 @@ async function initShopperForm(opts) {
   /* ★master.json 에는 이제 문항이 없다★ (2026-09-18 담당자 ②-1) — 매장 목록·매장 유형·버전만 있는 공개 파일이다.
      문항은 아래 openQuestions 가 제출 코드를 서버(survey.questions)에 확인한 뒤에만 받는다 —
      담당자: "매장사람들도 ms평가표는 못봐야해, ms평가표는 신뢰가는사람들만 하는 경우가 많아서 문항 자체를 유출하진 않을꺼야" */
-  const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
+  /* 2026-09-25 검수 · perf-client-2 · resilience-10 — master.json 을 여기서 기다리지 않는다.
+     안내문·방문 정보 블록은 master 없이 그릴 수 있으므로 먼저 그리고, 매장 유형(STORE_TYPES)을 정하기 직전에만 기다린다.
+     못 받으면(오류 페이지·오프라인에 사본 없음) 빈 값으로 계속한다 — 종전에는 .json() 이 터져 화면 전체가 아무 안내 없이 멈췄다.
+     매장은 링크(?store=)·코드가 정하고 매장 유형은 서버(survey.questions)가 주므로 빈 값으로도 설문이 된다. */
+  let masterFailed = false;
+  const masterP = fetch('data/master.json', { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (m) { return m || {}; })
+    .catch(function (e) { masterFailed = true; console.warn('[shopper] data/master.json 을 읽지 못했습니다', e); return {}; });
   const $ = function (s, el) { return (el || document).querySelector(s); };
 
   // ---------- 공통 블록 렌더 (안내문·방문 정보) — 엑셀 쇼퍼 시트 안내 블록과 짝 (수정 시 함께!) ----------
@@ -70,7 +83,8 @@ async function initShopperForm(opts) {
       control: '<select id="way"><option value="">주문한 방법 선택</option>' +
         '<option value="카운터">카운터에서 직원에게 주문</option>' +
         '<option value="키오스크">키오스크(무인 단말)로 주문</option></select>' },
-    { id: 'date', label: '방문날짜 *', control: '<input type="date" id="date">' },
+    /* 2026-09-25 검수 · contract-3 — 칸 이름을 경고·확인창·서버 문구(DATE_LABEL)와 같은 낱말로 (관리자 「점검일자」 · 손님 「방문 날짜」) */
+    { id: 'date', label: DATE_LABEL + ' *', control: '<input type="date" id="date">' },
     { id: 'time', label: '방문 시간 *', control: TimePick.html('time') },
     /* ★이름·얼굴·체형은 받지 않는다★ (2026-08-27 담당자 결정 · 2026-09-01 완화)
        손님이 적은 이 글은 시트에 그대로 남고 본사가 본다. 사람을 알아볼 수 있는 내용을
@@ -191,6 +205,7 @@ async function initShopperForm(opts) {
      문항 코드로 다룬다 (번호가 아니라) —
        2026-08-18 에 13번 카테고리가 4→2문항으로 줄자 번호가 밀려 엉뚱한 예시가 붙은 적이 있다.
        번호로 저장하면 평가표를 한 번 고치는 순간 ★엉뚱한 문항이 조용히 사라진다★. */
+  const master = await masterP;   // 2026-09-25 검수 · perf-client-2 — 위 안내 블록은 이미 그려졌다
   const STORE_TYPES = master.store_types || {};   // 공개 표 — 서버 응답(storeType)이 없을 때의 뒷받침 (옛 백엔드 대비)
   const cardOf = {};        // 문항번호 → 카드 element (buildQ 가 채운다)
   const secOf = {};         // 카테고리 이름 → 섹션 element
@@ -357,7 +372,8 @@ async function initShopperForm(opts) {
     /* ★주문 방법은 「일부만 키오스크」 매장에서만 필수★ (2026-09-08) —
        when 이 거짓이면 그 칸은 화면에 없다. 없는 칸을 필수로 검사하면 제출이 막힌다. */
     { id: 'way', label: '주문 방법', pick: true, when: function () { return storeType() === 'mixed'; } },
-    { id: 'date', label: '방문날짜' },
+    /* 2026-09-25 검수 · dates-4 — 서버와 같은 문구(「방문 날짜를 선택해 주세요.」 · 관리자 입력은 「점검일자」) */
+    { id: 'date', label: DATE_LABEL, pick: true },
     { id: 'time', label: '방문 시간', pick: true, focus: 'timeH', get: function () { return TimePick.get('time'); } },
     /* ★응대 직원은 필수가 아니다★ (2026-09-04 담당자) — 「추가로 하고 싶은 말 (선택)」 묶음으로 옮겼다 */
     { id: 'order', label: '주문내역' },
@@ -455,6 +471,21 @@ async function initShopperForm(opts) {
 
   let stores = cachedStores() || (master.stores || []);
   fillStores(stores);
+  /* 2026-09-25 검수 · resilience-10 — master.json 도 못 받았고 고를 매장이 하나도 없으면(링크에 매장도 없음) 조용히 두지 않는다.
+     안내 자리(#dupNote)가 있는 화면만(shopper.html) — 아래 배경 매장 목록이 도착하면 fillStores 가 목록을 채운다. */
+  let storeNoteOn = false;
+  if (masterFailed && !stores.length && !preStore && $('#dupNote')) {
+    const mn = $('#dupNote');
+    mn.textContent = '매장 목록을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 [다시 시도]를 눌러 주세요.\n' +
+      '작성하신 내용은 이 기기에 남아 있습니다(제출 코드는 다시 넣어 주세요).\n';
+    const mb = document.createElement('button');
+    mb.type = 'button';
+    mb.textContent = '다시 시도';
+    mb.onclick = function () { saveDraft(); location.reload(); };
+    mn.appendChild(mb);
+    mn.style.display = '';
+    storeNoteOn = true;
+  }
 
   /* 실시간 목록은 배경으로. ★내용이 실제로 달라졌을 때만★ 다시 그린다 —
      매번 다시 그리면 손님이 드롭다운을 펼쳐 둔 순간에 목록이 닫히거나 튄다(거의 항상 같은 목록이다).
@@ -467,6 +498,7 @@ async function initShopperForm(opts) {
         live.stores.every(function (s, i) { return s === stores[i]; })) return;
     stores = live.stores;
     fillStores(stores);
+    if (storeNoteOn) { storeNoteOn = false; $('#dupNote').textContent = ''; $('#dupNote').style.display = 'none'; }   // 2026-09-25 검수 · resilience-10
   }).catch(function (e) {
     console.warn('매장 목록 갱신 실패 — 이 기기에 저장된 목록으로 계속합니다', e);
   });
@@ -691,6 +723,8 @@ async function initShopperForm(opts) {
         return;
       }
     }
+    // 2026-09-25 검수 · dates-4 — 비어 있지 않아도 형식이 틀리면 막는다(서버도 같은 문구로 막는다)
+    if (!validDate($('#date').value)) { alert(DATE_LABEL + '를 선택해 주세요.'); $('#date').focus(); return; }
     const act = activeQs();
     const answered = act.filter(function (q) { return isFilled(q.no); }).length;
     const missing = act.length - answered;
@@ -726,9 +760,17 @@ async function initShopperForm(opts) {
           '한 줄만 적어 주시면 큰 도움이 됩니다.\n\n이대로 제출할까요?')) return;
     }
 
+    /* 2026-09-25 검수 · dates-4 — 날짜의 달이 이번 달이 아니면 한 번 더 묻는다(낡은 임시저장 날짜를 사람이 잡게).
+       달만 본다 — 말일 방문을 다음 날 내는 것처럼 지난 달이 맞는 경우도 있어 막지는 않는다. */
+    const dateVal = $('#date').value;
+    if (dateVal.slice(0, 7) !== todayStr().slice(0, 7)) {
+      if (!confirm((ADMIN ? '점검일자가' : '방문 날짜가') + ' 이번 달이 아닙니다(' + Number(dateVal.slice(5, 7)) + '월). 이대로 제출할까요?\n\n' +
+        DATE_LABEL + ' ' + dateVal)) { $('#date').focus(); return; }
+    }
     const res = Scoring.shopperScore(answersInOrder());
+    // 2026-09-25 검수 · dates-4 — 확인창 첫 줄에 점검일자
     if (ADMIN && res.score != null &&
-        !confirm('응답 ' + answered + '/' + act.length + '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade + '\n제출할까요?')) return;
+        !confirm('점검일자 ' + dateVal + '\n응답 ' + answered + '/' + act.length + '\n점수 ' + res.score.toFixed(1) + '점 · ' + res.grade + '\n제출할까요?')) return;
 
     /* ★익명 제출은 제출 코드가 있어야 한다★ — 문항을 열 때 확인한 코드(openCode)를 그대로 쓴다 (2026-09-18 ②-1 · 종전 prompt() 는 없앴다).
        서버가 제출 순간에 한 번 더 판정하고 ★그때 소진★한다(submitWithCode). 틀려도 작성 내용은 그대로 남는다 — 다시 [제출]을 누르면 된다.
@@ -745,7 +787,10 @@ async function initShopperForm(opts) {
       /* ★응대직원설명은 이제 받지 않는다★ (2026-09-07) — 빈 값을 보내 시트 열은 그대로 둔다 */
       staff: '', order: $('#order').value.trim(), demographic: $('#demo').value.trim(),
       overall: $('#overall') ? $('#overall').value.trim() : '',
-      submittedAt: new Date().toISOString(),
+      /* 2026-09-25 검수 · resilience-2 — 응답을 못 받은 제출을 다시 누를 때는 ★같은 제출시각★을 쓴다.
+         서버의 중복 방지 열쇠가 payload 전체로 만들어지므로, 시각이 누를 때마다 바뀌면 이미 접수된 제출이
+         「이미 사용된 코드입니다」로 돌아와 손님이 접수됐는지 알 수 없었다. 같은 값이면 서버가 「이미 받음」으로 답해 감사 화면이 뜬다. */
+      submittedAt: pendingAt || (pendingAt = new Date().toISOString()),
       source: ADMIN ? 'admin' : 'customer',
       result: res,
       /* ★주문 방법★ (2026-09-08) — mixed 매장에서만 값이 있다. 시트에 남겨 두면
@@ -783,12 +828,19 @@ async function initShopperForm(opts) {
       if (ADMIN && r && !r.ok && r.code === 'CONFLICT' && r.existing) {
         if (!Api.askOverwrite(payload.store, r.existing, r.storeWrote)) {
           btn.disabled = false; btn.textContent = btnLabel;
+          pendingAt = '';   // 2026-09-25 검수 · resilience-2 — 서버가 분명히 답했다(저장 안 됨) — 다음은 새 제출시각으로
           return;   // 작성한 내용은 그대로 남는다 — 매장만 다시 고르면 된다
         }
         btn.textContent = '앞 제출을 정리하는 중…';
         payload.overwrite = true;
         r = await Api.submit('shopper', payload);
       }
+      /* 2026-09-25 검수 · resilience-2 — 제출시각을 붙잡아 두는 것은 ★결과를 모를 때★(응답을 못 읽음)뿐이다.
+         성공했거나 서버가 분명히 거절했으면(날짜·코드 오류 등 — 저장되지 않았다) 다음 [제출]은 새 시각으로 낸다.
+         2026-09-25 검수 · client-1 — IN_FLIGHT(앞 제출을 아직 처리 중)도 결과를 모르는 응답이다. 여기서 시각을 버리면
+         다음 [제출]이 다른 열쇠가 되어 「이미 받음」(감사 화면) 대신 「이미 사용된 코드」로 끝났다.
+         (서버 열쇠는 고정 10분 칸이라 칸 경계를 넘으면 같은 시각이어도 열쇠가 달라진다 — 그래서 「대개」 감사 화면이다.) */
+      if (!(r && (r._unparsed || r.code === 'IN_FLIGHT'))) pendingAt = '';
       if (r.ok) {
         localStorage.removeItem(DRAFT_KEY);
         if (ADMIN) {
@@ -822,12 +874,28 @@ async function initShopperForm(opts) {
       }
       /* ★고객에게도 사유를 보여 준다★ — '전송되지 않았습니다'만으로는 코드를 다시 받아야 하는지,
          그냥 다시 누르면 되는지 알 수 없다. 서버가 사유를 구분해 보내 준다. */
-      alert(ADMIN
-        ? '저장되지 않았습니다: ' + (r.error || '원인을 알 수 없습니다')
-        : (r.error || '전송되지 않았습니다. 잠시 후 다시 시도해 주세요.') +
-          '\n\n작성하신 내용은 그대로 있습니다. [제출]을 다시 눌러 주세요.');
+      if (!ADMIN && r.code === 'CONFLICT') {
+        /* 2026-09-25 검수 · resilience-2 — 「이미 사용된 코드」에 「[제출]을 다시 눌러 주세요」를 붙이면 몇 번을 눌러도 같은 말이 반복됐다.
+           응답이 폰에 닿지 못했을 뿐 첫 제출이 이미 접수된 경우가 대부분이라 그렇게 안내하고, 다시 누르라고 하지 않는다.
+           감사 화면으로 넘기지는 않는다 — 다른 사람이 쓴 코드일 수도 있어 화면이 판단할 수 없다. */
+        alert((r.error || '이미 사용된 코드입니다.') +
+          '\n\n이 코드로 이미 접수된 설문이 있습니다. 방금 [제출]을 누르셨다면 정상적으로 접수된 것입니다.' +
+          '\n확실하지 않으시면 코드를 받으신 담당자에게 확인해 주세요.');
+      } else if (!ADMIN && r.code === 'IN_FLIGHT') {
+        /* 2026-09-25 검수 · client-1 — 앞 제출을 서버가 아직 처리하는 중이다. 제출시각을 붙잡아 두었으니
+           잠시 뒤 다시 누르면 같은 제출로 알아보고 감사 화면으로 넘어간다(처리가 끝나지 않았으면 이 안내가 한 번 더 뜬다). */
+        alert('앞서 누르신 제출을 처리하고 있습니다.\n\n잠시 뒤 [제출]을 다시 눌러 주세요. 작성하신 내용은 그대로 있습니다.');
+      } else {
+        alert(ADMIN
+          ? '저장되지 않았습니다: ' + (r.error || '원인을 알 수 없습니다')
+          : (r.error || '전송되지 않았습니다. 잠시 후 다시 시도해 주세요.') +
+            '\n\n작성하신 내용은 그대로 있습니다. [제출]을 다시 눌러 주세요.');
+      }
     } catch (e) {
-      alert(ADMIN ? '저장되지 않았습니다: ' + e.message : '전송되지 않았습니다. 네트워크 연결을 확인해 주세요.');
+      /* 2026-09-25 검수 · resilience-7 — 인터넷이 끊긴 경우 api.js 가 한국어 안내를 실어 던진다(e.code 'NETWORK').
+         결과를 모르는 경우라 제출시각(pendingAt)은 그대로 둔다 — 다시 누르면 같은 제출로 알아본다(resilience-2). */
+      if (e && e.code === 'NETWORK') alert((ADMIN ? '저장되지 않았습니다.\n' : '전송되지 않았습니다.\n') + e.message);
+      else alert(ADMIN ? '저장되지 않았습니다: ' + (e && e.message) : '전송되지 않았습니다. 인터넷 연결을 확인한 뒤 다시 제출해 주세요. 작성하신 내용은 그대로 남아 있습니다.');
     } finally {
       /* ★finally 로 끈다★ — try 안에 중간 return 이 있다(되묻기에서 취소했을 때).
          그 길로 빠지면 덮개가 남아 화면이 잠긴 것처럼 보인다. */
@@ -876,6 +944,8 @@ async function initShopperForm(opts) {
     if (!code) { showCodeNote('제출 코드를 입력해 주세요.'); if (inp) inp.focus(); return; }
     const store = ($('#store').value || '').trim();
     if (!store) { alert('매장명을 선택해 주세요.'); $('#store').focus(); return; }
+    // 2026-09-25 검수 · dates-4 — 날짜는 첫 화면에서 고른다. 비었으면 여기서 먼저 알려 준다(제출 때도 다시 본다)
+    if (!validDate($('#date').value)) { alert(DATE_LABEL + '를 선택해 주세요.'); $('#date').focus(); return; }
     const btn = $('#openBtn');
     btn.disabled = true;
     Busy.on('문항을 불러오는 중입니다…');
@@ -907,7 +977,7 @@ async function initShopperForm(opts) {
     allQs.forEach(function (q) { QBY[q.no] = q; });
     renderCats();
     if (ADMIN) {
-      if ($('#verInfo')) $('#verInfo').textContent = '평가표 ' + (r.version || master.version) + ' 기준';
+      if ($('#verInfo')) $('#verInfo').textContent = '평가표 ' + (r.version || master.version || '') + ' 기준';
       // 엑셀 쇼퍼 시트의 평가기준·안내·채점원칙을 그대로 표시 (완전 동기화)
       if ($('#rulesNote') && r.texts) {
         $('#rulesNote').textContent =

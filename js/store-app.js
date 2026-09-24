@@ -94,6 +94,11 @@
     if (!/^\d{4}$/.test(String(ym))) return String(ym || '');
     return '20' + ym.slice(0, 2) + '년 ' + Number(ym.slice(2, 4)) + '월';
   }
+  /* 2026-09-25 검수 · critic-day1-1 — 그 달 탭이 아직 없을 때(= 아직 점검 전) 보일 문구 */
+  function notYetMsg(ym) {
+    const tail = ' 점검이 끝나면 이곳에 개선요청사항이 나타납니다.';
+    return (String(ym) === cycle() ? '아직 이번 달 점검 전입니다.' : ymLabel(ym) + '은 아직 점검 기록이 없습니다.') + tail;
+  }
   /* 서버(store.get)는 기한·보완 기한을 'yyyy-MM-dd'로 준다 — 스프레드시트 타임존으로 계산된 값이다.
      폰 한 줄에 연도까지 들어갈 자리가 없고 어차피 보고 있는 달과 같은 해라 '10/15'로 줄인다.
      ★자르기만 한다. 여기서 날짜를 다시 계산하면 기기 시계·시간대가 끼어들어
@@ -121,6 +126,7 @@
      저장을 잠그는 판정(writable)은 둘 다 같으므로 이 변수는 ★문구를 가르는 데만★ 쓴다. */
   let revalidating = false;
   let loading = false;
+  let earlyGet = null;                    // 2026-09-25 검수 · perf-client-8 — sync 와 나란히 먼저 던져 둔 store.get { store, ym, p }
   let maint = '';                         // 점검 모드 문구 (''이면 점검 아님)
   let modes = [];                         // 그려져 있는 항목 카드들의 applyMode 목록
 
@@ -267,6 +273,21 @@
      빨리 뜬다(왕복 1회 ≈ 2초). 홈에서 카드를 눌러 들어오는 흔한 동선에서는 방금 홈이
      받아 둔 값이라 거의 항상 건너뛴다. 근거와 안전성은 auth.js의 sync() 주석에 적어 두었다.
      ★인자를 지우면 종전 동작으로 돌아간다★ — 되돌리기가 이 한 숫자다. */
+  /* 2026-09-25 검수 · perf-client-8 — 담당 매장이 한 곳인 계정은 store.get 을 sync 와 ★나란히★ 먼저 던져 둔다.
+     서버는 담당 1곳 계정의 payload.store 를 아예 읽지 않으므로(resolveTarget) sync 결과와 무관하게 답이 같다 —
+     종전에는 sync 왕복(약 2초 · 콜드 스타트 11초)이 끝나야 store.get 이 나가 두 왕복이 더해졌다.
+     쓰는 것은 load() 첫 호출 한 번뿐이고, sync 뒤 담당 매장이 한 곳이 아니게 됐거나 달이 다르면 버리고 종전 순서로 부른다
+     (여러 곳을 맡은 계정·본사는 목록이 확정된 뒤에 부른다 — 남의 매장 숫자를 먼저 그리지 않는 원칙).
+     earlyGet 선언은 파일 위쪽 상태 칸에 둔다(아래쪽 let 은 그 전에 불리면 TDZ 오류 — 이 파일의 옛 사고). */
+  try {
+    const sc0 = (sessionOk && online() && Auth.stores && Auth.stores()) || null;
+    const list0 = (sc0 && sc0.list) || [];
+    if (list0.length === 1) {
+      const qy0 = str(q.get('ym'));
+      const ym0 = /^\d{4}$/.test(qy0) ? qy0 : cycle();
+      earlyGet = { store: list0[0], ym: ym0, p: Api.call('store.get', { ym: ym0 }).catch(function () { return null; }) };
+    }
+  } catch (e) { earlyGet = null; }
   if (sessionOk && online()) { try { await Auth.sync(600); } catch (e) { /* 실패해도 기존 세션으로 진행 */ } }
   scope = (Auth.stores && Auth.stores()) || { all: false, list: [] };
   scope.list = scope.list || [];
@@ -479,7 +500,14 @@
     Busy.on('불러오는 중입니다…');
 
     let res = null;
-    if (online()) {
+    /* 2026-09-25 검수 · perf-client-8 — 첫 load() 는 sync 와 나란히 던져 둔 store.get(earlyGet)을 쓴다.
+       같은 매장·같은 달이고 지금도 담당이 한 곳일 때만이다. 못 받았으면(null) 아래에서 종전대로 다시 부른다. */
+    const early = earlyGet;
+    earlyGet = null;
+    if (early && online() && scope.list.length === 1 && early.store === scope.list[0] && early.ym === curYm) {
+      try { res = await early.p; } catch (e) { res = null; }
+    }
+    if (!res && online()) {
       try { res = await Api.call('store.get', payload); } catch (e) { res = null; }
     }
     loading = false;
@@ -550,7 +578,11 @@
 
     if (data.exists === false) {
       clearBody();
-      showState(str(data.error) || (ymLabel(curYm) + ' 탭이 아직 만들어지지 않았습니다. 본사 담당자에게 문의해 주세요.'));
+      /* 2026-09-25 검수 · critic-day1-1 — 그 달 탭이 아직 없는 것은 「아직 점검 전」이라는 정상 상태다.
+         10/1 부터 점검 전 매장은 모두 이 문구를 보므로 「본사 담당자에게 문의」로 보내지 않는다.
+         서버가 준 문구가 있으면 그것을 쓰되, 옛 백엔드(1.50 까지)의 「…문의해 주세요」 문구는 앱 문구로 바꿔 보인다. */
+      const srvMsg = str(data.error);
+      showState((srvMsg && srvMsg.indexOf('문의') < 0) ? srvMsg : notYetMsg(curYm));
       return;
     }
     if (!fromSnap) {

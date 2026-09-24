@@ -49,7 +49,8 @@ var PhotoPick = (function () {
         URL.revokeObjectURL(img.src);
         resolve(best);                  // 최저 해상도·최저 품질까지 갔을 때의 최선
       };
-      img.onerror = reject;
+      /* 2026-09-25 검수 · resilience-8 — 못 여는 파일(HEIF·손상)이면 거부한다. 부르는 쪽이 그 장만 건너뛴다. 임시 주소는 돌려준다 */
+      img.onerror = function (ev) { try { URL.revokeObjectURL(img.src); } catch (e) { /* 무시 */ } reject(ev); };
       img.src = URL.createObjectURL(file);
     });
   }

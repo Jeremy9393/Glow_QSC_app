@@ -12,12 +12,27 @@ const CacheService = (function () {
 const LockService = { getScriptLock: function () {
   return { waitLock: function () {}, releaseLock: function () {} };
 } };
+const NODE_CRYPTO = require('crypto');
+let HMAC_CALLS = 0;
 const Utilities = { formatDate: function (d, tz, f) {
   const p = function (n) { return String(n).padStart(2, '0'); };
   if (f === 'yyyy-MM-dd') return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   if (f === 'yyyy-MM') return d.getFullYear() + '-' + p(d.getMonth() + 1);
+  if (f === 'yyMM') return String(d.getFullYear()).slice(2) + p(d.getMonth() + 1);
   return String(d);
-} };
+},
+  /* 2026-09-25 검수 · authn-5 — newCode 가 randomCode 와 같은 HMAC 바이트를 쓴다. 자바처럼 부호 있는 바이트(-128~127)로 돌려준다 */
+  getUuid: function () { return NODE_CRYPTO.randomUUID(); },
+  computeHmacSha256Signature: function (v, k) {
+    HMAC_CALLS++;
+    return Array.from(NODE_CRYPTO.createHmac('sha256', String(k)).update(String(v)).digest()).map(function (b) { return b > 127 ? b - 256 : b; });
+  },
+};
+let AUDIT = [];
+function auditLog() { AUDIT.push(Array.prototype.slice.call(arguments)); }
+function anonCtx() { return { id: '(무인증)', role: '' }; }
+/* 제출 날짜 기본값 — 10/1 전(미래 달 허용)에도, 10월 이후(지난 달 허용)에도 통과하는 2610 안의 날 */
+const OK_DATE = '2026-10-15';
 
 // ── 가짜 시트 ────────────────────────────────────────────────
 let ROWS = [];      // 헤더 제외한 데이터 행들
@@ -76,11 +91,34 @@ function saveShopper(ss, p) {
   SAVED.push(p); return { ok: true };
 }
 
+function submitDateGate(dateStr, word) {
+  const w = word || '점검일자';
+  /* 2026-09-25 검수 · backend-2/security-1 — trim 하지 않는다. 뒤따르는 qscMonthClosed·yymm·저장은 원래 값을 쓰므로
+     ' 2026-10-20' 이 문을 지나면 탭 '02-1' 을 보아 확정 달 검사를 비켜 갔다. 앱 date 입력은 공백이 없다. */
+  const d = String(dateStr == null ? '' : dateStr);
+  const ym = /^\d{4}-\d{2}-\d{2}$/.test(d) ? yymm(d) : '';
+  const day = Number(d.slice(8, 10));
+  if (!ym || !validYm(ym) || !(day >= 1 && day <= 31)) return err('BAD_REQUEST', w + '를 선택해 주세요.');
+  if (ym < '2610') return err('BAD_REQUEST', Number(ym.slice(2, 4)) + '월은 앱으로 제출할 수 없습니다 — ' + w + '를 확인해 주세요.');
+  const cur = curYymm();
+  if (cur >= '2610' && ym > cur) return err('BAD_REQUEST', '아직 오지 않은 달입니다 — ' + w + '를 확인해 주세요.');
+  return null;
+}
+function validYm(ym) {
+  if (!/^\d{4}$/.test(String(ym))) return false;
+  const m = Number(String(ym).slice(2, 4));
+  return m >= 1 && m <= 12;
+}
+function yymm(dateStr) { return dateStr.slice(2, 4) + dateStr.slice(5, 7); } // '2026-08-10' → '2608'
 const CODE_SHEET = '쇼퍼_코드';
 const CODE_HEADER = ['회차', '매장', '코드', '발급시각', '만료시각', '상태', '사용시각', '메모'];
 const CODE_TTL = { '3h': 3 * 3600e3, 'today': -1, '15d': 15 * 86400e3 };   // -1 = 그날 23:59:59
 const CODE_FAIL_MAX = 15;      // 한 매장 · 10분 안에 이만큼 틀리면 그 매장을 잠근다
-const CODE_FAIL_ALL = 60;      // 전 매장 합산 · 10분 (매장 이름을 바꿔 가며 두드리는 것을 막는다 · 2026-09-17 ②-3c)
+/* 전 매장 합산 · 10분 (매장 이름을 바꿔 가며 두드리는 것을 막는다 · 2026-09-17 ②-3c)
+   2026-09-25 검수 · critic-attacker-1 — 60 → 150. 60이면 익명 한 사람이 틀린 코드 60번으로 ★전 매장★ 코드 확인을 10분씩 되풀이해 막을 수 있었다.
+   대입 횟수 자체는 익명 버킷(anonThrottle 'anon' · 분 40·시간 200)이 이미 묶으므로, 이 값은 「매장 이름 바꿔 가며 두드리기」만 잡으면 된다.
+   150 이면 한 번 잠그는 데 시간당 익명 상한의 4분의 3을 써야 한다. 매장별 15 는 그대로. */
+const CODE_FAIL_ALL = 150;
 const CODE_FAIL_MIN = 10;
 
 function codeSheet(ss) {
@@ -142,8 +180,20 @@ function msOf(v) {
 }
 
 function newCode() {
-  /* 6자리. 앞자리 0을 피한다 — 복사·구두 전달에서 자꾸 사라진다 */
-  return String(100000 + Math.floor(Math.random() * 900000));
+  /* 6자리. 앞자리 0을 피한다 — 복사·구두 전달에서 자꾸 사라진다
+     ★재료는 randomCode 와 같은 HMAC 바이트★ (2026-09-25 검수 · authn-5 — 종전 Math.random 은 randomCode 주석이 스스로
+     「자격증명 생성에 쓰면 안 된다」고 적은 것이었다). 모듈로 편향 없이: 첫 자리는 252 미만만 받아 1~9, 나머지는 250 미만만 받아 0~9.
+     ★자릿수(6)는 그대로★ — 8자리로 늘리면 앱 입력 안내(「6자리」)도 함께 바꿔야 해서 이번에는 뽑는 방법만 바꾼다. */
+  let out = '';
+  while (out.length < 6) {
+    const b = Utilities.computeHmacSha256Signature(Utilities.getUuid(), Utilities.getUuid());
+    for (let i = 0; i < b.length && out.length < 6; i++) {
+      const v = (b[i] + 256) % 256;
+      if (!out) { if (v < 252) out += String(1 + v % 9); }
+      else if (v < 250) out += String(v % 10);
+    }
+  }
+  return out;
 }
 
 function codeExpiry(ttl, tz) {
@@ -258,7 +308,18 @@ function codeFailOk(store) {
   try {
     const c = CacheService.getScriptCache();
     const k = codeFailKeys(store);
-    if (Number(c.get(k.all) || 0) >= CODE_FAIL_ALL) return false;
+    if (Number(c.get(k.all) || 0) >= CODE_FAIL_ALL) {
+      /* 2026-09-25 검수 · critic-attacker-1 — 전 매장 잠금이 걸렸다는 것을 담당자가 나중에라도 알 수 있게 버킷마다 한 줄만 남긴다 */
+      try {
+        const lg = k.all + ':logged';
+        if (!c.get(lg)) {
+          c.put(lg, '1', CODE_FAIL_MIN * 60 + 60);
+          auditLog(anonCtx(), 'survey.code', '', '경보', 'CODE_FAIL_ALL',
+            '제출 코드 실패가 ' + CODE_FAIL_MIN + '분에 ' + CODE_FAIL_ALL + '회를 넘어 코드 확인을 잠시 막았습니다');
+        }
+      } catch (e2) { }
+      return false;
+    }
     return Number(c.get(k.one) || 0) < CODE_FAIL_MAX;
   } catch (e) { return true; }
 }
@@ -285,7 +346,7 @@ function codeVerify(ss, code, store, missCode) {
   code = String(code || '').replace(/\D/g, '');
   if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
   store = normStore(store);
-  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 CODE_FAIL_ALL회 (②-3c)
     return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
   }
   const rec = codeFind(ss, code);
@@ -307,7 +368,10 @@ function submitWithCode(ss, p, ctx) {
   if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
   const store = normStore(p && p.store);
   if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
-  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c) — 잠겨 있으면 락을 기다리지도 않는다
+  /* 2026-09-25 검수 · dates-4 — 코드를 보기 전에 날짜부터(날짜가 틀리면 실패 카운터도 안 올리고 코드도 살아 있다) */
+  const badDate = submitDateGate(p && p.date, '방문 날짜');
+  if (badDate) return badDate;
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 CODE_FAIL_ALL회 (②-3c) — 잠겨 있으면 락을 기다리지도 않는다
     return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
   }
 
@@ -354,7 +418,7 @@ function is(name, got, want) {
 function head(t) { console.log('\n' + t); }
 const CTX = { id: 'moon' };
 function issue(store, ttl) { return fnCodesIssue(CTX, { store: store, ttl: ttl || '3h' }); }
-function submit(store, code, date) { return submitWithCode(SS, { store: store, code: code, date: date }, CTX); }
+function submit(store, code, date) { return submitWithCode(SS, { store: store, code: code, date: date === undefined ? OK_DATE : date }, CTX); }
 function liveCodes() { return fnCodesList(CTX, {}).live.map(function (r) { return r.store + ':' + r.code; }).sort(); }
 
 head('[1] 발급');
@@ -392,7 +456,10 @@ is('응답 2건', SAVED.length, 2);
 
 head('[6] ★방문 날짜가 발급한 달과 달라도 된다★ (예전엔 회차가 안 맞아 튕겼다)');
 const c1 = issue('금종제과');
-is('작년 날짜로 내도 통과', submit('금종제과', c1.rec.code, '2025-01-15').ok, true);
+/* 2026-09-25 검수 · dates-4 — 2610 보다 이른 달은 이제 날짜 문이 막는다(약속 ②). 코드와 날짜가 무관하다는 이 시험의 뜻은
+   「발급한 달과 다른 달(2610 이상)」로 본다 */
+is('2610 보다 이른 날짜(작년)는 날짜 문이 막는다', submit('금종제과', c1.rec.code, '2025-01-15').code, 'BAD_REQUEST');
+is('발급한 달과 다른 달 날짜로 내도 통과', submit('금종제과', c1.rec.code, OK_DATE).ok, true);
 
 head('[7] 취소 — 코드 번호로');
 const d1 = issue('금종제과');
@@ -447,12 +514,17 @@ head('[13] ★실패 카운터는 매장별★ (2026-09-17 담당자 ②-3c) —
 const m1 = issue('다른매장');
 is('금종제과가 잠긴 동안 다른 매장 제출은 통과', submit('다른매장', m1.rec.code).ok, true);
 is('다른 매장의 오타 1회는 아직 안 잠긴다', submit('다른매장', '000003').code, 'BAD_REQUEST');
-/* 전체 합산 60회 — 매장 이름을 바꿔 가며 두드리는 것을 막는다.
+/* 전체 합산 CODE_FAIL_ALL회 — 매장 이름을 바꿔 가며 두드리는 것을 막는다(2026-09-25 검수 · critic-attacker-1 60 → 150).
    지금까지 센 실패: 금종제과 15(16번째부터는 잠긴 채라 세지 않는다) + 다른매장 1 = 16 */
-for (let i = 0; i < 44; i++) submit('매장' + i, '000004');     // 44개 매장에서 1회씩 → 합산 60
-is('합산 60회를 채우면 매장이 달라도 잠긴다', submit('새매장', '000005').code, 'RATE_LIMITED');
+is('전체 합산 상한은 150 (critic-attacker-1)', CODE_FAIL_ALL, 150);
+for (let i = 0; i < 44; i++) submit('매장' + i, '000004');     // 합산 60 — 종전 상한
+const m60 = issue('예순매장');
+is('★합산 60회로는 아직 전 매장이 잠기지 않는다★ (critic-attacker-1)', submit('예순매장', m60.rec.code).ok, true);
+for (let i = 44; i < CODE_FAIL_ALL - 16; i++) submit('매장' + i, '000004');     // 매장마다 1회씩 → 합산 CODE_FAIL_ALL
+is('합산 상한을 채우면 매장이 달라도 잠긴다', submit('새매장', '000005').code, 'RATE_LIMITED');
 const m2 = issue('세번째매장');
 is('★그때는 맞는 코드도 막힌다★ (전체 잠금)', submit('세번째매장', m2.rec.code).code, 'RATE_LIMITED');
+is('전체 잠금 경보는 감사로그에 한 줄만 (두 번 막혀도)', AUDIT.filter(function (a) { return a[4] === 'CODE_FAIL_ALL'; }).length, 1);
 
 head('[14] ★그 달 MS 가 이미 있으면 발급하지 않는다★ (2026-09-17 담당자 ②-2)');
 const thisYm = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM');
@@ -470,6 +542,47 @@ MS_HAS['금종제과|2026-10'] = 2;
 is('ym:"2026-10" 모양도 받는다 — 있으면 거부', fnCodesIssue(CTX, { store: '금종제과', ttl: '3h', ym: '2026-10' }).code, 'CONFLICT');
 MS_HAS = {};
 is('★되돌리기로 지우면(자료가 없어지면) 다시 발급된다★', issue('금종제과').ok, true);
+
+head('[15] ★방문 날짜 문★ (2026-09-25 검수 · dates-4) — 코드를 보기 전에 막고, 코드는 살아 있고, 실패 카운터도 안 오른다');
+(function () {   // 위 시험과 이름이 겹치지 않게 따로 감싼다
+CacheService.getScriptCache().put(codeFailKeys('날짜매장').all, '0');   // [13] 의 전체 잠금을 푼다(10분이 지난 셈)
+const d1 = issue('날짜매장');
+const failKeyOf = function () { return Number(CacheService.getScriptCache().get(codeFailKeys('날짜매장').one) || 0); };
+const f0 = failKeyOf();
+const e1 = submit('날짜매장', d1.rec.code, '');
+is('빈 날짜 → BAD_REQUEST', e1.code, 'BAD_REQUEST');
+is('문구는 「방문 날짜를 선택해 주세요.」', e1.error, '방문 날짜를 선택해 주세요.');
+is('형식이 틀린 날짜(2026/10/15)도 같다', submit('날짜매장', d1.rec.code, '2026/10/15').error, '방문 날짜를 선택해 주세요.');
+is('없는 달(2026-13-01)도 같다', submit('날짜매장', d1.rec.code, '2026-13-01').error, '방문 날짜를 선택해 주세요.');
+const e2 = submit('날짜매장', d1.rec.code, '2026-09-30');
+is('9월 → 앱으로 제출할 수 없다', e2.error, '9월은 앱으로 제출할 수 없습니다 — 방문 날짜를 확인해 주세요.');
+is('실패 카운터는 그대로', failKeyOf(), f0);
+is('저장도 안 했다', SAVED.filter(function (p) { return p.store === '날짜매장'; }).length, 0);
+/* 미래 달 — curYymm() 가 2610 이상일 때만 막는다. 이 시험은 오늘 날짜로 돈다 */
+const cur0 = curYymm();
+const nextYm = (function () { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + 2); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-01'; })();
+const e3 = submit('날짜매장', d1.rec.code, nextYm);
+if (cur0 >= '2610') is('두 달 뒤 → 아직 오지 않은 달', e3.error, '아직 오지 않은 달입니다 — 방문 날짜를 확인해 주세요.');
+else is('10/1 전에는 미래 달을 막지 않는다(12월 시험 같은 것)', e3.ok, true);
+const d2 = issue('날짜매장');
+is('맞는 날짜면 그 코드로 낸다(코드가 살아 있었다)', submit('날짜매장', d2.rec.code, OK_DATE).ok, true);
+})();
+
+head('[16] ★코드 번호는 HMAC 바이트로 뽑는다★ (2026-09-25 검수 · authn-5) — Math.random 을 쓰지 않는다');
+const realRandom = Math.random;
+let randomUsed = 0;
+Math.random = function () { randomUsed++; return realRandom(); };
+const h0 = HMAC_CALLS;
+const many = [];
+for (let i = 0; i < 3000; i++) many.push(newCode());
+Math.random = realRandom;
+is('Math.random 을 한 번도 안 불렀다', randomUsed, 0);
+is('HMAC 재료를 썼다', HMAC_CALLS > h0, true);
+is('전부 6자리 · 앞자리 1~9', many.every(function (c) { return /^[1-9]\d{5}$/.test(c); }), true);
+const firstDigits = {};
+many.forEach(function (c) { firstDigits[c.charAt(0)] = (firstDigits[c.charAt(0)] || 0) + 1; });
+is('앞자리 1~9 가 모두 나온다(3000장)', Object.keys(firstDigits).sort().join(''), '123456789');
+is('겹침이 거의 없다(3000장 중 같은 번호 30장 미만)', 3000 - new Set(many).size < 30, true);
 
 console.log('\n─────────────────────────────');
 console.log(pass + '개 통과 · ' + fail + '개 실패');

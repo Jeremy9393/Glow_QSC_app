@@ -1,0 +1,16 @@
+# GitHub Pages(Jekyll) 설정 — 2026-09-25 검수 · expose-1
+# 앱이 쓰지 않는 파일을 사이트(jeremy9393.github.io/Glow_QSC_app/…)에 싣지 않는다.
+# ★한 겹일 뿐이다★ — 저장소 자체가 공개라 GitHub 저장소 화면·git 역사에서는 그대로 보인다.
+#   여기서 막는 것은 「앱 주소 뒤에 /backend/Code.gs 를 붙여 바로 여는 길」뿐이다.
+# 앱이 실서버에서 받는 파일(index.html·sw.js·data/·js/·css/·fonts/·icons/ 등)은 빼지 않는다.
+#   tools/release.py 의 실서버 대조도 sw.js·data/master.json·index.html 만 받는다.
+# 자가 점검 화면(test/*.html)은 앱실행.bat 의 로컬 서버(localhost:8123)로 연다 — 사이트에서는 빠진다.
+exclude:
+  - backend
+  - test
+  - tools
+  - README.md
+  - "*.bat"
+  - 배포.bat
+  - 백엔드배포.bat
+  - 앱실행.bat

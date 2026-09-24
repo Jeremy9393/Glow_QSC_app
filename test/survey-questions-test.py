@@ -44,6 +44,9 @@ def cut(name):
 a = src.index("const CODE_SHEET = '쇼퍼_코드';")
 b = src.index('function fnSurveySubmit(ctx, payload)')
 codes_block = src[a:b].rstrip()
+# 2026-09-25 검수 · dates-4 — submitWithCode 가 부르는 날짜 문과 그 부품(한 줄짜리 yymm 은 대역)
+codes_block = '\n'.join([cut('submitDateGate'), cut('validYm'),
+                         'function yymm(d) { return d.slice(2, 4) + d.slice(5, 7); }', codes_block])
 i, j = src.find('/* @@QUESTIONS_BEGIN */'), src.find('/* @@QUESTIONS_END */')
 if not (0 <= i < j):
     raise SystemExit('Code.gs 에 QUESTIONS 블록이 없음 — python tools/extract_master.py')
@@ -96,8 +99,17 @@ const Utilities = { formatDate: function (d, tz, f) {
   const p = function (n) { return String(n).padStart(2, '0'); };
   if (f === 'yyyy-MM-dd') return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   if (f === 'yyyy-MM') return d.getFullYear() + '-' + p(d.getMonth() + 1);
+  if (f === 'yyMM') return String(d.getFullYear()).slice(2) + p(d.getMonth() + 1);
   return String(d);
-} };
+},
+  /* 2026-09-25 검수 · authn-5 — newCode 가 HMAC 바이트를 쓴다(부호 있는 바이트) */
+  getUuid: function () { return require('crypto').randomUUID(); },
+  computeHmacSha256Signature: function (v, k) {
+    return Array.from(require('crypto').createHmac('sha256', String(k)).update(String(v)).digest()).map(function (b) { return b > 127 ? b - 256 : b; });
+  },
+};
+function auditLog() {}
+function anonCtx() { return { id: '(무인증)', role: '' }; }
 let ROWS = [];
 const MS_DETAIL = 'MS_상세';
 function msMonthPick() { return { score: null, at: '', n: 0 }; }

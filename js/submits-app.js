@@ -53,8 +53,16 @@
   }
 
   // ---------- 매장 목록 ----------
-  const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
-  const live = await Api.getConfig();
+  /* 2026-09-25 검수 · perf-client-10 — master.json 과 config.get 을 나란히 받는다(종전: 차례로 기다려 왕복 둘이 더해졌다).
+     master.json 을 못 받아도 멈추지 않는다(field-4 — 매장 목록은 config.get 이 우선이고 그 사본도 있다). */
+  const first = await Promise.all([
+    fetch('data/master.json', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .catch(function () { return {}; }),
+    Api.getConfig().catch(function () { return null; }),
+  ]);
+  const master = first[0] || {};
+  const live = first[1];
   const stores = (live && live.stores && live.stores.length) ? live.stores : (master.stores || []);
   /* 가나다순 (2026-09-11 담당자 — 목록은 글자순) */
   stores.slice().sort(function (a, b) { return String(a).localeCompare(String(b), 'ko'); }).forEach(function (s) {

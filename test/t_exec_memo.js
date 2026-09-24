@@ -23,20 +23,59 @@ function mkSheet(rows, cols) {
 }
 const PROPS = (function (raw) {
   const memo = {};
+  const TTL = 60;                          // 초
+  const NIL = '#QSC-NO-PROP#';            // 「속성 없음」을 캐시에 담을 때의 표식(실제 값으로 쓰일 리 없는 글자)
   const norm = function (v) { return (v === null || v === undefined) ? null : String(v); };
   const has = function (k) { return Object.prototype.hasOwnProperty.call(memo, k); };
   const wipe = function () { for (const k in memo) if (has(k)) delete memo[k]; };
+  const ck = function (k) { const s = String(k); return s.length <= 200 ? 'pc:' + s : ''; };   // 캐시 키 상한 250자
+  const store = function () { try { return CacheService.getScriptCache(); } catch (e) { return null; } };
+  const cGet = function (k) {                // undefined = 캐시에 없음(속성을 읽어야 한다)
+    const key = ck(k);
+    if (!key) return undefined;
+    try {
+      const c = store();
+      const v = c ? c.get(key) : null;
+      if (v === null || v === undefined) return undefined;
+      return v === NIL ? null : String(v);
+    } catch (e) { return undefined; }
+  };
+  const cPut = function (k, v) {
+    const key = ck(k);
+    if (!key) return;
+    const c = store();
+    if (!c) return;
+    try { c.put(key, v === null ? NIL : v, TTL); }
+    catch (e) { try { c.remove(key); } catch (e2) { } }   // 못 맞추면 지워서 다음 실행이 속성을 읽게 한다
+  };
+  const cDrop = function (keys) {
+    try {
+      const c = store();
+      if (!c) return;
+      const ks = (keys || []).map(ck).filter(function (s) { return !!s; });
+      if (ks.length) c.removeAll(ks);
+    } catch (e) { }
+  };
   return {
     getProperty: function (k) {
-      if (!has(k)) memo[k] = norm(raw.getProperty(k));
+      if (!has(k)) {
+        const hit = cGet(k);
+        if (hit !== undefined) memo[k] = hit;
+        else { memo[k] = norm(raw.getProperty(k)); cPut(k, memo[k]); }
+      }
       return memo[k];
     },
-    setProperty: function (k, v) { raw.setProperty(k, v); memo[k] = norm(v); return this; },
-    deleteProperty: function (k) { raw.deleteProperty(k); memo[k] = null; return this; },
+    setProperty: function (k, v) { raw.setProperty(k, v); memo[k] = norm(v); cPut(k, memo[k]); return this; },
+    deleteProperty: function (k) { raw.deleteProperty(k); memo[k] = null; cPut(k, null); return this; },
     getProperties: function () { return raw.getProperties(); },
     getKeys: function () { return raw.getKeys(); },
-    setProperties: function (o, del) { raw.setProperties(o, del); wipe(); return this; },
-    deleteAllProperties: function () { raw.deleteAllProperties(); wipe(); return this; },
+    setProperties: function (o, del) {
+      const before = del ? raw.getKeys() : [];
+      raw.setProperties(o, del); wipe();
+      cDrop(before.concat(Object.keys(o || {})));
+      return this;
+    },
+    deleteAllProperties: function () { const before = raw.getKeys(); raw.deleteAllProperties(); wipe(); cDrop(before); return this; },
   };
 })(PropertiesService.getScriptProperties());
 const _gridMemo = (typeof WeakMap === 'function') ? new WeakMap() : null;

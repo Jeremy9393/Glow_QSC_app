@@ -39,8 +39,9 @@
      화면에서 먼저 고치고 나중에 맞추면, 실패했을 때 화면만 바뀐 채로 남는다. */
   let liveList = [];
 
-  async function reload(quiet) {
-    const r = await Api.call('codes.list', {}).catch(function () { return null; });
+  async function reload(quiet, pre) {
+    // pre — 미리 던져 둔 codes.list 약속(첫 화면용 · 2026-09-25 검수 · perf-client-10)
+    const r = await (pre || Api.call('codes.list', {})).catch(function () { return null; });
     if (!(r && r.ok)) {
       if (!quiet) alert('코드 현황을 불러오지 못했습니다.\n' + ((r && r.error) || '잠시 후 다시 시도해 주세요.'));
       return false;
@@ -51,9 +52,24 @@
   }
 
   // ---------- 매장 목록 · QR ----------
-  const master = await (await fetch('data/master.json', { cache: 'no-store' })).json();
-  // 매장별 설문 QR(tools/make_qr.py로 미리 생성) — 링크만 담고 제출 코드는 담지 않는다
-  const qr = await (await fetch('data/qr.json', { cache: 'no-store' })).json().catch(function () { return { stores: {}, urls: {} }; });
+  /* 2026-09-25 검수 · perf-client-10 — 서로 기다릴 이유가 없는 네 요청(master.json·qr.json·config.get·codes.list)을
+     ★한꺼번에★ 던진다. 종전에는 하나씩 차례로 기다려 목록이 뜨기까지 왕복 넷이 더해졌다(가장 느린 하나로 줄어든다).
+     codes.list 결과는 아래 첫 reload() 가 받아 그린다(render 는 화면 준비가 끝난 그 자리에서만 부른다).
+     master.json 을 못 받아도 멈추지 않는다(field-4 · 매장 목록은 config.get 이 우선이다). */
+  function getJson(path, fallback) {
+    return fetch(path, { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .catch(function () { return fallback; });
+  }
+  const listP = Api.call('codes.list', {}).catch(function () { return null; });
+  const first = await Promise.all([
+    getJson('data/master.json', {}),
+    // 매장별 설문 QR(tools/make_qr.py로 미리 생성) — 링크만 담고 제출 코드는 담지 않는다
+    getJson('data/qr.json', { stores: {}, urls: {} }),
+    Api.getConfig().catch(function () { return null; }),
+  ]);
+  const master = first[0] || {};
+  const qr = first[1] || { stores: {}, urls: {} };
 
   function showQr(store, code) {
     const src = qr.stores && qr.stores[store];
@@ -65,7 +81,7 @@
   }
   $('#qfClose').onclick = function () { $('#qrFull').style.display = 'none'; };
 
-  const live = await Api.getConfig();
+  const live = first[2];   // 위에서 나란히 받았다 (2026-09-25 검수 · perf-client-10)
   const stores = (live && live.stores && live.stores.length) ? live.stores : (master.stores || []);
   /* 가나다순 (2026-09-11 담당자 — 목록은 글자순) */
   stores.slice().sort(function (a, b) { return String(a).localeCompare(String(b), 'ko'); }).forEach(function (s) {
@@ -193,6 +209,6 @@
   /* ★첫 화면은 서버에서 받아 그린다★ — render()만 부르면 빈 목록을 그려 '아무것도 없음'으로 보인다.
      30초마다 다시 그리는 것은 남은 시간·만료 표시를 위한 것이고, 서버를 다시 부르지는 않는다
      (부르면 화면을 열어 둔 동안 계속 왕복한다 — 갱신은 [발급]·[취소] 때 알아서 일어난다). */
-  await reload();
+  await reload(false, listP);   // 2026-09-25 검수 · perf-client-10 — 맨 위에서 먼저 던져 둔 codes.list 를 받는다
   setInterval(render, 30000);
 })();

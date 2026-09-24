@@ -55,12 +55,12 @@
      TOKEN_TTL_H         토큰 수명(시간). ★비워 두십시오★ 기본 87600 = 10년 (사실상 무기한 세션)
      TOKEN_MINV          이 값 미만 스키마 버전 토큰 거부 = 전원 강제 로그아웃 스위치. 기본 1
      MAINT               점검 모드. 문구를 넣으면 전 요청 차단(그 문구를 그대로 반환). ★신규★
-                         비우면 즉시 해제. 계정관리 권한자(관리자)만 점검 중에도 통과한다
+                         비우면 해제(편집기에서 손으로 고치면 최대 60초 뒤 · 2026-09-25 검수 authn-1). 계정관리 권한자(관리자)만 점검 중에도 통과한다
      NOTICE              공지 배너. 문구를 넣으면 모든 화면 상단에 한 줄. ★신규★
                          ★MAINT와 다르다 — 막지 않고 알리기만 한다★. 비우면 배너가 사라진다.
                          사용자가 ✕로 닫아도 문구를 고치면 자동으로 다시 뜬다(id가 문구의 해시라서).
                          공개되는 문구다 — 개인정보를 적지 말 것
-     AUTH_ENFORCE        'off'(기본) | 'on'.  off = 토큰 없는 옛 요청도 받아줌(감사로그만)
+     AUTH_ENFORCE        'on'(기본 · 비어 있어도 켜짐 · 2026-09-25 검수 authz-1) | 'off'.  off 를 적어야만 토큰 없는 옛 요청도 받아줌(감사로그만)
      CACHE_EPOCH         숫자. +1 하면 전 캐시 무효. 기본 1
      LOGIN_FAIL_MAX      기본 10 (10분 내 실패 허용 횟수 → 15분 잠금)
      HASH_BUDGET         기본 300 (시간당 느린 해시 실행 '전역' 상한)
@@ -69,14 +69,15 @@
                          정해 몰릴 일이 없어졌다. 진짜 한도는 이것이 아니라 ★로그인 분당 20(전체 합산)★이다
      HASH_BUDGET_ID      기본 12 (시간당 느린 해시 실행 '아이디별' 상한). 실제 브레이크는 이쪽이다
      GLOBAL_FAIL_MAX     기본 40 (시간당 전역 로그인 실패 상한 → 실패 응답 문구만 바뀐다)
-     PHOTO_DAY_MAX       기본 200 (계정당 하루 사진 저장 건수)
+     PHOTO_DAY_MAX       기본 600 (계정당 하루 사진 저장 건수 · 2026-09-25 검수 200→600 · 넘으면 남은 몫까지만 저장)
      IMPROVE_DUE_DAY     기본 10 (익월 며칠까지 종합점수를 '잠정'으로 표시)
 
    (실제 ID는 로컬 문서 `1. QSC\연동_설정값.md`에 기록해 두었다 — 저장소에 올리지 말 것)
 
    ★속성이 비어 있을 때의 방향(fail-safe): AUTH_SHEET_ID·TOKEN_KEY·PW_PEPPER가 비면 인증은
-     '항상 실패'한다(fail-closed). 대신 AUTH_ENFORCE='off'인 동안은 옛 경로가 그대로 살아 있어
-     현장 업무는 멈추지 않는다. 즉 "인증을 못 켜면 인증만 안 켜지고, 업무는 돈다". */
+     '항상 실패'한다(fail-closed). 대신 AUTH_ENFORCE='off'를 ★적어 둔★ 동안은 옛 경로가 그대로 살아 있어
+     현장 업무는 멈추지 않는다. 즉 "인증을 못 켜면 인증만 안 켜지고, 업무는 돈다".
+     (2026-09-25 검수 · authz-1 — AUTH_ENFORCE 가 ★비어 있으면 이제 켜짐★이다. 옛 경로를 열려면 off 를 적어야 한다.) */
 /* ★스크립트 속성은 실행 단위로 기억한다★ (2026-09-17 ③-4 · find_S4 §1)
    store.get 한 건이 PropertiesService 를 10~12번 읽고 있었다(MAINT · TOKEN_KEY · TOKEN_MINV ×2 · CACHE_EPOCH ×6~8 · PSEEN).
    한 실행 안에서는 같은 키를 한 번만 묻는다. ★쓰는 자리가 이 문을 지나므로 메모도 같이 갱신된다★ —
@@ -84,22 +85,75 @@
    생기지 않는다(fnAdminMaint 가 MAINT 를 켜고 곧바로 maintInfo 로 읽는 것이 그 예다).
    「속성은 매 실행마다 다시 읽는다 → 재배포 없이 즉시 반영」(prop 주석)은 그대로다 — 메모는 이 실행 안에서만 산다.
    ⚠쓰기가 예외로 끝나면 메모를 건드리지 않는다 — 실제 값이 안 바뀌었으므로 옛 메모가 맞다. */
+/* ★실행과 실행 사이는 CacheService 로 60초 기억한다★ (2026-09-25 검수 · authn-1 — 속성 읽기·쓰기 일일 할당량(소비자 계정 5만)이
+   바닥나면 맨 아래 전역 상수 줄에서 먼저 터져 스크립트가 올라오지도 못한다 → 전 매장이 「서버 응답을 읽지 못했습니다」).
+   종전에는 ping 1건 = 속성 읽기 4번, 틀린 로그인 1건 = 속성 읽기·쓰기 약 19번이었다(주소는 공개 저장소에 있다).
+   이제 읽기 순서는 「이 실행의 메모 → 스크립트 캐시('pc:'+키) → 속성」이고, 캐시가 비었거나 CacheService 가 예외면
+   지금처럼 속성을 읽는다(실패 안전). ★없는 속성도 담는다★ — MAINT 가 비어 있는 것이 평소 상태라 null 을 안 담으면 매번 속성을 읽는다.
+   · 쓰기(setProperty·deleteProperty)는 ★속성에 먼저 쓰고★ 성공하면 캐시도 같은 값으로 맞춘다 — 이 문을 지나는
+     fnAdminMaint(MAINT)·월 확정(MC:)·잠금(LK:) 등은 다른 실행에도 곧바로 보인다.
+   · ⚠담당자가 앱스 스크립트 편집기 「스크립트 속성」 화면에서 손으로 고친 값은 이 문을 안 지나므로 ★최대 60초 늦게★ 보인다
+     (MAINT·AUTH_ENFORCE·CACHE_EPOCH·TOKEN_MINV 도 마찬가지 — 1분 기다렸다가 확인할 것).
+   · 비밀값(TOKEN_KEY·PW_PEPPER)도 캐시에 들어간다. 스크립트 캐시(getScriptCache)는 ★이 스크립트 프로젝트의 코드만★ 읽을 수 있고,
+     그 코드는 어차피 속성을 직접 읽을 수 있으므로 새로 노출되는 곳은 없다(사용자 캐시·문서 캐시가 아니다 · 응답에 싣는 곳도 없다).
+   · 시간당 카운터(AL:·AN:·HB:·GF:)는 아예 속성을 떠나 CacheService 로 옮겼다(bumpHourly). durable 이어야 하는 것 —
+     잠금(LK:)·GBLK·월 확정 표식(MC:)·계정·비밀값 쓰기 — 은 저장소가 여전히 속성이고, 읽기만 이 층을 지난다.
+   · 드문 경쟁: 캐시가 빈 순간 A 가 옛 값을 읽어 담는 사이 B 가 새 값을 쓰면 옛 값이 최대 60초 남을 수 있다(두 실행이 같은 키를 수 ms 안에 건드릴 때뿐). */
 const PROPS = (function (raw) {
   const memo = {};
+  const TTL = 60;                          // 초
+  const NIL = '#QSC-NO-PROP#';            // 「속성 없음」을 캐시에 담을 때의 표식(실제 값으로 쓰일 리 없는 글자)
   const norm = function (v) { return (v === null || v === undefined) ? null : String(v); };
   const has = function (k) { return Object.prototype.hasOwnProperty.call(memo, k); };
   const wipe = function () { for (const k in memo) if (has(k)) delete memo[k]; };
+  const ck = function (k) { const s = String(k); return s.length <= 200 ? 'pc:' + s : ''; };   // 캐시 키 상한 250자
+  const store = function () { try { return CacheService.getScriptCache(); } catch (e) { return null; } };
+  const cGet = function (k) {                // undefined = 캐시에 없음(속성을 읽어야 한다)
+    const key = ck(k);
+    if (!key) return undefined;
+    try {
+      const c = store();
+      const v = c ? c.get(key) : null;
+      if (v === null || v === undefined) return undefined;
+      return v === NIL ? null : String(v);
+    } catch (e) { return undefined; }
+  };
+  const cPut = function (k, v) {
+    const key = ck(k);
+    if (!key) return;
+    const c = store();
+    if (!c) return;
+    try { c.put(key, v === null ? NIL : v, TTL); }
+    catch (e) { try { c.remove(key); } catch (e2) { } }   // 못 맞추면 지워서 다음 실행이 속성을 읽게 한다
+  };
+  const cDrop = function (keys) {
+    try {
+      const c = store();
+      if (!c) return;
+      const ks = (keys || []).map(ck).filter(function (s) { return !!s; });
+      if (ks.length) c.removeAll(ks);
+    } catch (e) { }
+  };
   return {
     getProperty: function (k) {
-      if (!has(k)) memo[k] = norm(raw.getProperty(k));
+      if (!has(k)) {
+        const hit = cGet(k);
+        if (hit !== undefined) memo[k] = hit;
+        else { memo[k] = norm(raw.getProperty(k)); cPut(k, memo[k]); }
+      }
       return memo[k];
     },
-    setProperty: function (k, v) { raw.setProperty(k, v); memo[k] = norm(v); return this; },
-    deleteProperty: function (k) { raw.deleteProperty(k); memo[k] = null; return this; },
+    setProperty: function (k, v) { raw.setProperty(k, v); memo[k] = norm(v); cPut(k, memo[k]); return this; },
+    deleteProperty: function (k) { raw.deleteProperty(k); memo[k] = null; cPut(k, null); return this; },
     getProperties: function () { return raw.getProperties(); },
     getKeys: function () { return raw.getKeys(); },
-    setProperties: function (o, del) { raw.setProperties(o, del); wipe(); return this; },
-    deleteAllProperties: function () { raw.deleteAllProperties(); wipe(); return this; },
+    setProperties: function (o, del) {
+      const before = del ? raw.getKeys() : [];
+      raw.setProperties(o, del); wipe();
+      cDrop(before.concat(Object.keys(o || {})));
+      return this;
+    },
+    deleteAllProperties: function () { const before = raw.getKeys(); raw.deleteAllProperties(); wipe(); cDrop(before); return this; },
   };
 })(PropertiesService.getScriptProperties());
 const SPREADSHEET_ID = PROPS.getProperty('SPREADSHEET_ID') || '';
@@ -185,7 +239,9 @@ const ACCOUNT_PUBLIC = ['id', 'name', 'role', 'status', 'scope', 'hasPw', 'pwKno
 
 /* ---------- 스크립트 속성 읽기 ---------- */
 
-/* 속성은 매 실행마다 다시 읽는다 — 그래서 속성 화면에서 값을 고치면 재배포 없이 즉시 반영된다.
+/* 속성은 매 실행마다 다시 읽는다 — 그래서 속성 화면에서 값을 고치면 재배포 없이 반영된다.
+   (2026-09-25 검수 · authn-1 — 편집기 속성 화면에서 손으로 고친 값은 PROPS 의 60초 캐시 때문에 ★최대 60초 뒤★ 반영된다.
+    앱의 관리 화면처럼 PROPS.setProperty 를 지나는 쓰기는 곧바로 반영된다.)
    이 성질이 이 시스템의 롤백 수단이다 (AUTH_ENFORCE·CACHE_EPOCH).
    ※잘못 들어간 제출은 속성이 아니라 「제출 관리 → 제출 되돌리기」로 되돌린다. */
 function prop(key, def) {
@@ -200,8 +256,11 @@ function propN(key, def) {
    가 전부 off로 판정됐다 — 담당자가 켰다고 믿는 상태에서 게이트가 열려 있는 유일한 스위치였다.
    여기서는 '끔'을 뜻하는 흔한 표기를 명시적으로 적었을 때만 끈다. */
 function enforceOn() {
-  const v = String(prop('AUTH_ENFORCE', 'off')).trim().toLowerCase();
-  return !(v === 'off' || v === 'false' || v === '0' || v === 'no' || v === '');
+  /* 2026-09-25 검수 · authz-1 — 속성이 없거나 비면 ★켜짐★(종전 'off' 는 비는 순간 옛 무인증 봉투가 열리는 fail-open 이었다).
+     실서버는 이미 'on' 이라 동작은 같다. 끄려면(롤백) 속성에 off·false·0·no 를 ★적는다★. */
+  /* 2026-09-25 검수 · backend-3/contract-4 — 공백만 든 값(' ')도 「빈 값 = 켜짐」으로 본다(종전 trim 뒤 '' 가 꺼짐으로 새어 fail-open). */
+  const v = String(prop('AUTH_ENFORCE', 'on')).trim().toLowerCase();
+  return !(v === 'off' || v === 'false' || v === '0' || v === 'no');
 }
 function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 
@@ -213,13 +272,14 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v150', maint: maintMsg(), time: new Date().toISOString() });
+  return json({ ok: true, service: 'qsc-app', v: 'v151', maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
 
-/* 스크립트 속성 MAINT 에 문구가 들어 있으면 점검 중이다. 비우면 즉시 해제된다
-   (속성은 매 실행마다 다시 읽으므로 재배포가 필요 없다 — 이것이 이 스위치의 존재 이유). */
+/* 스크립트 속성 MAINT 에 문구가 들어 있으면 점검 중이다. 비우면 해제된다
+   (속성은 매 실행마다 다시 읽으므로 재배포가 필요 없다 — 이것이 이 스위치의 존재 이유).
+   2026-09-25 검수 · authn-1 — 관리 화면(fnAdminMaint)으로 켜고 끄면 곧바로, 편집기 속성 화면에서 손으로 고치면 최대 60초 뒤(PROPS 캐시). */
 function maintMsg() {
   return String(prop('MAINT', '')).trim().slice(0, 300);
 }
@@ -876,9 +936,9 @@ function ensureAuthSheets() {
     '\n\n★비밀번호 공지는 3개 조로 나눠 10분 간격으로★ 보내십시오. 26곳이 같은 1분에 로그인하면' +
     '\n   분당 상한(20)에 닿아 나머지 매장에 "요청이 많습니다"가 뜹니다. 한꺼번에 보내야 한다면' +
     '\n   그날만 스크립트 속성 ANON_MIN_AUTH 를 60 으로 두었다가 다음 날 지우십시오.' +
-    '\n\n★AUTH_ENFORCE = on★ 은 사람이 켭니다. 이것을 켜기 전까지는 토큰 없이 보낸 옛 봉투' +
-    '\n   (qsc.submit·shopper.submit·config.get)가 그대로 통과합니다 — 앱 코드로는 닫히지 않습니다.' +
-    '\n   켜는 날 26곳이 모두 한 번은 로그인해 두어야 현장에서 제출이 막히지 않습니다.');
+    '\n\n★AUTH_ENFORCE★ 는 비어 있으면 켜짐(on)입니다(2026-09-25 부터). 속성에 off 를 적어 둔 동안만' +
+    '\n   토큰 없이 보낸 옛 봉투(qsc.submit·shopper.submit·config.get)가 통과합니다.' +
+    '\n   켜져 있으면 26곳이 모두 한 번은 로그인해 두어야 현장에서 제출이 막히지 않습니다.');
   return { ok: true, made: made, warn: warn };
 }
 
@@ -1526,21 +1586,46 @@ function scopeOf(acct) {
 function hourKey(prefix) {
   return prefix + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMddHH');
 }
+/* ★시간당 카운터는 CacheService 에 둔다★ (2026-09-25 검수 · authn-1 — 종전에는 속성이었다. 익명 요청 1건마다 속성 읽기+쓰기가
+   붙어, 서버 주소만 아는 사람이 하루 속성 할당량을 태워 전 매장을 멈출 수 있었다).
+   legacyThrottle·hbIdKey 와 같은 방식이다 — 캐시가 축출되면 그 시간 카운터가 헐거워질 뿐이고, 막으려는 것은 「수백 회」다.
+   키에 시각(yyyyMMddHH)이 들어 있고 3700초 뒤 저절로 사라지므로 지난 시간 키를 지울 일이 없다.
+   시간 첫 호출(cur === 1)에 만료된 잠금 키 정리(sweepLocks · authn-3)를 한 번 부른다 — 트리거를 만들지 않는다. */
 function bumpHourly(prefix) {
   const k = hourKey(prefix);
-  const cur = Number(PROPS.getProperty(k) || 0) + 1;
-  PROPS.setProperty(k, String(cur));
-  if (cur === 1) {
-    // 지난 시간대 키가 쌓이지 않게 정리 (속성은 durable이라 스스로 사라지지 않는다)
-    const prev = new Date(Date.now() - 3600000);
-    const prev2 = new Date(Date.now() - 7200000);
-    const tz = Session.getScriptTimeZone();
-    try { PROPS.deleteProperty(prefix + Utilities.formatDate(prev, tz, 'yyyyMMddHH')); } catch (e) { }
-    try { PROPS.deleteProperty(prefix + Utilities.formatDate(prev2, tz, 'yyyyMMddHH')); } catch (e) { }
-  }
+  const cache = CacheService.getScriptCache();
+  const cur = Number(cache.get(k) || 0) + 1;
+  cache.put(k, String(cur), 3700);
+  if (cur === 1) sweepLocks();
   return cur;
 }
-function hourlyCount(prefix) { return Number(PROPS.getProperty(hourKey(prefix)) || 0); }
+function hourlyCount(prefix) { return Number(CacheService.getScriptCache().get(hourKey(prefix)) || 0); }
+
+/* ★만료된 잠금 키를 시간에 한 번 치운다★ (2026-09-25 검수 · authn-3)
+   종전에는 없는 아이디마다 durable 속성 LK:<아이디 원문> 이 생기고 아무도 지우지 않았다(lockClear 는 그 아이디가
+   로그인에 ★성공★할 때만 부른다) — 아이디를 바꿔 가며 틀리면 속성 500KB 한도까지 쌓여 모든 setProperty 가 예외가 된다.
+   이제 키는 lkKey(해시 16자)이고, 여기서 값(만료 시각)이 지난 LK: 키를 전부 지운다 — ★옛 원문 키(LK:<아이디>)도 같은 LK: 로 시작하므로 함께 정리된다★.
+   속성으로 쓰던 옛 시간당 카운터(AL:·AN:·HB:·GF: + yyyyMMddHH) 찌꺼기도 같이 치운다.
+   캐시 표식으로 시간에 한 번만 돈다(여러 카운터가 같은 시간에 cur === 1 을 맞아도 한 번). 무엇이 실패해도 삼킨다 — 정리가 로그인을 막으면 안 된다. */
+function sweepLocks() {
+  try {
+    const cache = CacheService.getScriptCache();
+    const mark = hourKey('lksweep:');
+    if (cache.get(mark)) return 0;
+    cache.put(mark, '1', 3700);
+    const all = PROPS.getProperties() || {};
+    const now = Date.now();
+    let n = 0;
+    for (const k in all) {
+      if (!Object.prototype.hasOwnProperty.call(all, k)) continue;
+      const lk = k.indexOf('LK:') === 0 && !(Number(all[k]) > now);
+      const oldHour = /^(AL|AN|HB|GF):\d{10}$/.test(k);
+      if (!lk && !oldHour) continue;
+      try { PROPS.deleteProperty(k); n++; } catch (e) { }
+    }
+    return n;
+  } catch (e) { return 0; }
+}
 
 /* ★전역 예산 하나만 두면 그것이 곧 '전원 로그인 차단 버튼'이 된다★
    종전에는 시간당 전역 60회였다. 익명 스로틀(분 20)에 여유롭게 들어가는 속도로 아무 아이디에
@@ -1565,31 +1650,56 @@ function hourlyCount(prefix) { return Number(PROPS.getProperty(hourKey(prefix)) 
 function hbIdKey(id) {
   return 'hb:' + String(id || '?').slice(0, 60) + ':' + Math.floor(Date.now() / 3600000);
 }
-function hashBudgetOk(id) {
+/* ★통행증 몫에도 아이디 우산을 하나 더 씌운다★ (2026-09-25 검수 · authn-7) — 통행증은 서명만 보고 저장하지 않으므로
+   로그인해 둔 기기에서 auth.session 을 되풀이하면 통행증을 여러 장 모을 수 있고, 장마다 잠금·예산이 따로 세어졌다
+   (비밀번호를 바꾼 뒤에도 통행증은 살아 있다 — 퇴사자 시나리오). 그래서 통행증('dp:') 키로 셀 때는
+   그 아이디의 통행증 몫 전체를 'hb:all:<아이디>' 로 합산해 시간당 HASH_BUDGET_ID_ALL(기본 60)에서 끊는다.
+   아이디 몫(12)보다 5배 넉넉해 「남이 태운 실패에 진짜 주인이 막히지 않게」라는 통행증의 목적은 그대로다.
+   owner 인자를 안 주는 곳(비밀번호 설정·보기 등)은 종전과 똑같다. */
+/* 2026-09-25 검수 · security-2 — 우산이 찼는지만 보는 작은 판정. loginByPassword 가 먼저 보고, 찼으면 통행증 몫이 아니라
+   아이디 몫으로 떨어뜨린다(주인 기기 통행증이 남의 통행증 때문에 60분 막히지 않게 · 대입 횟수는 아이디 몫 12로 묶인다). */
+function umbrellaFull(owner) {
+  if (!owner) return false;
+  try {
+    return Number(CacheService.getScriptCache().get(hbIdKey('all:' + owner)) || 0) >= propN('HASH_BUDGET_ID_ALL', 60);
+  } catch (e) { return false; }
+}
+function hashBudgetOk(id, owner) {
   const cache = CacheService.getScriptCache();
   if (id) {
     const per = Number(cache.get(hbIdKey(id)) || 0);
     if (per >= propN('HASH_BUDGET_ID', 12)) return false;
+  }
+  if (owner && String(id || '').indexOf('dp:') === 0) {
+    if (umbrellaFull(owner)) return false;
   }
   if (hourlyCount('HB:') < propN('HASH_BUDGET', 300)) return true;
   /* 전역 소진 — 최근 실패가 없는 아이디만 통과시킨다(공격자의 아이디는 lf: 카운터가 올라 있다) */
   if (!id) return false;
   try { return Number(cache.get('lf:' + id) || 0) === 0; } catch (e) { return false; }
 }
-function hashBudgetUse(id) {
+function hashBudgetUse(id, owner) {
   bumpHourly('HB:');
   if (!id) return;
   try {
     const cache = CacheService.getScriptCache();
     const k = hbIdKey(id);
     cache.put(k, String(Number(cache.get(k) || 0) + 1), 3700);
+    if (owner && String(id).indexOf('dp:') === 0) {   // 통행증 몫 아이디 우산 (authn-7)
+      const ka = hbIdKey('all:' + owner);
+      cache.put(ka, String(Number(cache.get(ka) || 0) + 1), 3700);
+    }
   } catch (e) { }
 }
 
 /* ② 계정별 잠금 — 카운터는 CacheService(싸고 손실 허용), 잠금 상태는 PropertiesService(durable).
    캐시는 메모리 압박 시 축출되고 공격자가 축출을 유발할 수 있다. 드문 이벤트는 durable 저장소에. */
+/* ★잠금 키는 아이디 원문이 아니라 해시 16자★ (2026-09-25 검수 · authn-3) — 아이디는 요청자가 고르는 값이라
+   원문을 키로 쓰면 ①키 길이·개수를 남이 정하고 ②아이디 칸에 잘못 친 비밀번호가 속성 화면에 그대로 남았다.
+   'LK:' + 16자 = 19자로 닫힌다. 만료된 키는 sweepLocks 가 시간에 한 번 치운다. */
+function lkKey(id) { return 'LK:' + sha256Hex(String(id)).slice(0, 16); }
 function lockCheck(id) {
-  const until = Number(PROPS.getProperty('LK:' + id) || 0);
+  const until = Number(PROPS.getProperty(lkKey(id)) || 0);
   if (until > Date.now()) {
     return { locked: true, retryAfterMin: Math.max(1, Math.ceil((until - Date.now()) / 60000)) };
   }
@@ -1603,14 +1713,14 @@ function lockFail(id) {
   const n = Number(cache.get(k) || 0) + 1;
   cache.put(k, String(n), 600);
   if (n >= propN('LOGIN_FAIL_MAX', 10)) {
-    PROPS.setProperty('LK:' + id, String(Date.now() + 15 * 60000));
+    PROPS.setProperty(lkKey(id), String(Date.now() + 15 * 60000));
     cache.remove(k);
     return true;
   }
   return false;
 }
 function lockClear(id) {
-  try { PROPS.deleteProperty('LK:' + id); } catch (e) { }
+  try { PROPS.deleteProperty(lkKey(id)); } catch (e) { }
   try { CacheService.getScriptCache().remove('lf:' + id); } catch (e) { }
 }
 
@@ -1891,7 +2001,10 @@ function loginByPassword(rawId, pw, dp) {
   const lockId = idOk ? id : '(형식오류)';
   /* ★잠금·예산은 lockKey 로 센다★ — 맞는 기기 통행증을 들고 왔으면 통행증 몫, 아니면 종전대로 아이디 몫.
      감사로그에 적는 이름은 계속 lockId 다(loginFail 첫 인자). devicePass 설명 참조 */
-  const lockKey = (idOk && devicePassKey(id, dp)) || lockId;
+  let lockKey = (idOk && devicePassKey(id, dp)) || lockId;
+  /* 2026-09-25 검수 · security-2 — 그 아이디의 통행증 우산이 찼으면(남이 모은 통행증들로) LOCKED 로 끊지 않고
+     통행증이 없는 것과 같이 아이디 몫으로 센다. 통행증 소지자가 통행증 없는 사람보다 불리해지지 않는다. */
+  if (lockKey !== lockId && umbrellaFull(id)) lockKey = lockId;
 
   // ★잠금·예산 확인이 게이트의 가장 앞이다. 잠금 중이면 해시 계산 자체를 하지 않는다★
   const lk = lockCheck(lockKey);
@@ -1899,7 +2012,7 @@ function loginByPassword(rawId, pw, dp) {
     return { ok: false, code: 'LOCKED', retryAfterMin: lk.retryAfterMin, error: '로그인 시도가 많아 잠겼습니다. ' + lk.retryAfterMin + '분 후 다시 시도해 주세요.' };
   }
   /* ★예산은 아이디별로 본다★ — 인자를 빼면 남이 태운 전역 예산 때문에 이 사람이 못 들어간다 */
-  if (!hashBudgetOk(lockKey)) {
+  if (!hashBudgetOk(lockKey, id)) {   // 두 번째 인자 = 통행증 몫 아이디 우산 (2026-09-25 검수 · authn-7)
     auditLog(anonCtx(), 'auth.login', '', '거부', 'HASH_BUDGET', '');
     return { ok: false, code: 'LOCKED', retryAfterMin: 60, error: '로그인이 일시적으로 제한되었습니다. 잠시 후 다시 시도해 주세요.' };
   }
@@ -1911,7 +2024,7 @@ function loginByPassword(rawId, pw, dp) {
   /* 존재하지 않는 아이디도 동일하게 카운트하고, 고정 더미 솔트로 동일한 N회 해시를 돌린 뒤
      실패를 반환한다. 빼면 응답 시간으로 유효 아이디를 뽑아낼 수 있다. */
   if (!acct || acct.status !== STATUS_ON) {
-    hashBudgetUse(lockKey);
+    hashBudgetUse(lockKey, id);
     pwHash(DUMMY_SALT, pw, iter);
     /* ★없는 아이디의 원문은 감사로그에 남기지 않는다★ (loginFail 세 번째 인자) */
     return loginFail(lockId, acct ? 'ACCOUNT_DISABLED' : (idOk ? 'NO_ACCOUNT' : 'BAD_ID'), !!acct, lockKey);
@@ -1919,7 +2032,7 @@ function loginByPassword(rawId, pw, dp) {
 
   /* 해시가 비어 있어도 같은 시간을 쓴다 — 여기서 빨리 돌아가면 응답 시간만으로
      "존재하지만 비밀번호가 없는 계정"을 알아낼 수 있다. */
-  hashBudgetUse(lockKey);
+  hashBudgetUse(lockKey, id);
   if (!acct.hash) {
     pwHash(acct.salt || DUMMY_SALT, pw, iter);
   } else {
@@ -1955,7 +2068,7 @@ function loginByPassword(rawId, pw, dp) {
    검증이 사실상 없다(validId는 제어문자만 막는다). 그러면 그 비밀번호가 감사로그 '아이디' 칸에
    평문으로 남고, audit.list를 통해 계정 관리 화면에 그대로 표시된다. 존재하지 않는 아이디의
    원문은 감사 가치가 거의 없으므로 해시 앞 8자만 남긴다(같은 값이 반복되는지는 여전히 보인다).
-   ※잠금 키(lockFail)에는 원문을 그대로 쓴다 — 그쪽은 사람이 읽는 값이 아니다. */
+   ※잠금 키(lockFail)에는 원문을 넘긴다 — 속성 키는 lkKey 가 해시로 바꾼다(2026-09-25 검수 · authn-3). */
 function loginFail(id, reason, known, lockKey) {
   globalFail();
   const locked = lockFail(lockKey || id);   // 통행증 기기면 통행증 몫으로 센다 · 감사로그 이름은 id 그대로
@@ -2336,14 +2449,24 @@ function fnSetPassword(ctx, payload) {
 }
 
 /* 관리자 비밀번호는 1년에 한두 번 바뀐다. 그래서 오는 메일 1통이 곧 침해 신호다 (명세 §15). */
+/* ★매장 계정이 자기 비밀번호를 바꾸는 것은 메일을 보내지 않는다★ (2026-09-25 검수 · critic-day1-2)
+   10/1 공지가 「첫 로그인 때 비밀번호를 바꾸라」라서, 그대로 두면 담당자 메일함에 「침해 신호」 메일이 26통 쌓인다 —
+   정작 관리자 비밀번호 변경 메일이 그 속에 묻힌다. 기록은 감사로그(auth.setPassword · 성공)에 그대로 남는다.
+   관리자(계정 관리 메뉴가 열린 역할) 계정의 변경, 설정코드·관리자 설정 경로는 지금처럼 메일을 보낸다.
+   역할 판정이 실패하면(권한 표를 못 읽음) 보내는 쪽으로 간다 — 알림을 놓치는 것보다 한 통 더 오는 편이 낫다. */
 function notifyPasswordChanged(acct, how) {
   try {
+    let admin = true;
+    try { admin = can(acct.role, ADMIN_MENU, '읽기').allow; } catch (e) { admin = true; }
+    if (!admin && how === '본인 변경') return;
     const to = Session.getEffectiveUser().getEmail();
     if (!to) return;
     MailApp.sendEmail(to, '[QSC] 비밀번호가 변경되었습니다',
       '계정: ' + acct.id + '\n방식: ' + how +
       '\n시각: ' + new Date() +
-      '\n\n본인이 하지 않았다면 즉시 QSC 인증 시트의 계정 탭 E열을 「중지」로 바꾸고 TOKEN_KEY를 교체하십시오.');
+      '\n\n본인(또는 담당자)이 바꾼 것이라면 따로 하실 일은 없습니다.' +
+      '\n바꾼 적이 없다면 QSC관리자 시트의 계정 탭에서 이 계정의 E열을 「중지」로 바꿔 주십시오.' +
+      '\n관리자 계정이 모르게 바뀐 경우라면 TOKEN_KEY 교체(전원 다시 로그인)까지 검토해 주십시오.');
   } catch (e) { /* 메일 실패가 비밀번호 변경을 되돌릴 이유는 없다 */ }
 }
 
@@ -3496,7 +3619,31 @@ function fnShopperStatus(ctx, payload) {
       payload && payload.store, payload && payload.date) };
 }
 
+/* ★제출 날짜 문★ (2026-09-25 검수 · dates-4) — 점검일자(방문 날짜)가 탭 이름·통합시트 열을 정하는데 종전에는 아무도 검사하지 않았다.
+   빈 값이면 「…의 사본」 탭이 남고, 낡은 임시저장 날짜(9/30)면 ★9월 수기 탭★에 74문항이 덮이고, 달력을 잘못 짚으면(11/2) 11월 탭이 미리 생겼다.
+   세 곳(fnQscSubmit·fnShopperSubmit·submitWithCode)이 ★아무것도 쓰기 전에★ 이 문을 지난다. 막으면 err 객체, 통과면 null.
+   · 형식이 YYYY-MM-DD 가 아니거나 달이 1~12 가 아니면 → 「…를 선택해 주세요.」
+   · 그 달이 2610 보다 이르면 → 앱으로 제출할 수 없다(9월까지는 수기 운영 · 매장 계정 storeWriteBlock 과 같은 하한)
+   · ★curYymm() 가 2610 이상일 때만★ 그 달이 이번 달보다 늦으면 → 아직 오지 않은 달(10/1 전에는 12월 시험처럼 미래 달을 막지 않는다)
+   ★달 단위로만 비교한다★ — 일 단위로 「오늘 이하」를 보면 자정 앞뒤 폰·서버 시각 차로 정상 제출이 튕길 수 있다.
+   지난 달(10/31 점검을 11/1 에 제출)은 통과한다 — 확정된 달은 MONTH_CLOSED 가 따로 막는다. word 는 문구의 「점검일자」 자리(고객 설문은 「방문 날짜」). */
+function submitDateGate(dateStr, word) {
+  const w = word || '점검일자';
+  /* 2026-09-25 검수 · backend-2/security-1 — trim 하지 않는다. 뒤따르는 qscMonthClosed·yymm·저장은 원래 값을 쓰므로
+     ' 2026-10-20' 이 문을 지나면 탭 '02-1' 을 보아 확정 달 검사를 비켜 갔다. 앱 date 입력은 공백이 없다. */
+  const d = String(dateStr == null ? '' : dateStr);
+  const ym = /^\d{4}-\d{2}-\d{2}$/.test(d) ? yymm(d) : '';
+  const day = Number(d.slice(8, 10));
+  if (!ym || !validYm(ym) || !(day >= 1 && day <= 31)) return err('BAD_REQUEST', w + '를 선택해 주세요.');
+  if (ym < '2610') return err('BAD_REQUEST', Number(ym.slice(2, 4)) + '월은 앱으로 제출할 수 없습니다 — ' + w + '를 확인해 주세요.');
+  const cur = curYymm();
+  if (cur >= '2610' && ym > cur) return err('BAD_REQUEST', '아직 오지 않은 달입니다 — ' + w + '를 확인해 주세요.');
+  return null;
+}
+
 function fnQscSubmit(ctx, payload) {
+  const badDate = submitDateGate(payload && payload.date);   // 2026-09-25 검수 · dates-4 — 날짜가 탭을 정하므로 무엇보다 먼저
+  if (badDate) return badDate;
   const ss = ssOpen(SPREADSHEET_ID);
   /* ★확정된 달은 여기서 끝낸다★ (2026-09-17 담당자 ②-3h) — 되묻기(guardResubmit)·사진·응답 시트 어디에도 닿기 전에.
      같은 판정을 saveQsc(사진 올리기 전)·writeStoreQscInto(매장 파일에 쓰기 직전)가 한 번 더 한다. */
@@ -3514,6 +3661,13 @@ function fnQscSubmit(ctx, payload) {
 }
 
 function fnShopperSubmit(ctx, payload) {
+  const badDate = submitDateGate(payload && payload.date);   // 2026-09-25 검수 · dates-4
+  if (badDate) return badDate;
+  /* 2026-09-25 검수 · contract-1 — 확정 달은 되묻기(guardResubmit) 앞에서 끝낸다(QSC 와 같은 순서).
+     종전에는 그 달 MS 가 이미 있으면 덮어쓰기 창 → 되돌리기 거절 → 「…에서 멈췄습니다」가 떴다.
+     saveShopper 안의 같은 검사는 고객 설문(submitWithCode) 경로용으로 그대로 둔다. */
+  const closed = qscMonthClosed(payload && payload.store, payload && payload.date);
+  if (closed) return closed;
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const undone = [];
   const stop = guardResubmit(ss, 'shopper', payload, ctx, undone);
@@ -3552,7 +3706,11 @@ const CODE_SHEET = '쇼퍼_코드';
 const CODE_HEADER = ['회차', '매장', '코드', '발급시각', '만료시각', '상태', '사용시각', '메모'];
 const CODE_TTL = { '3h': 3 * 3600e3, 'today': -1, '15d': 15 * 86400e3 };   // -1 = 그날 23:59:59
 const CODE_FAIL_MAX = 15;      // 한 매장 · 10분 안에 이만큼 틀리면 그 매장을 잠근다
-const CODE_FAIL_ALL = 60;      // 전 매장 합산 · 10분 (매장 이름을 바꿔 가며 두드리는 것을 막는다 · 2026-09-17 ②-3c)
+/* 전 매장 합산 · 10분 (매장 이름을 바꿔 가며 두드리는 것을 막는다 · 2026-09-17 ②-3c)
+   2026-09-25 검수 · critic-attacker-1 — 60 → 150. 60이면 익명 한 사람이 틀린 코드 60번으로 ★전 매장★ 코드 확인을 10분씩 되풀이해 막을 수 있었다.
+   대입 횟수 자체는 익명 버킷(anonThrottle 'anon' · 분 40·시간 200)이 이미 묶으므로, 이 값은 「매장 이름 바꿔 가며 두드리기」만 잡으면 된다.
+   150 이면 한 번 잠그는 데 시간당 익명 상한의 4분의 3을 써야 한다. 매장별 15 는 그대로. */
+const CODE_FAIL_ALL = 150;
 const CODE_FAIL_MIN = 10;
 
 function codeSheet(ss) {
@@ -3614,8 +3772,20 @@ function msOf(v) {
 }
 
 function newCode() {
-  /* 6자리. 앞자리 0을 피한다 — 복사·구두 전달에서 자꾸 사라진다 */
-  return String(100000 + Math.floor(Math.random() * 900000));
+  /* 6자리. 앞자리 0을 피한다 — 복사·구두 전달에서 자꾸 사라진다
+     ★재료는 randomCode 와 같은 HMAC 바이트★ (2026-09-25 검수 · authn-5 — 종전 Math.random 은 randomCode 주석이 스스로
+     「자격증명 생성에 쓰면 안 된다」고 적은 것이었다). 모듈로 편향 없이: 첫 자리는 252 미만만 받아 1~9, 나머지는 250 미만만 받아 0~9.
+     ★자릿수(6)는 그대로★ — 8자리로 늘리면 앱 입력 안내(「6자리」)도 함께 바꿔야 해서 이번에는 뽑는 방법만 바꾼다. */
+  let out = '';
+  while (out.length < 6) {
+    const b = Utilities.computeHmacSha256Signature(Utilities.getUuid(), Utilities.getUuid());
+    for (let i = 0; i < b.length && out.length < 6; i++) {
+      const v = (b[i] + 256) % 256;
+      if (!out) { if (v < 252) out += String(1 + v % 9); }
+      else if (v < 250) out += String(v % 10);
+    }
+  }
+  return out;
 }
 
 function codeExpiry(ttl, tz) {
@@ -3730,7 +3900,18 @@ function codeFailOk(store) {
   try {
     const c = CacheService.getScriptCache();
     const k = codeFailKeys(store);
-    if (Number(c.get(k.all) || 0) >= CODE_FAIL_ALL) return false;
+    if (Number(c.get(k.all) || 0) >= CODE_FAIL_ALL) {
+      /* 2026-09-25 검수 · critic-attacker-1 — 전 매장 잠금이 걸렸다는 것을 담당자가 나중에라도 알 수 있게 버킷마다 한 줄만 남긴다 */
+      try {
+        const lg = k.all + ':logged';
+        if (!c.get(lg)) {
+          c.put(lg, '1', CODE_FAIL_MIN * 60 + 60);
+          auditLog(anonCtx(), 'survey.code', '', '경보', 'CODE_FAIL_ALL',
+            '제출 코드 실패가 ' + CODE_FAIL_MIN + '분에 ' + CODE_FAIL_ALL + '회를 넘어 코드 확인을 잠시 막았습니다');
+        }
+      } catch (e2) { }
+      return false;
+    }
     return Number(c.get(k.one) || 0) < CODE_FAIL_MAX;
   } catch (e) { return true; }
 }
@@ -3757,7 +3938,7 @@ function codeVerify(ss, code, store, missCode) {
   code = String(code || '').replace(/\D/g, '');
   if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
   store = normStore(store);
-  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c)
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 CODE_FAIL_ALL회 (②-3c)
     return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
   }
   const rec = codeFind(ss, code);
@@ -3779,7 +3960,10 @@ function submitWithCode(ss, p, ctx) {
   if (!code) return err('BAD_REQUEST', '제출 코드를 입력해 주세요.');
   const store = normStore(p && p.store);
   if (!store) return err('BAD_REQUEST', '매장을 선택해 주세요.');
-  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 60회 (②-3c) — 잠겨 있으면 락을 기다리지도 않는다
+  /* 2026-09-25 검수 · dates-4 — 코드를 보기 전에 날짜부터(날짜가 틀리면 실패 카운터도 안 올리고 코드도 살아 있다) */
+  const badDate = submitDateGate(p && p.date, '방문 날짜');
+  if (badDate) return badDate;
+  if (!codeFailOk(store)) {   // 매장별 15회 + 전체 CODE_FAIL_ALL회 (②-3c) — 잠겨 있으면 락을 기다리지도 않는다
     return err('RATE_LIMITED', '코드 확인이 잠시 막혀 있습니다. 10분 뒤에 다시 시도해 주세요.');
   }
 
@@ -3999,8 +4183,9 @@ function saveQsc(ss, p, ctx) {
     out.photosSkipped = photoMap.__skipped;
     if (photoMap.__why) out.photosWhy = photoMap.__why;
     /* 조용히 사라지면 아무도 모른다 — 담당자가 볼 수 있는 곳에 남긴다 */
+    /* 2026-09-25 검수 · field-7 — 이유가 있으면 이유를(하루 상한 등), 없을 때만 종전 문구 */
     auditLog(ctx || anonCtx(), 'qsc.submit', p.store, '경고', 'PHOTO_SKIPPED',
-      '용량·형식이 맞지 않아 저장하지 않은 사진 ' + photoMap.__skipped + '장');
+      '저장하지 않은 사진 ' + photoMap.__skipped + '장 — ' + (photoMap.__why || '용량·형식이 맞지 않음'));
   }
   return out;
 }
@@ -4068,7 +4253,9 @@ function msScoreOf(answers) {
     const v = msConvert(a && a.answer);
     if (v != null) { sum += v; n++; }
   });
-  return { score: n ? (sum / n) * 100 : null, answered: n };
+  /* 2026-09-25 검수 · quality-2 — ★곱을 먼저★(sum * 100 / n). (sum / n) * 100 은 응답 20개·환산합 5.75 에서 28.749999… 가 되어
+     28.7 로 적혔다(엑셀은 28.8). 앱 js/scoring.js shopperScore 도 같은 순서로 맞춘다(약속 ①). */
+  return { score: n ? sum * 100 / n : null, answered: n };
 }
 
 /* 사람이 읽을 유형 이름 */
@@ -4330,6 +4517,12 @@ function fnReorderRows(ctx, payload) {
 }
 
 function saveShopper(ss, p, ctx, isSurvey) {
+  /* ★확정된 달은 MS 도 받지 않는다★ (2026-09-25 검수 · dates-3) — QSC 는 09-17(②-3h)에 막았는데 MS 쓰기 길에는 없었다.
+     지난달 날짜(달력 오선택·되살아난 임시저장)로 낸 MS 가 제출시각 최신 1건이 되어 ★확정된 달의 MS점수·종합점수를 조용히 덮고★,
+     되돌리기는 확정된 달을 거부해 앱으로 못 고쳤다. MS_상세에 쓰기 전에 끊는다.
+     고객 설문(submitWithCode)은 saved.ok 가 아니면 코드를 소진하지 않으므로 손님 코드는 살아 있다. */
+  const closedMs = qscMonthClosed(p && p.store, p && p.date);
+  if (closedMs) return closedMs;
   // 익명 경로는 입력경로를 서버가 강제한다. 클라이언트가 보낸 p.source는 읽지 않는다.
   const route = isSurvey ? '고객 직접' : '관리자 입력';
   /* ★MS_상세 한 시트에 문항마다 한 줄★ (2026-09-08 담당자 결정)
@@ -4945,8 +5138,18 @@ function storeMonthBody(store, ym) {
     /* 탭이 아직 없는 것은 오류가 아니다(본사가 안 만들었을 뿐). 캐시하지 않는다 —
        만드는 즉시 보여야 하고, 이 경로는 이미 시트를 연 뒤라 캐시 이득도 없다.
        items를 빈 배열로 함께 내려 배지가 조건문 없이 셀 수 있게 한다. */
+    /* 2026-09-25 검수 · critic-day1-1 — 탭이 없는 것은 「아직 이번 달 점검 전」이라는 정상 상태다(탭은 첫 제출 때 생긴다).
+       종전 「본사 담당자에게 문의해 주세요」는 10/1부터 점검 전 매장 전부가 보고 전화하게 만드는 문구였다(약속 ③).
+       지난 달을 골랐는데 탭이 없으면(그 달 점검이 없었음) 「이번 달」이 틀린 말이라 그 경우만 담담하게 알린다. */
+    /* 2026-09-25 검수 · contract-2 — 「이번 달」은 ym 이 정말 이번 달일 때만. 다음 달(예: 10월 중 2611 · 10/1 전 2610)은
+       「이번 달」 없는 문구로(앱 notYetMsg 와 같은 갈래 · 앱은 서버 문구에 '문의'가 없으면 그대로 쓴다). */
+    let cy = '';
+    try { cy = String(curYymm()); } catch (e) { cy = ''; }
+    const tail = ' 점검이 끝나면 이곳에 개선요청사항이 나타납니다.';
     return { ok: true, store: store, ym: ym, exists: false, items: [], months: monthTabs(ss),
-      error: ym + ' 탭이 아직 만들어지지 않았습니다. 본사 담당자에게 문의해 주세요.' };
+      error: (cy && String(ym) < cy) ? '이 달에는 점검 기록이 없습니다.'
+        : (cy && String(ym) > cy) ? '아직 점검 기록이 없습니다.' + tail
+        : '아직 이번 달 점검 전입니다.' + tail };
   }
   const body = readStoreTab(ss, sh, store, ym);
   const packed = JSON.stringify(body);
@@ -5971,7 +6174,8 @@ function setByLabel(sh, label, value) {
 function writeStoreQsc(p, photoMap) {
   const id = storeFileId(p.store);
   if (!id) return { ok: false, error: STORE_MAP_SHEET + '에 매장 없음: ' + p.store };
-  return writeStoreQscInto(SpreadsheetApp.openById(id), p, photoMap, yymm(p.date));
+  /* 2026-09-25 검수 · perf-server-3 — ssOpen: 같은 요청에서 qscMonthClosed 가 이미 연 같은 파일을 다시 열지 않는다(수백 ms) */
+  return writeStoreQscInto(ssOpen(id), p, photoMap, yymm(p.date));
 }
 
 /* 실제 기록. ★스프레드시트를 인자로 받는다★ — 사본 테스트(testStoreCopy)가 이 함수를
@@ -6250,13 +6454,20 @@ function writeStoreQscInto(ss, p, photoMap, tab) {
   return { ok: !!jR, tickets: jR ? list.length : 0, tab: tab, skipped: expanded.length - list.length, warn: warn };
 }
 
-function writeStoreShopper(store, dateStr, frac) {
+function writeStoreShopper(store, dateStr, frac, closeRun) {
   const id = storeFileId(store);
   if (!id) return { ok: false, error: STORE_MAP_SHEET + '에 매장 없음: ' + store };
   /* ★탭이 없으면 만든다★ — 쇼퍼가 점검보다 먼저 올 수 있다(CS도 그 달 점수의 일부다).
      writeStoreQscInto와 같은 이유다: 담당자에게 "편집기를 여세요"라고 할 수 없다. */
   const ss0 = SpreadsheetApp.openById(id);
   const tab0 = yymm(dateStr);
+  /* 2026-09-25 검수 · dates-3 — writeStoreQscInto 와 같은 마지막 문. 월말 반영(monthCloseRun)·사본 시험 길도 확정된 달에는 안 쓴다 */
+  /* 2026-09-25 검수 · backend-1 — 단 월말 반영(monthCloseRun · closeRun=true)은 확정 달에도 쓴다.
+     10월부터 MS 는 제출 때 미뤄 두고 월말 반영만 매장 파일에 쓰는데, 확정은 달 중간에도 할 수 있어(개선요청 0건 등)
+     그 매장 MS점수·종합이 빈칸으로 남고 통합시트와 어긋났다. 확정 뒤 새 MS 는 saveShopper 가 이미 막으므로
+     월말 반영이 쓰는 평균은 확정 전에 들어온 응답뿐이다(확정 뒤 조용히 바뀌지 않는다). */
+  const closedAt = closeRun === true ? '' : monthClosedAt(ss0, tab0);
+  if (closedAt) return { ok: false, code: 'MONTH_CLOSED', error: ymLabel(tab0) + ' 채점이 확정되어 기록하지 않습니다.' };
   let sh = ss0.getSheetByName(tab0);
   if (!sh) {
     let made0;
@@ -6306,31 +6517,63 @@ function validPhoto(dataUrl) {
    위조 가능한 값이라 durable일 이유가 없다(캐시가 축출되면 상한이 헐거워질 뿐이고,
    그 몫은 anonThrottle·legacyThrottle이 이미 맡고 있다).
    인증 계정은 종전대로 속성에 둔다 — 키가 계정 수만큼으로 닫혀 있고, 날짜가 바뀌면 정리된다. */
+/* ★남은 몫까지는 받는다★ (2026-09-25 검수 · field-7 · critic-day1-4) — 종전에는 「전부 아니면 전무」였다.
+   남은 몫이 39장이어도 40장 제출은 한 장도 안 올라갔고, 덮어쓰기 재제출·실패 재시도마다 예약이 또 나가 돌려받지 못했다.
+   이제 ★실제로 예약한 장 수★를 돌려준다(0 = 하나도 못 받음 — 종전 false 자리라 `if (!photoQuotaOk(…))` 는 그대로 맞다).
+   기본 상한은 200 → 600(점검자 한 명이 하루 15곳 × 40장). 스크립트 속성 PHOTO_DAY_MAX 로 바꾸는 것은 그대로다.
+   못 쓴 몫은 photoQuotaRefund 로 돌려준다(savePhotos 가 끝에서 부른다). */
 function photoQuotaOk(ctx, n, store) {
   const tz = Session.getScriptTimeZone();
   const day = Utilities.formatDate(new Date(), tz, 'yyyyMMdd');
-  const max = propN('PHOTO_DAY_MAX', 200);
+  const max = propN('PHOTO_DAY_MAX', 600);
+  const want = Math.max(0, Math.floor(Number(n) || 0));
 
   if (!(ctx && ctx.auth && ctx.id)) {
     try {
       const cache = CacheService.getScriptCache();
-      const k = 'pdq:' + sha256Hex(normStore(store) || '(매장없음)').slice(0, 8) + ':' + day;
+      const k = photoQuotaKey(ctx, store, day);
       const cur = Number(cache.get(k) || 0);
-      if (cur + n > max) return false;
-      cache.put(k, String(cur + n), 21600);   // 6시간 (캐시 상한). 날짜가 바뀌면 키 자체가 바뀐다
-      return true;
-    } catch (e) { return true; }   // 카운터 고장이 현장 제출을 막을 이유는 없다
+      const got = Math.max(0, Math.min(want, max - cur));
+      if (!got) return 0;
+      cache.put(k, String(cur + got), 21600);   // 6시간 (캐시 상한). 날짜가 바뀌면 키 자체가 바뀐다
+      return got;
+    } catch (e) { return want; }   // 카운터 고장이 현장 제출을 막을 이유는 없다
   }
 
-  const k = 'PD:' + ctx.id + ':' + day;
+  const k = photoQuotaKey(ctx, store, day);
   const cur = Number(PROPS.getProperty(k) || 0);
-  if (cur + n > max) return false;
-  PROPS.setProperty(k, String(cur + n));
+  const got = Math.max(0, Math.min(want, max - cur));
+  if (!got) return 0;
+  PROPS.setProperty(k, String(cur + got));
   if (cur === 0) {
     const y = Utilities.formatDate(new Date(Date.now() - 86400000), tz, 'yyyyMMdd');
     try { PROPS.deleteProperty('PD:' + ctx.id + ':' + y); } catch (e) { }
   }
-  return true;
+  return got;
+}
+/* 버킷 키 — 인증 계정은 속성 'PD:<계정>:<날짜>', 익명은 캐시 'pdq:<매장 해시>:<날짜>' (종전 두 줄을 한 곳으로 모았다) */
+function photoQuotaKey(ctx, store, day) {
+  if (ctx && ctx.auth && ctx.id) return 'PD:' + ctx.id + ':' + day;
+  return 'pdq:' + sha256Hex(normStore(store) || '(매장없음)').slice(0, 8) + ':' + day;
+}
+/* 예약했지만 못 쓴 몫을 돌려준다 (2026-09-25 검수 · critic-day1-4) — 형식이 틀린 사진·드라이브 저장 실패 등.
+   날짜가 바뀌었으면(자정을 넘긴 제출) 오늘 키에서 빼지 않는다 — 어제 몫은 어차피 지워진다. 실패해도 삼킨다. */
+function photoQuotaRefund(ctx, n, store, day) {
+  const back = Math.max(0, Math.floor(Number(n) || 0));
+  if (!back) return;
+  try {
+    const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd');
+    if (day && day !== today) return;
+    const k = photoQuotaKey(ctx, store, today);
+    if (ctx && ctx.auth && ctx.id) {
+      const cur = Number(PROPS.getProperty(k) || 0);
+      PROPS.setProperty(k, String(Math.max(0, cur - back)));
+    } else {
+      const cache = CacheService.getScriptCache();
+      const cur = Number(cache.get(k) || 0);
+      cache.put(k, String(Math.max(0, cur - back)), 21600);
+    }
+  } catch (e) { }
 }
 
 function savePhotos(p, ctx) {
@@ -6346,9 +6589,19 @@ function savePhotos(p, ctx) {
   let budget = 0;
   p.items.forEach(function (it) { budget += Math.min(40, (it.photos || []).length); });
   budget = Math.min(budget, 40);
-  const quota = budget > 0 ? photoQuotaOk(ctx, budget, p.store) : true;
-  if (!quota) { out.__skipped = budget; return out; }
+  /* 2026-09-25 검수 · field-7 · critic-day1-4 — 남은 몫까지는 받는다(photoQuotaOk 가 예약한 장 수를 돌려준다).
+     하나도 못 받으면 이유(하루 상한)를 함께 돌려준다 — 종전에는 이유가 비어 감사로그가 「용량·형식」으로 잘못 남았다. */
+  const quotaDay = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd');
+  const granted = budget > 0 ? photoQuotaOk(ctx, budget, p.store) : 0;
+  if (budget > 0 && !granted) {
+    out.__skipped = budget;
+    out.__why = '하루 상한을 넘었습니다 ' + budget + '장';
+    return out;
+  }
+  budget = granted;
   let used = 0;
+  let savedN = 0;   // 드라이브에 실제로 만든 장 수 — 예약(granted)과의 차이를 끝에서 돌려준다
+  try {
   p.items.forEach(function (it) {
     const list = (it.photos || []).slice(0, 40);
     /* ★사진이 몇 번째 「건」의 것인지 함께 가져온다★ (2026-09-04)
@@ -6386,6 +6639,7 @@ function savePhotos(p, ctx) {
       const blob = Utilities.newBlob(Utilities.base64Decode(base64), 'image/jpeg',
         fileSafe(p.date) + '_' + safeName + '_문항' + it.no + '_' + (i + 1) + '.jpg');
       const f = dayFolder.createFile(blob);
+      savedN++;
       if (PHOTO_EMBED && !folderShared) f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       (out[it.no] = out[it.no] || []).push({
         url: f.getUrl(), id: f.getId(),
@@ -6393,6 +6647,10 @@ function savePhotos(p, ctx) {
       });
     });
   });
+  } finally {
+    /* 예약했지만 못 만든 몫(형식이 틀린 사진·드라이브 예외로 중간에 끊김)은 돌려준다 (2026-09-25 검수 · critic-day1-4) */
+    if (granted > savedN) photoQuotaRefund(ctx, granted - savedN, p.store, quotaDay);
+  }
   if (skipped) {
     out.__skipped = skipped;
     out.__why = Object.keys(why).map(function (k) { return k + ' ' + why[k] + '장'; }).join(' · ');
@@ -6869,7 +7127,10 @@ function monthCloseRun(ym, apply, stores) {
       const avg = shopperMonthAvg(resp, store, target + '-01', tz);
       if (!avg) { skip.push(store); continue; }
       if (!apply) { done.push(store + ' → ' + round1(avg) + '점'); continue; }
-      const r = writeStoreShopper(store, target + '-01', avg / 100);
+      const r = writeStoreShopper(store, target + '-01', avg / 100, true);   // 2026-09-25 검수 · backend-1 — 확정 달에도 쓴다
+      /* 2026-09-25 검수 · backend-1 — 그래도 MONTH_CLOSED 가 오면(옛 사본 등) 실패가 아니라 건너뜀으로 센다.
+         실패로 세면 monthCloseDone 이 영원히 false 가 되어 다음 달 내내 매일 밤 전체를 다시 돈다. 통합시트도 건드리지 않는다. */
+      if (r && r.code === 'MONTH_CLOSED') { skip.push(store + '(확정됨)'); continue; }
       /* ★통합시트도 이때 함께 연다★ (2026-09-04) — 제출 때 둘 다 미뤄 두었으므로
          둘 다 여기서 채워야 한다. 한쪽만 채우면 같은 달 점수가 두 곳에서 달라진다.
          ⚠매장 파일 기록이 실패해도 통합시트는 시도한다 — 하나가 막혔다고 나머지를
@@ -8629,7 +8890,7 @@ function improveBlocked(store, dateStr) {
   try {
     const id = storeFileId(store);
     if (!id) return null;
-    const sh2 = SpreadsheetApp.openById(id).getSheetByName(yymm(dateStr));
+    const sh2 = ssOpen(id).getSheetByName(yymm(dateStr));   // 2026-09-25 검수 · perf-server-3 — 덮어쓰기 길의 같은 파일 재열기 대신 실행 메모
     if (!sh2) return null;
     const s = improveScan(sh2);
     if (s.ok && s.touched) return { filled: s.filled, touched: s.touched };
@@ -10358,6 +10619,9 @@ function relayStateFormulas(ss, sh, ym, apply) {
 }
 
 function makeMonthTabIn(ss, ym) {
+  /* 2026-09-25 검수 · dates-4 — 탭 이름이 yyMM 네 자리가 아니면 copyTo 전에 끊는다. 종전에는 빈 날짜('')면 copyTo 뒤 setName('') 예외로
+     「…의 사본」 탭이 남았다(아래 try 는 setName 다음부터라 그 탭을 못 치운다). */
+  if (!validYm(ym)) return { mark: '✗', msg: '달 형식 오류 (' + ym + ')' };
   if (ss.getSheetByName(ym)) return { mark: '·', msg: '이미 있음' };
   const pick = tabSourceFor(ss, ym);
   if (!pick.sh) return { mark: '✗', msg: pick.why };
@@ -11940,7 +12204,9 @@ function nowIso() {
 }
 
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
-function round1(n) { return Math.round(n * 10) / 10; }
+/* 2026-09-25 검수 · quality-2 — +1e-9 는 앱 js/scoring.js round1 과 같은 식(약속 ①). 참값이 딱 반(x.x5)인데 부동소수로 x.x4999… 가 된 것을 올린다.
+   이미 소수 첫째 자리인 값(앱이 반올림해 보낸 QSC 점수)은 다시 거쳐도 그대로다 — test/score-round-test.py 가 0.0~100.0 전부로 확인한다. */
+function round1(n) { return Math.round(n * 10 + 1e-9) / 10; }
 
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);

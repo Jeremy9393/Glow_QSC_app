@@ -20,11 +20,12 @@ PROPS · CacheService · Utilities · 계정 조회 · 해시 · 감사로그 ·
   ⑧ TOKEN_KEY 없음 — 통행증 안 줌·검사 안 함   ⑨ 키 바꾸면 옛 통행증 무효
   ⑩ sessionBody(auth.session 경로)도 통행증을 싣는다   ⑪ normId 기준
 """
-import io, subprocess, sys
+import io, os, subprocess, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
-SRC = HERE.parents[1] / 'backend' / 'Code.gs'
+# QSC_SRC=<고치기 전 사본> 으로 돌리면 대조군 (2026-09-25 검수 — ⑫~⑮ 가 실패해야 한다)
+SRC = Path(os.environ.get('QSC_SRC') or (HERE.parents[1] / 'backend' / 'Code.gs'))
 NODE = HERE.parents[2] / '_도구' / 'node' / 'node.exe'
 OUT = HERE.parent / 't_device_pass.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -46,18 +47,35 @@ def cut(name):
     raise SystemExit('%s 끝 못 찾음' % name)
 
 
-REAL = ['normId', 'ctEq', 'validId', 'hourKey', 'bumpHourly', 'hourlyCount', 'hbIdKey',
-        'hashBudgetOk', 'hashBudgetUse', 'lockCheck', 'lockFail', 'lockClear', 'globalBlocked',
+# 옛 사본(대조군)에 없는 함수는 종전 동작 그대로의 대역으로
+OLD_STUB = {'lkKey': "function lkKey(id) { return 'LK:' + id; }", 'sweepLocks': 'function sweepLocks() { return 0; }',
+            # 2026-09-25 검수 · security-2 — 옛 사본에는 없다(대조군은 우산 판정을 직접 셈)
+            'umbrellaFull': "function umbrellaFull(o) { return Number(CacheService.getScriptCache().get(hbIdKey('all:' + o)) || 0) >= 60; }"}
+
+
+def cut_or(name):
+    try:
+        return cut(name)
+    except SystemExit:
+        if name in OLD_STUB:
+            return OLD_STUB[name]
+        raise
+
+
+REAL = ['normId', 'ctEq', 'validId', 'hourKey', 'bumpHourly', 'hourlyCount', 'sweepLocks', 'hbIdKey', 'umbrellaFull',
+        'hashBudgetOk', 'hashBudgetUse', 'lkKey', 'lockCheck', 'lockFail', 'lockClear', 'globalBlocked',
         'globalFail', 'devicePass', 'devicePassKey', 'fnLogin', 'loginByPassword', 'loginFail',
         'loginSuccess', 'sessionBody']
 
 js = r'''
 const crypto = require('crypto');
 let props = {};
+let PROP_OPS = 0;   // 2026-09-25 검수 · authn-1 — 속성 읽기·쓰기 횟수(시간당 카운터가 속성을 안 쓰는지 본다)
 const PROPS = {
-  getProperty(k) { return k in props ? props[k] : null; },
-  setProperty(k, v) { props[k] = String(v); },
-  deleteProperty(k) { delete props[k]; },
+  getProperty(k) { PROP_OPS++; return k in props ? props[k] : null; },
+  setProperty(k, v) { PROP_OPS++; props[k] = String(v); },
+  deleteProperty(k) { PROP_OPS++; delete props[k]; },
+  getProperties() { return Object.assign({}, props); },
 };
 function prop(key, def) { const v = PROPS.getProperty(key); return (v === null || v === undefined || v === '') ? def : v; }
 function propN(key, def) { const n = Number(prop(key, def)); return isNaN(n) ? def : n; }
@@ -91,7 +109,7 @@ function scopeOf() { return { all: true, list: [] }; }
 function menusOf() { return []; }
 function maintMsg() { return ''; }
 function withNotice(r) { return r; }
-''' + '\n'.join(cut(n) for n in REAL) + r'''
+''' + '\n'.join(cut_or(n) for n in REAL) + r'''
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name); } }
@@ -138,6 +156,48 @@ props.TOKEN_KEY = saved;
 
 ok('⑩ sessionBody 가 통행증을 싣는다(이미 로그인된 기기용)', devicePassKey('제주당', sessionBody(ACCTS['제주당']).device) !== '');
 ok('⑪ normId 기준 — 대소문자·앞뒤 공백 무관', devicePassKey(' ADMIN ', passB) !== '');
+
+/* ── 2026-09-25 검수 ── */
+const keysNow = Object.keys(props);
+ok('⑫ authn-3 잠금 키에 아이디 원문이 없다(LK:admin 없음)', keysNow.indexOf('LK:admin') < 0 && lkKey('admin') !== 'LK:admin');
+ok('⑫ authn-3 잠금 키는 LK:+해시 16자', keysNow.some(function (k) { return /^LK:[0-9a-f]{16}$/.test(k); }) &&
+   keysNow.filter(function (k) { return k.indexOf('LK:') === 0; }).every(function (k) { return /^LK:[0-9a-f]{16}$/.test(k); }));
+ok('⑬ authn-1 시간당 카운터(AL·AN·HB·GF)가 속성에 없다', !keysNow.some(function (k) { return /^(AL|AN|HB|GF):/.test(k); }));
+ok('⑬ authn-1 대신 캐시에 있다(HB·GF)', Object.keys(cache).some(function (k) { return k.indexOf('HB:') === 0; }) &&
+   Object.keys(cache).some(function (k) { return k.indexOf('GF:') === 0; }));
+
+/* ⑭ authn-3 만료 잠금 정리 — 시간 첫 카운터가 한 번 돈다 · 옛 원문 키도 · 옛 시간 카운터 찌꺼기도 */
+const past = String(Date.now() - 60000), future = String(Date.now() + 10 * 60000);
+props['LK:옛원문아이디'] = past; props['LK:0123456789abcdef'] = past; props['LK:fedcba9876543210'] = future;
+props['AL:2026092510'] = '5'; props['HB:2026092509'] = '9'; props['MC:file:2610'] = '2026-11-05';
+cache = {};                                   // 새 시간(캐시가 빈 상태) — 첫 bumpHourly 가 정리를 부른다
+bumpHourly('HB:');
+ok('⑭ 만료된 LK:(옛 원문·해시) 둘 다 지워진다', !('LK:옛원문아이디' in props) && !('LK:0123456789abcdef' in props));
+ok('⑭ 아직 살아 있는 잠금은 남는다', props['LK:fedcba9876543210'] === future);
+ok('⑭ 옛 시간 카운터 찌꺼기도 지워진다 · 다른 속성(MC:)은 그대로', !('AL:2026092510' in props) && !('HB:2026092509' in props) && props['MC:file:2610'] === '2026-11-05');
+props['LK:또옛키'] = past;
+bumpHourly('AL:');                            // 같은 시간 두 번째 카운터 — 정리는 시간에 한 번뿐
+ok('⑭ 같은 시간에는 한 번만 돈다', props['LK:또옛키'] === past);
+
+/* ⑮ authn-7 통행증 몫 아이디 우산 — 통행증을 여러 장 모아도 그 아이디의 통행증 몫 합계는 시간당 60(HASH_BUDGET_ID_ALL) */
+cache = {}; props = { TOKEN_KEY: 'k', PW_PEPPER: 'p' };
+const many = [];
+for (let i = 0; i < 7; i++) many.push(devicePass('제주당'));
+for (let p = 0; p < 6; p++) for (let i = 0; i < 10; i++) login('제주당', 'x' + p + '-' + i, many[p]);   // 6장 × 10번 = 60
+ok('⑮ 우산이 찼다(통행증 몫 합계 60)', umbrellaFull('제주당') === true);
+/* 2026-09-25 검수 · security-2 — 우산이 차면 LOCKED 가 아니라 아이디 몫(12)으로 떨어진다 */
+const idBefore = Number(cache[hbIdKey('제주당')] || 0);
+r = login('제주당', 'store-pw', many[6]);
+ok('⑮ 다른 통행증들이 우산을 채운 뒤에도 주인 기기 통행증 + 맞는 비밀번호는 LOCKED 가 아니다(아이디 몫으로)', r.ok === true && r.code !== 'LOCKED', r);
+ok('⑮ 그때 해시 예산은 아이디 몫으로 셌다', Number(cache[hbIdKey('제주당')] || 0) === idBefore + 1, [idBefore, cache[hbIdKey('제주당')]]);
+/* 우산이 찬 뒤 통행증으로 계속 두드려도 아이디 몫(12)에 묶인다 — 통행증 몫이 다시 늘지 않는다 */
+cache = {}; props = { TOKEN_KEY: 'k', PW_PEPPER: 'p' };
+for (let p = 0; p < 6; p++) for (let i = 0; i < 10; i++) login('제주당', 'y' + p + '-' + i, many[p]);
+let got = 0;
+for (let i = 0; i < 30; i++) { const rr = login('제주당', 'z' + i, many[i % 6]); if (rr.code !== 'LOCKED') got++; }
+ok('⑮ 우산이 찬 뒤 통행증 대입은 아이디 몫 안(12 이하)으로 묶인다', got <= 12, got);
+ok('⑮ 우산 카운터는 60에서 더 오르지 않는다', Number(cache[hbIdKey('all:제주당')] || 0) === 60, cache[hbIdKey('all:제주당')]);
+ok('⑮ 다른 아이디(admin) 통행증은 영향 없음', login('admin', 'right-pw', devicePass('admin')).ok === true);
 
 console.log('\n' + (fail ? '실패 ' + fail + '개' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);

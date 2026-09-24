@@ -1,6 +1,7 @@
 ﻿/* 오프라인 대응 서비스 워커.
    전략은 두 갈래다.
    ① 화면(html)·데이터(json) = 네트워크 우선(항상 최신) → 실패 시 캐시(오프라인에서도 앱 실행).
+      2026-09-25 검수 — 약 4초 넘게 매달리거나(perf-client-3) 오류 응답(5xx·404)이 오면(field-4) 사본이 있을 때 사본을 준다.
    ② 주소에 버전이 박힌 js/css(?v=N)와 폰트·아이콘 = 캐시 우선 → 없을 때만 네트워크.
    ②를 따로 뗀 이유: 전파가 나쁜 매장에서 fetch는 '실패'로 끝나지 않고 한참 매달린다.
    그러면 catch 폴백이 제때 안 터져 첫 화면이 통째로 멈춰 있었다(페이지당 왕복 ~11회).
@@ -8,8 +9,10 @@
 /* ⚠버전은 여기 한 곳만 고친다. html 쪽 ?v=N 과 숫자를 맞출 것.
    예전엔 아래 목록에도 ?v=30 을 일일이 적어서, VER만 올리고 목록을 안 고쳐
    새 파일이 캐시에 안 담기는 사고가 반복됐다. 이제 v()가 붙여주므로 어긋날 수 없다. */
-const VER = 'v137';
+const VER = 'v138';
 const CACHE = 'qsc-app-' + VER;
+/* 2026-09-25 검수 · perf-client-3 — 화면·데이터를 네트워크에서 기다리는 한도(이 뒤엔 사본이 있으면 사본) */
+const NET_WAIT_MS = 4000;
 const QS = '?v=' + VER.slice(1); // 'v36' → '?v=45'
 function v(path) { return path + QS; }
 const ASSETS = [
@@ -69,16 +72,31 @@ self.addEventListener('fetch', function (e) {
   const cacheFirst = !fresh && (url.search.indexOf('v=') !== -1 ||
     url.pathname.indexOf('fonts/') !== -1 || url.pathname.indexOf('icons/') !== -1);
 
+  /* 캐시 조회가 튕기는 기기(저장소 잠김 등)에서는 '사본 없음'으로 본다 */
+  function cachedCopy() {
+    return caches.match(e.request).catch(function () { return null; });
+  }
+
   function fromNetwork() {
-    return (fresh ? fetch(url.href, { cache: 'reload' }) : fetch(e.request)).then(function (res) {
-      /* ★성공한 응답만 담는다★ — 캐시 우선으로 바꾼 뒤로는, 배포가 퍼지는 틈에 한 번 받은
-         404가 캐시에 눌러앉아 다음 VER 올림까지 계속 그대로 나간다. 안 담아두면
-         다음 요청이 다시 네트워크로 가므로 전파가 끝나는 대로 저절로 복구된다. */
-      if (res.ok) {
-        const copy = res.clone();
-        caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
-      }
-      return res;
+    const net = fresh ? fetch(url.href, { cache: 'reload' }) : fetch(e.request);
+    /* ★성공한 응답만 담는다★ — 캐시 우선으로 바꾼 뒤로는, 배포가 퍼지는 틈에 한 번 받은
+       404가 캐시에 눌러앉아 다음 VER 올림까지 계속 그대로 나간다. 안 담아두면
+       다음 요청이 다시 네트워크로 가므로 전파가 끝나는 대로 저절로 복구된다.
+       2026-09-25 검수 · perf-client-3 — 담기는 waitUntil 로 붙잡아 둔다. 아래 시간 제한으로 사본을 먼저
+       내보낸 뒤에도 늦게 도착한 새 응답이 캐시에 담기기 전에 서비스 워커가 잠들지 않게 하려는 것이다. */
+    const saved = net.then(function (res) {
+      if (!res.ok) return null;
+      const copy = res.clone();
+      return caches.open(CACHE).then(function (c) { return c.put(e.request, copy); });
+    }).catch(function () { return null; });
+    try { e.waitUntil(saved); } catch (err) { /* waitUntil 을 못 거는 때 — 종전처럼 담기만 한다 */ }
+
+    const answer = net.then(function (res) {
+      /* 2026-09-25 검수 · field-4 — 응답은 왔는데 실패(GitHub Pages 5xx·배포 틈의 404)면, 화면·데이터(fresh)는
+         마지막 사본이 있을 때 그것을 준다. 종전에는 오류 페이지를 그대로 내보내 캐시가 있어도 앱이 안 떴고,
+         master.json 이 오류 페이지로 와서 점검 화면이 통째로 멈췄다. 사본이 없으면 종전대로 그 응답을 준다. */
+      if (res.ok || !fresh) return res;
+      return cachedCopy().then(function (m) { return m || res; });
     }).catch(function () {
       // 오프라인 — 마지막으로 받아둔 사본으로 실행
       return caches.match(e.request).then(function (m) {
@@ -93,6 +111,22 @@ self.addEventListener('fetch', function (e) {
         if (e.request.mode === 'navigate') return caches.match('index.html');
         return Response.error();
       });
+    });
+    if (!fresh) return answer;
+
+    /* 2026-09-25 검수 · perf-client-3 — 화면·데이터는 약 4초만 기다린다.
+       전파가 나쁜 매장에서 fetch 는 '실패'로 끝나지 않고 한참 매달린다(맨 위 주석) — 그동안 사본이 있어도
+       화면이 멈춰 있었다. 4초가 지나면 ★사본이 있을 때만★ 사본을 먼저 내보내고, 네트워크 응답은 도착하는 대로
+       위 saved 가 캐시만 갈아 둔다(다음 열 때 최신). 사본이 없으면(첫 방문) 종전처럼 네트워크를 끝까지 기다린다.
+       4초는 화면 이동 덮개(js/ui-busy.js 「화면을 여는 중」 4초 자동 해제)와 맞춘 것이다. */
+    return new Promise(function (resolve) {
+      let done = false;
+      function finish(r) { if (!done) { done = true; resolve(r); } }
+      answer.then(finish, function () { finish(Response.error()); });
+      setTimeout(function () {
+        if (done) return;
+        cachedCopy().then(function (m) { if (m) finish(m); });
+      }, NET_WAIT_MS);
     });
   }
 

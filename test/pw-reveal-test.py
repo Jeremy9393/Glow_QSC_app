@@ -47,13 +47,15 @@ def cutline(prefix):
     return next(l for l in lines if l.startswith(prefix))
 
 
-NAMES = ['accountRow', 'fnAccountList', 'fnAccountRevealPw', 'lockCheck', 'lockFail', 'lockClear', 'ctEq', 'err', 'koCmp']
+# 2026-09-25 검수 · authn-3 — 잠금 키가 lkKey(해시)로 바뀌어 함께 잘라 온다
+NAMES = ['accountRow', 'fnAccountList', 'fnAccountRevealPw', 'lkKey', 'lockCheck', 'lockFail', 'lockClear', 'ctEq', 'err', 'koCmp']
 body = '\n'.join(cut(n) for n in NAMES) + '\n' + cutline('const ACCOUNT_PUBLIC ') + '\n' + cutline('const STATUS_ON ')
 print('잘라낸 줄 수: %d' % len(body.split('\n')))
 
 HARNESS = r'''
 // ══ 가짜 세계 ══════════════════════════════════════════════════
 var PSTORE = {};
+function sha256Hex(s) { return require('crypto').createHash('sha256').update(String(s)).digest('hex'); }
 var PROPS = {
   getProperty: function (k) { return Object.prototype.hasOwnProperty.call(PSTORE, k) ? PSTORE[k] : null; },
   setProperty: function (k, v) { PSTORE[k] = String(v); },
@@ -146,16 +148,17 @@ reset();
 var codes = [];
 for (var i = 0; i < 10; i++) codes.push(reveal(ADMIN, { pw: 'guess-' + i }).code);
 ok('1~9번째 PW_WRONG · 10번째 LOCKED (LOGIN_FAIL_MAX 기본 10)', codes, ['PW_WRONG','PW_WRONG','PW_WRONG','PW_WRONG','PW_WRONG','PW_WRONG','PW_WRONG','PW_WRONG','PW_WRONG','LOCKED']);
-ok('잠금이 속성(LK:admin)에 남는다', !!PSTORE['LK:admin'], true);
+ok('잠금이 속성(lkKey(admin) — 해시 키)에 남는다', !!PSTORE[lkKey('admin')], true);
+ok('속성 키에 아이디 원문이 없다 (2026-09-25 검수 · authn-3)', PSTORE['LK:admin'] === undefined, true);
 var h0 = HASHES;
 var LR = reveal(ADMIN, { pw: RIGHT });
 ok('★잠긴 동안은 맞는 비밀번호도 LOCKED★', LR.code, 'LOCKED');
 ok('★잠긴 동안은 원문 없음★', LR.pws === undefined, true);
 ok('★잠긴 동안은 해시를 계산하지 않는다★', HASHES - h0, 0);
-PSTORE['LK:admin'] = String(Date.now() - 1000);   // 잠금 시간이 지났다
+PSTORE[lkKey('admin')] = String(Date.now() - 1000);   // 잠금 시간이 지났다
 var AR = reveal(ADMIN, { pw: RIGHT });
 ok('잠금이 풀리면 맞는 비밀번호로 열린다', AR.ok, true);
-ok('성공하면 잠금·카운터를 비운다', [PSTORE['LK:admin'] === undefined, CSTORE['lf:admin'] === undefined], [true, true]);
+ok('성공하면 잠금·카운터를 비운다', [PSTORE[lkKey('admin')] === undefined, CSTORE['lf:admin'] === undefined], [true, true]);
 reset();
 PV.LOGIN_FAIL_MAX = '3';
 var c3 = []; for (var j = 0; j < 3; j++) c3.push(reveal(ADMIN, { pw: 'x' + j }).code);

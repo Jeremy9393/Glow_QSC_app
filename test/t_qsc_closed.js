@@ -26,6 +26,8 @@ function auditLog() {}
 function anonCtx() { return { auth: false }; }
 function opErr(w, e) { return w + ': ' + e; }
 function err(code, msg) { return { ok: false, code: code, error: msg }; }
+let CUR = '2610';                                   // 2026-09-25 검수 · dates-4 — 서버의 이번 달(curYymm)을 시험에서 고른다
+function curYymm() { return CUR; }
 function qscMonthClosed(store, dateStr) {
   try {
     const id = storeFileId(store);
@@ -123,12 +125,15 @@ function saveQsc(ss, p, ctx) {
     out.photosSkipped = photoMap.__skipped;
     if (photoMap.__why) out.photosWhy = photoMap.__why;
     /* 조용히 사라지면 아무도 모른다 — 담당자가 볼 수 있는 곳에 남긴다 */
+    /* 2026-09-25 검수 · field-7 — 이유가 있으면 이유를(하루 상한 등), 없을 때만 종전 문구 */
     auditLog(ctx || anonCtx(), 'qsc.submit', p.store, '경고', 'PHOTO_SKIPPED',
-      '용량·형식이 맞지 않아 저장하지 않은 사진 ' + photoMap.__skipped + '장');
+      '저장하지 않은 사진 ' + photoMap.__skipped + '장 — ' + (photoMap.__why || '용량·형식이 맞지 않음'));
   }
   return out;
 }
 function fnQscSubmit(ctx, payload) {
+  const badDate = submitDateGate(payload && payload.date);   // 2026-09-25 검수 · dates-4 — 날짜가 탭을 정하므로 무엇보다 먼저
+  if (badDate) return badDate;
   const ss = ssOpen(SPREADSHEET_ID);
   /* ★확정된 달은 여기서 끝낸다★ (2026-09-17 담당자 ②-3h) — 되묻기(guardResubmit)·사진·응답 시트 어디에도 닿기 전에.
      같은 판정을 saveQsc(사진 올리기 전)·writeStoreQscInto(매장 파일에 쓰기 직전)가 한 번 더 한다. */
@@ -144,6 +149,25 @@ function fnQscSubmit(ctx, payload) {
   if (out && out.ok && undone.length) out.undone = undone;
   return out;
 }
+function submitDateGate(dateStr, word) {
+  const w = word || '점검일자';
+  /* 2026-09-25 검수 · backend-2/security-1 — trim 하지 않는다. 뒤따르는 qscMonthClosed·yymm·저장은 원래 값을 쓰므로
+     ' 2026-10-20' 이 문을 지나면 탭 '02-1' 을 보아 확정 달 검사를 비켜 갔다. 앱 date 입력은 공백이 없다. */
+  const d = String(dateStr == null ? '' : dateStr);
+  const ym = /^\d{4}-\d{2}-\d{2}$/.test(d) ? yymm(d) : '';
+  const day = Number(d.slice(8, 10));
+  if (!ym || !validYm(ym) || !(day >= 1 && day <= 31)) return err('BAD_REQUEST', w + '를 선택해 주세요.');
+  if (ym < '2610') return err('BAD_REQUEST', Number(ym.slice(2, 4)) + '월은 앱으로 제출할 수 없습니다 — ' + w + '를 확인해 주세요.');
+  const cur = curYymm();
+  if (cur >= '2610' && ym > cur) return err('BAD_REQUEST', '아직 오지 않은 달입니다 — ' + w + '를 확인해 주세요.');
+  return null;
+}
+function validYm(ym) {
+  if (!/^\d{4}$/.test(String(ym))) return false;
+  const m = Number(String(ym).slice(2, 4));
+  return m >= 1 && m <= 12;
+}
+var submitDateGate = submitDateGate || function () { return null; };   // 옛 사본(대조군)에는 날짜 문이 없다
 
 let pass = 0, fail = 0;
 function ok(name, cond, info) { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name + (info !== undefined ? '  ← ' + JSON.stringify(info) : '')); } }
@@ -183,6 +207,36 @@ reset(); FILE_ID = null; CLOSED['FILE1:2610'] = '2026-11-02';
 ok('매장 파일 없음 → 저장(writeStoreQsc 가 알린다)', fnQscSubmit(ctx, payload()).ok === true);
 reset(); OPEN_THROWS = true; CLOSED['FILE1:2610'] = '2026-11-02';
 ok('매장 파일 열기 실패 → 저장', fnQscSubmit(ctx, payload()).ok === true);
+
+console.log('⑤ 점검일자 문 (2026-09-25 검수 · dates-4) — 무엇보다 먼저 · 사진·응답 시트·되묻기 전에');
+function withDate(d) { const p = payload(); p.date = d; return p; }
+function untouched() { return PHOTOS === 0 && PREPENDS === 0 && GUARDS === 0; }
+reset(); CUR = '2610';
+r = fnQscSubmit(ctx, withDate(''));
+ok('빈 날짜 → BAD_REQUEST 「점검일자를 선택해 주세요.」', r.code === 'BAD_REQUEST' && r.error === '점검일자를 선택해 주세요.', r);
+ok('빈 날짜 — 아무것도 안 건드렸다', untouched(), [PHOTOS, PREPENDS, GUARDS]);
+reset();
+ok('형식 틀림(2026-10-5) → 같은 문구', fnQscSubmit(ctx, withDate('2026-10-5')).error === '점검일자를 선택해 주세요.');
+ok('없는 달(2026-00-10) → 같은 문구', fnQscSubmit(ctx, withDate('2026-00-10')).error === '점검일자를 선택해 주세요.');
+ok('날짜 아닌 값(숫자) → 같은 문구', fnQscSubmit(ctx, withDate(20261005)).error === '점검일자를 선택해 주세요.');
+reset();
+r = fnQscSubmit(ctx, withDate('2026-09-30'));
+ok('9월(낡은 임시저장) → 「9월은 앱으로 제출할 수 없습니다 — 점검일자를 확인해 주세요.」', r.code === 'BAD_REQUEST' && r.error === '9월은 앱으로 제출할 수 없습니다 — 점검일자를 확인해 주세요.', r);
+ok('9월 — ★9월 수기 탭에 닿기 전★ 아무것도 안 건드렸다', untouched(), [PHOTOS, PREPENDS, GUARDS]);
+reset();
+r = fnQscSubmit(ctx, withDate('2026-11-02'));
+ok('10월에 11월 날짜 → 「아직 오지 않은 달입니다 — 점검일자를 확인해 주세요.」', r.code === 'BAD_REQUEST' && r.error === '아직 오지 않은 달입니다 — 점검일자를 확인해 주세요.', r);
+ok('미래 달 — 아무것도 안 건드렸다(11월 탭을 미리 만들지 않는다)', untouched(), [PHOTOS, PREPENDS, GUARDS]);
+reset(); CUR = '2611';
+ok('11/1 에 10/31 점검 제출(지난 달) → 통과', fnQscSubmit(ctx, withDate('2026-10-31')).ok === true);
+reset(); CUR = '2610';
+ok('같은 달(10/5) → 통과', fnQscSubmit(ctx, withDate('2026-10-05')).ok === true);
+reset(); CUR = '2609';
+ok('★10/1 전(서버 달 2609)에는 미래 달(12월 시험)을 막지 않는다★', fnQscSubmit(ctx, withDate('2026-12-01')).ok === true);
+ok('10/1 전에도 9월 날짜는 막는다', fnQscSubmit(ctx, withDate('2026-09-25')).code === 'BAD_REQUEST');
+reset(); CUR = '2610'; CLOSED['FILE1:2610'] = '2026-11-02';
+ok('확정된 달은 종전대로 MONTH_CLOSED(날짜 문 통과 뒤)', fnQscSubmit(ctx, payload()).code === 'MONTH_CLOSED');
+CUR = '2610';
 
 console.log('\n' + (fail ? '실패 ' + fail + '개' : '전부 통과') + '  (통과 ' + pass + ')');
 process.exit(fail ? 1 : 0);
