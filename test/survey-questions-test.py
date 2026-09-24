@@ -28,6 +28,11 @@ OUT = HERE.parent / 't_survey_questions.js'
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 src = io.open(SRC, 'r', encoding='utf-8', newline='').read()
+# 2026-09-25 문항 분리 — QUESTIONS 는 backend/Questions.gs(저장소 제외)에 있다. 앱스 스크립트처럼 두 파일을 이어 붙여 읽는다.
+_code_only = src
+src = src + '\n' + io.open(SRC.parent / 'Questions.gs', 'r', encoding='utf-8', newline='').read()
+if '@@QUESTIONS_BEGIN' in _code_only or 'const QUESTIONS = ' in _code_only:
+    raise SystemExit('Code.gs 에 QUESTIONS 가 남아 있음 — 문항은 Questions.gs 에만 (두 번 선언되면 서버 전체가 멈춘다)')
 lines = src.split('\n')
 
 

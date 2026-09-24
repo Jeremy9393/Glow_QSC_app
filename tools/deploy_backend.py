@@ -31,7 +31,7 @@
 ① js/api.js 의 APPS_SCRIPT_URL 에서 배포 ID를 뽑는다  ← ★단일 출처★
 ② clasp 가 아는 배포 목록에 그 ID가 있는지 확인한다   ← 오타·엉뚱한 값 차단
 ③ ping 응답의 버전 라벨을 새 버전 번호로 맞춘다       ← ★ping 하나로 확인이 끝나게★
-④ clasp push      — backend/ 의 Code.gs·appsscript.json 을 올린다
+④ clasp push      — backend/ 의 Code.gs·Questions.gs(문항 · 저장소 제외 · 2026-09-25)·appsscript.json 을 올린다
 ⑤ clasp deploy --deploymentId <그 ID>  — 새 버전을 만들어 ★그 배포에 끼운다★
 ⑥ 실서버에 물어 정말 ★그 버전★을 주는지 확인한다
 """
@@ -104,6 +104,27 @@ def gs_sha():
         return hashlib.sha256(f.read()).hexdigest()
 
 
+# 2026-09-25 문항 분리 — 문항은 backend/Questions.gs(저장소 제외 · .claspignore 허용 목록으로 함께 올라감).
+#   평가표만 고친 날은 Code.gs 는 그대로이고 Questions.gs 만 바뀐다 → 두 지문을 다 봐야 「넘어가기」를 틀리지 않는다.
+#   .deployed.json 의 sha256 은 종전대로 Code.gs 지문이다(30초 확인법이 이것을 쓴다) · questions_sha256 이 새로 붙는다.
+def q_sha():
+    try:
+        with open(os.path.join(BACKEND, 'Questions.gs'), 'rb') as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return ''
+
+
+def q_version():
+    """로컬 Questions.gs 의 문항 판(version) — 실서버 ping 의 qv 와 대조한다. 못 읽으면 ''."""
+    try:
+        t = open(os.path.join(BACKEND, 'Questions.gs'), encoding='utf-8').read()
+        m = re.search(r'const QUESTIONS = \{"version":"([^"]*)"', t)
+        return m.group(1) if m else ''
+    except OSError:
+        return ''
+
+
 # ── -1. 바뀐 게 없으면 아무 일도 하지 않는다 ────────────────────
 #
 #  배포.bat 이 화면·백엔드를 한 번에 다루면서, 화면만 고친 날에도 여기까지 들어온다.
@@ -115,11 +136,11 @@ if IF_CHANGED:
         old = json.load(open(STAMP, encoding='utf-8'))
     except Exception:
         old = {}
-    if old.get('sha256') == gs_sha():
-        ok('Code.gs 가 지난 배포(%s) 때와 같습니다 — 백엔드는 넘어갑니다'
+    if old.get('sha256') == gs_sha() and old.get('questions_sha256') == q_sha() and q_sha():
+        ok('Code.gs·Questions.gs 가 지난 배포(%s) 때와 같습니다 — 백엔드는 넘어갑니다'
            % vlabel(old.get('version', '?')))
         sys.exit(0)
-    print('   Code.gs 가 바뀌었습니다 — 배포합니다'
+    print('   Code.gs 또는 Questions.gs(문항)가 바뀌었습니다 — 배포합니다'
           + ('' if old else ' (지난 배포 기록이 없어 처음으로 봅니다)'))
 
 
@@ -260,6 +281,17 @@ try:
         else:
             fail('실서버가 아직 %s 를 주고 있습니다 (기대: v%d) \u2014 잠시 뒤 ping 을 다시 보십시오'
                  % (label or '(라벨 없음)', LIVE))
+        # 2026-09-25 문항 분리 — 문항 파일(Questions.gs)이 함께 실렸는가. ping 의 qv = 서버 QUESTIONS.version
+        _qv, _want = str(j.get('qv') or ''), q_version()
+        if _qv == 'missing':
+            fail('★실서버에 문항이 없습니다★ (qv=missing) — Questions.gs 가 안 올라갔습니다. '
+                 'QSC 점검·고객 설문이 비어 있습니다 — 곧바로 다시 배포하십시오')
+        elif _want and _qv == _want:
+            ok('실서버 문항 판 %s = 로컬 Questions.gs' % _qv)
+        elif LIVE is not None and label == ('v%d' % LIVE):
+            fail('실서버 문항 판이 %s 입니다 (로컬 %s) — Questions.gs 가 올라갔는지 확인하십시오' % (_qv or '(없음)', _want or '?'))
+        else:
+            warn('문항 판 대조는 새 코드가 퍼진 뒤 ping 으로 다시 보십시오 (지금 %s · 로컬 %s)' % (_qv or '(없음)', _want or '?'))
 except Exception as e:
     fail('실서버에 닿지 못했습니다: %s' % e)
 
@@ -267,8 +299,8 @@ except Exception as e:
 # \u2500\u2500 6. \ubb34\uc5c7\uc744 \ubc30\ud3ec\ud588\ub294\uc9c0 \uc9c0\ubb38\uc73c\ub85c \ub0a8\uae34\ub2e4 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 #     \ub2e4\uc74c\ubc88 --if-changed \uac00 \uc774\uac78 \ubcf4\uace0 '\ub118\uc5b4\uac08\uc9c0'\ub97c \uc815\ud55c\ub2e4.
 if not FAILED:
-    json.dump({'sha256': gs_sha(), 'version': LIVE, 'when': time.strftime('%Y-%m-%d %H:%M:%S'),
-               'description': desc},
+    json.dump({'sha256': gs_sha(), 'questions_sha256': q_sha(), 'version': LIVE,
+               'when': time.strftime('%Y-%m-%d %H:%M:%S'), 'description': desc},
               open(STAMP, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
 
 

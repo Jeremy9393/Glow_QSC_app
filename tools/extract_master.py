@@ -35,6 +35,12 @@ OUT = ROOT / 'data' / 'master.json'
 #   (release.py 가 Code.gs 블록이 바뀌었으면 「★백엔드 배포가 필요합니다★」를 알린다).
 QOUT = ROOT / 'data' / 'questions.local.json'
 GS = ROOT / 'backend' / 'Code.gs'
+# ★2026-09-25 문항 분리★ — 문항 블록은 Code.gs 가 아니라 backend/Questions.gs 에 쓴다.
+#   Questions.gs 는 .gitignore 로 공개 저장소에서 빠지고, clasp 로만 앱스 스크립트에 올라간다(.claspignore 허용 목록).
+#   앱스 스크립트는 한 프로젝트의 .gs 파일들이 전역을 함께 쓰므로 Code.gs 의 함수가 QUESTIONS 를 그대로 읽는다.
+#   ★Code.gs 에 표식이 남아 있으면 멈춘다★ — 두 파일에 const QUESTIONS 가 같이 있으면 서버 전체가
+#   'Identifier QUESTIONS has already been declared' 로 죽는다(로그인·제출까지 · 2026-08-28 사고와 같은 규모).
+QGS = ROOT / 'backend' / 'Questions.gs'
 Q_BEGIN = '/* @@QUESTIONS_BEGIN */'
 Q_END = '/* @@QUESTIONS_END */'
 QUESTION_KEYS = ('qsc_groups', 'shopper_categories', 'texts', 'kiosk_excludes')
@@ -337,7 +343,7 @@ with open(OUT, 'w', encoding='utf-8') as f:
 with open(QOUT, 'w', encoding='utf-8') as f:
     json.dump(questions, f, ensure_ascii=False, indent=1)
 
-# Code.gs 의 표식 블록을 갈아 끼운다 — 없으면 파일 끝에 만든다. ★내용이 같으면 손대지 않는다★(수정시각·git 이 조용하다).
+# backend/Questions.gs 를 통째로 쓴다(2026-09-25 문항 분리) — ★내용이 같으면 손대지 않는다★(수정시각이 조용하다).
 #   JSON 한 줄. ★개행은 LF 그대로★ (newline='' 로 읽고 쓴다 — CRLF 가 섞이면 배포 대조가 통째로 어긋난다)
 _q_line = json.dumps(questions, ensure_ascii=False, separators=(',', ':'))
 _block = (Q_BEGIN + '\n'
@@ -345,20 +351,21 @@ _block = (Q_BEGIN + '\n'
           '   config.questions(QSC · 로그인+qsc 권한) · survey.questions(MS · 살아 있는 제출 코드) 가 이 상수를 내려준다. */\n'
           'const QUESTIONS = ' + _q_line + ';\n' + Q_END)
 _gs = GS.read_text(encoding='utf-8', newline='')
-_i, _j = _gs.find(Q_BEGIN), _gs.find(Q_END)
-if _i >= 0 and _j > _i:
-    _new_gs = _gs[:_i] + _block + _gs[_j + len(Q_END):]
-elif _i < 0 and _j < 0:
-    _new_gs = _gs.rstrip('\n') + '\n\n' + _block + '\n'
-else:
-    raise SystemExit('★중단★ Code.gs 의 QUESTIONS 표식이 한쪽만 있습니다 (BEGIN %d · END %d) — 블록을 손으로 정리하십시오.' % (_i, _j))
-gs_changed = _new_gs != _gs
+if Q_BEGIN in _gs or Q_END in _gs or re.search(r'^\s*(const|let|var)\s+QUESTIONS\b', _gs, re.M):
+    raise SystemExit('★중단★ backend/Code.gs 에 QUESTIONS 블록(또는 선언)이 남아 있습니다 — 문항은 backend/Questions.gs 에만 둡니다.\n'
+                     '  두 파일에 같이 있으면 서버 전체가 멈춥니다. Code.gs 의 블록을 지운 뒤 다시 돌리십시오.')
+_qgs_new = ('/* ★저장소에 올리지 않는 파일★ (2026-09-25 문항 분리 · .gitignore) — clasp 로 앱스 스크립트에만 올라간다.\n'
+            '   tools/extract_master.py 가 평가표 엑셀에서 만든다. 지우면 QSC 점검·고객 설문에 문항이 뜨지 않는다.\n'
+            '   새 PC 에서 저장소를 받았으면 extract_master.py 를 먼저 돌려야 배포할 수 있다(배포 도구가 없으면 멈춘다). */\n'
+            + _block + '\n')
+_qgs_old = QGS.read_text(encoding='utf-8', newline='') if QGS.exists() else None
+gs_changed = _qgs_new != _qgs_old
 if gs_changed:
-    GS.write_text(_new_gs, encoding='utf-8', newline='')
+    QGS.write_text(_qgs_new, encoding='utf-8', newline='')
 
 print('QSC', item_no, '문항 /', len(qsc_groups), '그룹 / ★★', sev_count['S1'], '· ★', sev_count['S2'])
 print('쇼퍼', q_no, '문항 /', len(shopper_cats), '카테고리 / 관찰', len(YN_ROWS),
       '· 5점 척도', n_likert, '(행 %d~%d)' % (Q_MIN, Q_MAX))
 print('저장:', OUT, '(공개 — 문항 없음)')
 print('저장:', QOUT, '(문항 — 저장소 제외)')
-print('Code.gs QUESTIONS 블록:', '갈아 끼움 — ★백엔드 배포가 필요합니다★' if gs_changed else '그대로 (내용 같음)')
+print('Questions.gs (문항 · 저장소 제외):', '새로 씀 — ★백엔드 배포가 필요합니다★' if gs_changed else '그대로 (내용 같음)')

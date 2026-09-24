@@ -19,6 +19,7 @@ ACTIONS 등록표는 그 함수를 계속 가리키고 있었고, 등록표를 �
 혼자 돌릴 수도 있다:  python tools/check_backend.py
 """
 import io
+import json
 import os
 import re
 import subprocess
@@ -27,6 +28,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 GS = os.path.join(ROOT, 'backend', 'Code.gs')
+QGS = os.path.join(ROOT, 'backend', 'Questions.gs')   # 2026-09-25 문항 분리 — 저장소 제외 · clasp 로만 올라감
 NODE = os.path.join(os.path.dirname(ROOT), '_도구', 'node', 'node.exe')
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
@@ -85,6 +87,34 @@ def check(printer=None):
     say = printer or (lambda m: None)
     bad = []
     src = io.open(GS, 'r', encoding='utf-8', newline='').read()
+
+    # ── ⓞ 문항 파일 (2026-09-25 문항 분리) ──────────────────────
+    #  문항(QUESTIONS)은 backend/Questions.gs 에 있다(저장소 제외 · clasp 로만 올라감).
+    #  ①없으면 — 새 PC 에서 받은 저장소 등 — 문항 없는 서버가 올라가 QSC 점검·고객 설문이 통째로 빈다.
+    #  ②Code.gs 에도 선언이 남아 있으면 앱스 스크립트 전역에서 const 가 두 번 선언돼 ★서버 전체가 죽는다★.
+    #  둘 다 올리기 전에 멈춘다. 가짜 서버 실행에는 두 파일을 이어 붙여 싣는다(앱스 스크립트와 같은 전역).
+    qsrc = ''
+    if not os.path.isfile(QGS):
+        bad.append('★backend/Questions.gs(문항 파일)가 없습니다★ — 이대로 올리면 QSC 점검·고객 설문에 문항이 안 뜹니다.'
+                   '\n     → python tools/extract_master.py 를 먼저 돌려 만든 뒤 다시 배포하십시오.')
+    else:
+        qsrc = io.open(QGS, 'r', encoding='utf-8', newline='').read()
+        m = re.search(r'/\* @@QUESTIONS_BEGIN \*/.*?const QUESTIONS = (\{.*?\});\n/\* @@QUESTIONS_END \*/', qsrc, re.S)
+        try:
+            qj = json.loads(m.group(1)) if m else None
+        except ValueError:
+            qj = None
+        if not qj or not qj.get('qsc_groups') or not qj.get('shopper_categories'):
+            bad.append('★backend/Questions.gs 의 문항 블록이 비었거나 깨졌습니다★ → python tools/extract_master.py 로 다시 만드십시오.')
+        else:
+            say('문항 파일 Questions.gs — %s 판 (QSC %d그룹 · MS %d카테고리)'
+                % (qj.get('version'), len(qj['qsc_groups']), len(qj['shopper_categories'])))
+    if '@@QUESTIONS_BEGIN' in src or re.search(r'^\s*(const|let|var)\s+QUESTIONS\b', src, re.M):
+        bad.append('★backend/Code.gs 에 QUESTIONS 가 다시 들어 있습니다★ — Questions.gs 와 두 번 선언되면 서버 전체가 멈춥니다.'
+                   '\n     → Code.gs 의 블록을 지우십시오(문항은 Questions.gs 에만).')
+    if bad:
+        return bad
+    src = src + '\n' + qsrc
 
     # ── ① 등록표가 가리키는 함수가 실제로 있는가 ──────────────
     defined = set(re.findall(r'^function\s+([A-Za-z_$][\w$]*)', src, re.M))

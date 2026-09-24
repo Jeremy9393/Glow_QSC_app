@@ -33,7 +33,9 @@ QKEYS = ('qsc_groups', 'shopper_categories', 'texts', 'kiosk_excludes')
 pub_text = (ROOT / 'data' / 'master.json').read_text(encoding='utf-8')
 pub = json.loads(pub_text)
 ql = json.loads((ROOT / 'data' / 'questions.local.json').read_text(encoding='utf-8'))
-gs = io.open(ROOT / 'backend' / 'Code.gs', 'r', encoding='utf-8', newline='').read()
+gs = io.open(ROOT / 'backend' / 'Questions.gs', 'r', encoding='utf-8', newline='').read()   # 2026-09-25 문항 분리 — 블록은 Questions.gs 에
+_code_gs = io.open(ROOT / 'backend' / 'Code.gs', 'r', encoding='utf-8', newline='').read()
+ok('Code.gs 에는 QUESTIONS 블록이 없다 (문항 분리 · 두 번 선언 방지)', ('@@QUESTIONS_BEGIN' in _code_gs, 'const QUESTIONS = ' in _code_gs), (False, False))
 
 print('── ① 공개 master.json ──')
 ok('문항 키가 없다', [k for k in QKEYS if k in pub], [])
@@ -69,8 +71,8 @@ gq = json.loads(line)
 ok('★블록 내용 = questions.local.json★', gq, ql)
 ok('블록 뒤에는 END 표식과 개행뿐 (파일 끝)', gs[j + len('/* @@QUESTIONS_END */'):].strip(), '')
 ok('CRLF 없음', '\r' in gs, False)
-ok('fnConfigQuestions · fnSurveyQuestions · questionsConst 가 있다',
-   all(('function %s(' % n) in gs for n in ('fnConfigQuestions', 'fnSurveyQuestions', 'questionsConst')))
+ok('fnConfigQuestions · fnSurveyQuestions · questionsConst 가 있다 (Code.gs)',
+   all(('function %s(' % n) in _code_gs for n in ('fnConfigQuestions', 'fnSurveyQuestions', 'questionsConst')))
 
 print('── ④ 저장소·배포에서 빠지는가 ──')
 r = subprocess.run(['git', '-C', str(ROOT), 'check-ignore', 'data/questions.local.json'], capture_output=True, text=True)
@@ -84,8 +86,9 @@ ok('.gitignore 에 *.local.* 이 있다', '*.local.*' in (ROOT / '.gitignore').r
 print('── ⑤ 도구가 새 자리를 읽는가 ──')
 ex = (ROOT / 'tools' / 'extract_master.py').read_text(encoding='utf-8')
 ok('extract_master.py — 세 갈래를 쓴다', all(s in ex for s in ("QOUT = ROOT / 'data' / 'questions.local.json'", 'QUESTION_KEYS', 'Q_BEGIN', 'Q_END')))
-ok("extract_master.py — Code.gs 를 newline='' 로 읽고 쓴다 (CRLF 금지)",
-   "GS.read_text(encoding='utf-8', newline='')" in ex and "GS.write_text(_new_gs, encoding='utf-8', newline='')" in ex)
+ok("extract_master.py — Questions.gs 를 newline='' 로 쓰고 Code.gs 에 블록이 남으면 멈춘다 (2026-09-25 문항 분리 · CRLF 금지)",
+   "QGS.write_text(_qgs_new, encoding='utf-8', newline='')" in ex and "GS.read_text(encoding='utf-8', newline='')" in ex
+   and "raise SystemExit('★중단★ backend/Code.gs 에 QUESTIONS 블록" in ex)
 rl = (ROOT / 'tools' / 'release.py').read_text(encoding='utf-8')
 ok('release.py — questions.local.json 으로 센다 · 공개 파일 문항 유출을 막는다 · 백엔드 배포 알림',
    all(s in rl for s in ("QLOCAL = ROOT / 'data' / 'questions.local.json'", 'def backend_notice():', "want_q = json.loads(QLOCAL", 'live_leak')))

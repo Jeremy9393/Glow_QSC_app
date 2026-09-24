@@ -28,8 +28,12 @@
 
 ## 문항은 서버가 내려준다 (2026-09-18)
 
-- 공개 `data/master.json` 에는 문항이 없다. 문항은 `backend/Code.gs` 끝의 `QUESTIONS` 블록과
-  `data/questions.local.json`(저장소 제외 · 도구용)에 있고, 둘 다 `tools/extract_master.py` 가 만든다.
+- 공개 `data/master.json` 에는 문항이 없다. 문항은 `backend/Questions.gs`(서버용)와
+  `data/questions.local.json`(도구용)에만 있고, ★둘 다 저장소에 올리지 않는다★(.gitignore). 둘 다 `tools/extract_master.py` 가 만든다.
+  (2026-09-25 문항 분리 — 그 전에는 `backend/Code.gs` 끝 블록에 있어 공개 저장소에 보였다)
+- **새 PC 에서 이 저장소를 받았으면 `python tools/extract_master.py` 를 먼저 돌린다.** `Questions.gs` 가 없으면
+  배포 도구(`check_backend.py`·`release.py`)가 멈춘다. `Questions.gs` 는 clasp 로 앱스 스크립트에만 올라간다(`backend/.claspignore`).
+- `release.py` 는 올라갈 파일 전부를 문항 글로 훑어, 한 줄이라도 섞이면 배포를 멈춘다.
 - QSC 문항은 로그인 + qsc 권한이 있어야(`config.questions`), MS 문항은 살아 있는 제출 코드가 있어야(`survey.questions`) 내려간다.
 - 그래서 **평가표 엑셀을 고치면 앱 배포와 백엔드 배포가 둘 다 필요하다**(release.py 가 끝에 알린다).
 

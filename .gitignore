@@ -10,6 +10,14 @@
 # ★평가표 문항★ (2026-09-18 ②-1) — data/questions.local.json 은 도구·시험용 사본이다. 문항은 서버(Code.gs)가 내려주고
 # 공개 저장소(GitHub Pages)에는 올리지 않는다. `*.local` 은 「.local 로 끝나는 이름」만 잡아 이 파일을 못 잡는다.
 *.local.*
+# ★평가표 문항 두 번째 자리★ (2026-09-25 문항 분리 · 담당자 선택) — 서버용 문항 파일. clasp 로 앱스 스크립트에만 올린다.
+#   tools/extract_master.py 가 만든다. 새 PC 에서 받았으면 그것부터 돌린다(없으면 배포 도구가 멈춘다).
+backend/Questions.gs
+# 시험이 돌 때마다 Code.gs·Questions.gs 에서 잘라 만드는 사본 — 문항 원문이 든 것도 있어 올리지 않는다(시험이 다시 만든다)
+test/t_*.js
+# 파이썬 실행 부산물 (2026-09-25 검수 expose-4 — 배포 도구가 check_backend 를 import 하며 생긴다)
+__pycache__/
+*.pyc
 
 # 임시·백업
 ~$*

@@ -36,6 +36,8 @@ QLOCAL = json.loads((ROOT / 'data' / 'questions.local.json').read_text(encoding=
 TYPES_RAW = json.loads((ROOT / 'data' / 'store-types.json').read_text(encoding='utf-8'))
 EXTRACT = (ROOT / 'tools' / 'extract_master.py').read_text(encoding='utf-8')
 GS = (ROOT / 'backend' / 'Code.gs').read_text(encoding='utf-8')
+# 2026-09-25 문항 분리 — QUESTIONS 블록은 Questions.gs(저장소 제외)에 있다. 앱스 스크립트처럼 이어 붙여 읽는다.
+GS = GS + '\n' + (ROOT / 'backend' / 'Questions.gs').read_text(encoding='utf-8')
 
 _p = _f = 0
 

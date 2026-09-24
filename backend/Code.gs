@@ -272,7 +272,12 @@ function epoch() { return String(propN('CACHE_EPOCH', 1)); }
 function doGet(e) {
   /* 점검 문구는 여기서도 그대로 내려준다 — 로그인 화면이 POST 한 번 없이도 안내를 띄울 수 있게.
      이 문구는 담당자가 손으로 적는 공지이므로 공개되어도 무방하다(개인정보를 적지 말 것). */
-  return json({ ok: true, service: 'qsc-app', v: 'v151', maint: maintMsg(), time: new Date().toISOString() });
+  /* qv = 서버에 실린 문항 판(QUESTIONS.version · 날짜 글자). 2026-09-25 문항 분리 — 문항이 Questions.gs 로 갈라져
+     「Code.gs 만 올라가고 문항은 빠진」 배포를 ping 하나로 알아보게 한다. 문항이 없으면 'missing'.
+     이 날짜는 공개 master.json 의 version 과 같은 값이라 새로 드러나는 것이 없다. */
+  const q = questionsConst();
+  return json({ ok: true, service: 'qsc-app', v: 'v152', qv: q ? String(q.version || '') : 'missing',
+                maint: maintMsg(), time: new Date().toISOString() });
 }
 
 /* ---------- 점검 모드 (확정사항 7) ---------- */
@@ -12972,6 +12977,7 @@ function testStoreCopyCleanup() {
   return m;
 }
 
-/* @@QUESTIONS_BEGIN */
-/* (문항 — 2026-09-25 저장소 기록에서 지움 · 서버 문항은 backend/Questions.gs · 저장소 제외) */
-/* @@QUESTIONS_END */
+/* ★평가표 문항(QUESTIONS)은 backend/Questions.gs 에 있다★ (2026-09-25 문항 분리 · 담당자 선택 「문항 분리 + 기록 정리」)
+   그 파일은 공개 저장소에 올리지 않고(.gitignore) clasp 로 앱스 스크립트에만 올린다(.claspignore 허용 목록).
+   앱스 스크립트는 한 프로젝트의 .gs 파일들이 전역을 함께 쓰므로 questionsConst() 가 그대로 읽는다.
+   ★이 파일에 QUESTIONS 를 다시 선언하지 말 것★ — 두 곳에 있으면 서버 전체가 멈춘다(check_backend·extract_master 가 막는다). */

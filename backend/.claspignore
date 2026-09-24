@@ -1,4 +1,5 @@
 # clasp 가 올리지 말아야 할 것 — ★기본은 폴더 전체를 올린다★
 **/**
 !Code.gs
+!Questions.gs
 !appsscript.json

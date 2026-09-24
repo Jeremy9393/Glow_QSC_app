@@ -59,9 +59,11 @@ backend_needed = False
 
 
 def gs_block():
-    """Code.gs 의 QUESTIONS 블록 원문 (없으면 '')"""
+    """backend/Questions.gs 의 QUESTIONS 블록 원문 (없으면 '')
+       2026-09-25 문항 분리 — 문항은 Code.gs 가 아니라 저장소에 안 올라가는 Questions.gs 에 있다.
+       ★파일이 없으면 '' → 아래에서 fail 로 멈춘다★ (새 PC 에서 extract 를 안 돌린 채 배포하는 사고 방지)."""
     try:
-        t = (ROOT / 'backend' / 'Code.gs').read_text(encoding='utf-8', newline='')
+        t = (ROOT / 'backend' / 'Questions.gs').read_text(encoding='utf-8', newline='')
     except OSError:
         return ''
     i, j = t.find('/* @@QUESTIONS_BEGIN */'), t.find('/* @@QUESTIONS_END */')
@@ -73,7 +75,7 @@ def backend_notice():
         return
     print('\n' + '★' * 30)
     print('★ 백엔드 배포가 필요합니다 ★')
-    print('  backend/Code.gs 의 문항 블록(QUESTIONS)이 이번 추출로 바뀌었습니다.')
+    print('  backend/Questions.gs 의 문항 블록(QUESTIONS)이 이번 추출로 바뀌었습니다.')
     print('  앱만 올리면 서버는 옛 문항을 내려줍니다 — 백엔드배포.bat (python tools/deploy_backend.py "설명") 을 돌려 주세요.')
     print('  (배포.bat 은 백엔드를 먼저 올리므로, 배포.bat 으로 돌렸다면 한 번 더 백엔드배포.bat 이 필요합니다)')
     print('★' * 30 + '\n')
@@ -185,12 +187,12 @@ else:
         ok('data/master.json 에는 문항이 없습니다 (매장·유형·채점 상수만)')
     block_after = gs_block()
     if not block_after:
-        fail('backend/Code.gs 에 QUESTIONS 블록이 없습니다 — 서버가 문항을 내려줄 수 없습니다')
+        fail('backend/Questions.gs 에 QUESTIONS 블록이 없습니다 — python tools/extract_master.py 를 먼저 돌리십시오 (없이 올리면 서버가 문항을 못 내려줍니다)')
     elif block_after != block_before:
         backend_needed = True
-        warn('★backend/Code.gs 의 문항 블록이 바뀌었습니다 — 백엔드 배포가 필요합니다★ (끝에 다시 알립니다)')
+        warn('★backend/Questions.gs 의 문항 블록이 바뀌었습니다 — 백엔드 배포가 필요합니다★ (끝에 다시 알립니다)')
     else:
-        ok('backend/Code.gs 의 문항 블록은 그대로입니다 (백엔드 배포 불필요)')
+        ok('backend/Questions.gs 의 문항 블록은 그대로입니다 (백엔드 배포 불필요)')
 
     # 매장 목록이 달라졌으면 QR도 다시 만든다 — 순서를 어기면 옛 매장의 QR이 남는다
     master = json.loads((ROOT / 'data' / 'master.json').read_text(encoding='utf-8'))
@@ -348,6 +350,47 @@ if banned:
         fail('저장소에 들어가면 안 되는 파일입니다: %s' % b)
 else:
     ok('설정값 파일은 저장소에 없습니다')
+
+# ★문항 원문이 저장소로 새지 않는가★ (2026-09-25 문항 분리 · 담당자 선택 「문항 분리 + 기록 정리」)
+#   올라갈 파일 = 추적 중인 것 + 이번 git add -A 가 새로 담을 것(무시 목록에 안 걸린 새 파일).
+#   questions.local.json 의 문항 글 앞 14자 조각이 하나라도 들어 있으면 멈춘다 — 파일 이름이 아니라 ★내용★으로 본다.
+#   (Questions.gs·t_*.js 가 .gitignore 에서 빠지거나, 누가 문항을 다른 파일에 붙여 넣어도 여기서 걸린다)
+_to_add = set(x for x in git('ls-files', '--others', '--exclude-standard').split('\n') if x)
+_upload = sorted((tracked | _to_add) - {''})
+if 'backend/Questions.gs' in _upload:
+    fail('backend/Questions.gs(문항)가 저장소에 올라가려 합니다 — .gitignore 를 확인하십시오')
+_needles = set()
+try:
+    def _walk(o):
+        if isinstance(o, dict):
+            for _k, _v in o.items():
+                if _k in ('text', 'item', 'criteria', 'question', 'title') and isinstance(_v, str) and len(_v.strip()) >= 14:
+                    _needles.add(_v.strip()[:14])
+                _walk(_v)
+        elif isinstance(o, list):
+            for _v in o:
+                _walk(_v)
+    _walk(json.loads(QLOCAL.read_text(encoding='utf-8')))
+except (OSError, ValueError):
+    warn('data/questions.local.json 을 못 읽어 문항 누출 검사를 건너뜁니다 — extract_master.py 를 먼저 돌리십시오')
+_qleak = []
+if _needles:
+    for _f in _upload:
+        _p = ROOT / _f
+        if not _p.is_file() or _p.suffix.lower() in ('.woff2', '.png', '.jpg', '.ico', '.pyc', '.xlsx', '.docx'):
+            continue
+        try:
+            _t = _p.read_text(encoding='utf-8', errors='ignore')
+        except OSError:
+            continue
+        _n = sum(1 for _nd in _needles if _nd in _t)
+        if _n:
+            _qleak.append('%s (문항 조각 %d개)' % (_f, _n))
+if _qleak:
+    for _x in _qleak:
+        fail('★문항 원문이 공개 저장소로 올라가려 합니다★: ' + _x)
+elif _needles:
+    ok('올라갈 파일 %d개에 문항 원문이 없습니다 (조각 %d개로 검사)' % (len(_upload), len(_needles)))
 
 # 스크립트 속성에 있어야 할 값이 코드에 박혀 있지 않은지 — 형태로 찾는다
 leak = []
@@ -518,7 +561,7 @@ for attempt in range(1, 13):
             print('배포 완료 — 실서버가 새 버전을 주고 있습니다')
             print('  캐시 버전   %s' % vlabel(VER))
             print('  평가표      %s (%s)' % (want_master.get('version'), want_master.get('source_sha')))
-            print('  문항        QSC %d · 미스터리쇼퍼 %d (서버 Code.gs 가 내려줌 · 공개 master.json 에는 없음)' % (want_qsc, want_shopper))
+            print('  문항        QSC %d · 미스터리쇼퍼 %d (서버 Questions.gs 가 내려줌 · 저장소·공개 master.json 에는 없음)' % (want_qsc, want_shopper))
             print('  매장        %d곳' % len(want_master.get('stores') or []))
             if warnings:
                 print('\n  경고 %d건 (막지는 않았습니다):' % len(warnings))
