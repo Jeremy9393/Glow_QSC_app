@@ -14,7 +14,7 @@
 <!-- 2026-09-25 검수 · perf-client-6 — 글꼴 먼저 받기 (주소는 css/app.css @font-face 와 똑같이 · crossorigin 필수) -->
 <link rel="preload" href="fonts/NanumSquareR.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/NanumSquareB.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=138">
+<link rel="stylesheet" href="css/app.css?v=139">
 </head>
 <body>
 <header class="topbar">
@@ -73,14 +73,14 @@
      ★이 화면에서는 auth.js의 guard()를 절대 부르지 않는다 — 리다이렉트는 금지다.
        앱 주소가 공개라 언젠가 AUTH_ENFORCE를 켜야 하는데, 이때 이 화면이 토큰을 못 붙이면
        관리자 본인의 제출까지 막힌다. 그래서 '싣되 튕기지는 않는' 절충이 이 구조다. -->
-<script src="js/maint.js?v=138"></script>
-<script src="js/ui-busy.js?v=138"></script>
-<script src="js/auth.js?v=138"></script>
-<script src="js/scoring.js?v=138"></script>
-<script src="js/api.js?v=138"></script>
-<script src="js/ui-time.js?v=138"></script>
-<script src="js/ui-photo.js?v=138"></script>
-<script src="js/qsc-app.js?v=138"></script>
+<script src="js/maint.js?v=139"></script>
+<script src="js/ui-busy.js?v=139"></script>
+<script src="js/auth.js?v=139"></script>
+<script src="js/scoring.js?v=139"></script>
+<script src="js/api.js?v=139"></script>
+<script src="js/ui-time.js?v=139"></script>
+<script src="js/ui-photo.js?v=139"></script>
+<script src="js/qsc-app.js?v=139"></script>
 <script>
 /* 부드러운 가드 — 리다이렉트하지 않는다. 로그인하지 않았거나 권한 없는 계정이면 문항을 감추고(2026-09-17) 제출을 잠근다.
    ★js/qsc-app.js는 한 줄도 고치지 않는다. 그 파일은 제출을 시도한 뒤에만 disabled를 되돌리므로,

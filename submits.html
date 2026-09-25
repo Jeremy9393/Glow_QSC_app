@@ -14,7 +14,7 @@
 <!-- 2026-09-25 검수 · perf-client-6 — 글꼴 먼저 받기 (주소는 css/app.css @font-face 와 똑같이 · crossorigin 필수) -->
 <link rel="preload" href="fonts/NanumSquareR.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/NanumSquareB.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=138">
+<link rel="stylesheet" href="css/app.css?v=139">
 </head>
 <body>
 <header class="topbar">
@@ -64,12 +64,12 @@
        고치기 전까지는 아무에게도 안 보인다. 같은 열쇠를 쓰는 편이 맞다.
      이것은 안내를 앞당기는 장치일 뿐 보안이 아니다 — 진짜 차단은 서버 ACTIONS 등록표와 can()이다.
      ★'쓰기'까지 본다★ (2026-09-17 · 최종검수 #21) — 되돌리기는 서버에 쓰는 일이라 읽기만 있는 계정은 여기서 돌려보낸다. -->
-<script src="js/maint.js?v=138"></script>
-<script src="js/ui-busy.js?v=138"></script>
-<script src="js/auth.js?v=138"></script>
+<script src="js/maint.js?v=139"></script>
+<script src="js/ui-busy.js?v=139"></script>
+<script src="js/auth.js?v=139"></script>
 <script>if (typeof Auth !== 'undefined' && Auth.guard) Auth.guard('accounts', '쓰기');</script>
-<script src="js/api.js?v=138"></script>
-<script src="js/submits-app.js?v=138"></script>
+<script src="js/api.js?v=139"></script>
+<script src="js/submits-app.js?v=139"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
