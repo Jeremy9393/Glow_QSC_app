@@ -46,7 +46,9 @@ def ok(name, cond):
 
 print('#16 testStoreCopy')
 tsc = cut('testStoreCopy')
-ok('매장 파일 ID 하드코딩 없음', '1mUSyz0ItpTa5HsUKVHWqxhD3wTobdP9xJO4NdNQ0InE' not in src)
+# 2026-09-25 검수 · expose-3 — 시험 파일에 실제 매장 파일 ID 를 적어 두면 공개 저장소에 그 ID 가 실린다.
+#   특정 ID 대신 「구글 파일 ID 꼴의 글자(33~44자)가 이 함수에 박혀 있지 않은지」로 본다.
+ok('매장 파일 ID 하드코딩 없음', not re.search(r"['\"]1[A-Za-z0-9_-]{32,43}['\"]", tsc))
 ok("속성 TEST_COPY_SRC_ID 로 읽고 없으면 멈춘다", "prop('TEST_COPY_SRC_ID', '')" in tsc and '★중단★ 원본 파일 ID 가 없습니다' in tsc)
 
 print('#30 clearMonthBody')

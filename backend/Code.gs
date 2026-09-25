@@ -50,6 +50,7 @@
      APP_BASE_URL        앱 배포 주소(끝에 /). 비우면 GitHub Pages 기본값. 배포 링크 조립에만 쓴다
      TOKEN_KEY           HMAC 서명 키 (랜덤 44자 이상) ★신규 — 비어 있으면 ensureAuthSheets()가 만든다
      PW_PEPPER           비밀번호 페퍼 (랜덤 32자 이상) ★신규 — 비어 있으면 ensureAuthSheets()가 만든다
+                         ★한 번 정해지면 절대 바꾸지 말 것★ — 바꾸면 전원 로그인 불가(강제 로그아웃은 TOKEN_KEY·TOKEN_MINV)
      PW_PEPPER_V         페퍼 버전. 기본 '1'
      PW_ITER             비밀번호 반복 해시 횟수. benchPw() 실측으로 확정 (해시 1회 ≤250ms)
      TOKEN_TTL_H         토큰 수명(시간). ★비워 두십시오★ 기본 87600 = 10년 (사실상 무기한 세션)
@@ -276,7 +277,7 @@ function doGet(e) {
      「Code.gs 만 올라가고 문항은 빠진」 배포를 ping 하나로 알아보게 한다. 문항이 없으면 'missing'.
      이 날짜는 공개 master.json 의 version 과 같은 값이라 새로 드러나는 것이 없다. */
   const q = questionsConst();
-  return json({ ok: true, service: 'qsc-app', v: 'v152', qv: q ? String(q.version || '') : 'missing',
+  return json({ ok: true, service: 'qsc-app', v: 'v153', qv: q ? String(q.version || '') : 'missing',
                 maint: maintMsg(), time: new Date().toISOString() });
 }
 
@@ -2205,9 +2206,12 @@ function authTz() {
 
 const PWSHOW_PREFIX = 'PWS:';
 
-/* 보관 전용 키. ★TOKEN_KEY·PW_PEPPER를 재사용하지 않는다★ — 그 둘은 사고가 났을 때
+/* 보관 전용 키. ★TOKEN_KEY·PW_PEPPER를 재사용하지 않는다★ — TOKEN_KEY 는 사고가 났을 때
    일부러 바꾸는(= 전원 강제 로그아웃) 수단이라, 거기에 묶어 두면 비상사태를 푸는 순간
-   26곳의 보관값이 함께 날아간다. 없으면 그 자리에서 만든다(초기 설정 단계를 늘리지 않게). */
+   26곳의 보관값이 함께 날아간다. 없으면 그 자리에서 만든다(초기 설정 단계를 늘리지 않게).
+   ★PW_PEPPER 는 어떤 경우에도 바꾸지 않는다★ (2026-09-25 검수 · authn-9) — 옛 페퍼로 검증하는 길이 없어서
+   바꾸는 순간 모든 저장된 비밀번호가 안 맞아 26곳·관리자 전원 로그인이 막힌다(설정코드 복구까지).
+   강제 로그아웃이 필요하면 TOKEN_KEY 를 바꾸거나 TOKEN_MINV 를 올린다. */
 function pwShowKey() {
   let k = prop('PW_SHOW_KEY', '');
   if (!k) {
@@ -2471,7 +2475,8 @@ function notifyPasswordChanged(acct, how) {
       '\n시각: ' + new Date() +
       '\n\n본인(또는 담당자)이 바꾼 것이라면 따로 하실 일은 없습니다.' +
       '\n바꾼 적이 없다면 QSC관리자 시트의 계정 탭에서 이 계정의 E열을 「중지」로 바꿔 주십시오.' +
-      '\n관리자 계정이 모르게 바뀐 경우라면 TOKEN_KEY 교체(전원 다시 로그인)까지 검토해 주십시오.');
+      '\n관리자 계정이 모르게 바뀐 경우라면 TOKEN_KEY 교체(전원 다시 로그인)까지 검토해 주십시오.' +
+      '\n※ PW_PEPPER 는 어떤 경우에도 바꾸지 마십시오 — 바꾸면 모든 계정이 로그인할 수 없게 됩니다.');   // 2026-09-25 검수 · authn-9
   } catch (e) { /* 메일 실패가 비밀번호 변경을 되돌릴 이유는 없다 */ }
 }
 
@@ -10319,10 +10324,12 @@ function impPlusDays(dateStr, days, tz) {
     if (!d) return '';
     const p = String(d).split('-');
     if (p.length !== 3) return '';
-    const dt = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+    /* 2026-09-25 검수 · dates-8 — 날짜 더하기는 ★시간대 없이(UTC 자정)★ 한다. 종전엔 서울 시각으로 만든 날짜를
+       매장 파일 시간대(tz)로 찍어, 파일 시간대가 서울보다 서쪽이면 기한이 하루 짧게 적혔다. 달력 날짜만 다루므로 UTC 로 만들고 UTC 로 찍는다. */
+    const dt = new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])));
     if (isNaN(dt.getTime())) return '';
-    dt.setDate(dt.getDate() + days);
-    return Utilities.formatDate(dt, tz || 'Asia/Seoul', 'yyyy-MM-dd');
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return Utilities.formatDate(dt, 'UTC', 'yyyy-MM-dd');
   } catch (e) { return ''; }
 }
 
