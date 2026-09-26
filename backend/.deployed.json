@@ -1,7 +1,7 @@
 {
- "sha256": "a95adbd877e9897c1c03201e440d42d531220c23ac4d4bf962dc687c370303f2",
+ "sha256": "48eb912eeb91e8f8af5d1dc31db92b8eaeec48f171b97b24a78b8c4e7ba66a10",
  "questions_sha256": "117e81ec6f3c62bc65f82a4365442d701829ac2432f4fa1d51fc3d65804e36dc",
- "version": 153,
- "when": "2026-09-25 20:38:40",
- "description": "검수 마무리 1.53 — 개선 기한 날짜 시간대 무관 · PW_PEPPER 바꾸지 말 것 주석·메일"
+ "version": 154,
+ "when": "2026-09-26 10:06:58",
+ "description": "1.54 — 달 시작 전 날짜의 월 확정 표식 무효·정리(금종제과 10월 시험 흔적) · 시작 안 한 달 확정 거절"
 }

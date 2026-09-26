@@ -277,7 +277,7 @@ function doGet(e) {
      「Code.gs 만 올라가고 문항은 빠진」 배포를 ping 하나로 알아보게 한다. 문항이 없으면 'missing'.
      이 날짜는 공개 master.json 의 version 과 같은 값이라 새로 드러나는 것이 없다. */
   const q = questionsConst();
-  return json({ ok: true, service: 'qsc-app', v: 'v153', qv: q ? String(q.version || '') : 'missing',
+  return json({ ok: true, service: 'qsc-app', v: 'v154', qv: q ? String(q.version || '') : 'missing',
                 maint: maintMsg(), time: new Date().toISOString() });
 }
 
@@ -1626,7 +1626,10 @@ function sweepLocks() {
       if (!Object.prototype.hasOwnProperty.call(all, k)) continue;
       const lk = k.indexOf('LK:') === 0 && !(Number(all[k]) > now);
       const oldHour = /^(AL|AN|HB|GF):\d{10}$/.test(k);
-      if (!lk && !oldHour) continue;
+      /* 2026-09-26 — 그 달이 시작하기 전 날짜로 찍힌 월 확정 표식(MC:<파일>:<YYMM>)은 시험 흔적이라 지운다(monthClosedAt 도 무시) */
+      const mc = /^MC:.+:(\d{4})$/.exec(k);
+      const mcBogus = !!(mc && String(all[k] || '').slice(0, 10) < ymFirstDay(mc[1]));
+      if (!lk && !oldHour && !mcBogus) continue;
       try { PROPS.deleteProperty(k); n++; } catch (e) { }
     }
     return n;
@@ -11065,9 +11068,17 @@ function monthClosedAt(ss, ym) {
   try {
     const id = (ss && typeof ss === 'object' && ss.getId) ? ss.getId() : String(ss || '');
     if (!id) return '';
-    return prop(MC_PREFIX + id + ':' + ym, '');
+    const v = prop(MC_PREFIX + id + ':' + ym, '');
+    /* ★그 달이 시작하기도 전 날짜로 찍힌 확정 표식은 무효★ (2026-09-26 — 8/25 시험 때 금종제과 실제 파일에
+       「2610 확정 = 2026-08-25」가 남아, 그대로면 10/1 부터 금종제과 10월 제출이 MONTH_CLOSED 로 막힐 뻔했다).
+       확정은 그 달 안이나 뒤에만 일어난다 — 달 첫날보다 이른 날짜는 시험 흔적이다. sweepLocks 가 매시간 지운다. */
+    if (v && validYm(ym) && String(v).slice(0, 10) < ymFirstDay(ym)) return '';
+    return v;
   } catch (e) { return ''; }
 }
+
+/* 'YYMM' → 그 달 첫날 'YYYY-MM-01' (확정 표식 날짜와 글자로 비교한다) */
+function ymFirstDay(ym) { return '20' + String(ym).slice(0, 2) + '-' + String(ym).slice(2, 4) + '-01'; }
 
 /* 그 달 탭을 잠근다. openRows = 열어 둘 본문 행 번호 (지금은 늘 빈 목록 — 이월 없음 · 2026-09-15).
    ★protectMonthTabsIn과 같은 규율을 따른다★ — 자리를 모르면 손대지 않고, 옛 보호를 못 지우면
@@ -11129,6 +11140,9 @@ function fnMonthClose(ctx, payload) {
     }
     key = ss.getName();
   } else {
+    /* 2026-09-26 — 아직 시작하지 않은 달은 실제 매장에서 확정할 수 없다(8/25 시험 때 금종제과 10월 확정 흔적이 남은 사고).
+       사본(_연동테스트 · 위 fileId 길)은 시험용이라 막지 않는다. */
+    if (ym > curYymm()) return err('BAD_REQUEST', ymLabel(ym) + '은 아직 시작하지 않은 달이라 확정할 수 없습니다.');
     const store = normStore(p.store || '');
     if (!store) return err('BAD_REQUEST', '매장을 지정해 주세요');
     const id = storeFileId(store);

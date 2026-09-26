@@ -81,6 +81,9 @@ const PROPS = { setProperty: function (k, v) { props[k] = v; } };
 const MC_PREFIX = 'MC:', L_RATE = ['개선율'], L_QSC = ['QSC점수'];
 function err(code, msg) { return { ok: false, code: code, error: msg }; }
 function validYm(ym) { return /^\d{4}$/.test(ym); }
+// 2026-09-26 — fnMonthClose 가 「아직 시작하지 않은 달」을 거절한다. 시험의 「이번 달」은 10월(2610)로 고정한다.
+function curYymm() { return '2610'; }
+function ymLabel(ym) { return '20' + String(ym).slice(0, 2) + '년 ' + Number(String(ym).slice(2, 4)) + '월'; }
 function normStore(s) { return String(s || '').trim(); }
 function storeFileId() { return 'FILE1'; }
 function impGeo() { return G; }
@@ -229,6 +232,11 @@ function ROWS() {
 function reset(rows) { VALS = rows; writes = []; locked = null; props = {}; }
 const ctx = { role: '관리자', id: 'admin' };
 
+reset(ROWS());
+// 2026-09-26 — 아직 시작하지 않은 달(이번 달 2610 기준 2611)은 실제 매장에서 확정할 수 없다 · 아무것도 쓰지 않는다
+const fut = fnMonthClose(ctx, { store: '샘플매장', ym: '2611', apply: true });
+ok('⑤-0 시작 안 한 달 확정은 거절 · 안 씀', fut && fut.ok === false && fut.code === 'BAD_REQUEST' && /시작하지 않은 달/.test(fut.error)
+   && writes.length === 0 && Object.keys(props).length === 0, fut);
 reset(ROWS());
 const pv = fnMonthClose(ctx, { store: '샘플매장', ym: '2610' });
 ok('⑤ 미리보기 ok', pv.ok && pv.dry, pv);
